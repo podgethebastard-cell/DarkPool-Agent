@@ -95,7 +95,7 @@ def get_full_analysis(ticker, interval):
 
     # --- 1. APEX TREND ---
     df['HMA'] = calc_hma(df['Close'], 55)
-    df['ATR'] = calc_atr(df, 14) # Standard ATR for logic
+    df['ATR'] = calc_atr(df, 14) 
     df['Apex_Up'] = df['HMA'] + (df['ATR'] * 1.5)
     df['Apex_Dn'] = df['HMA'] - (df['ATR'] * 1.5)
     df['Apex_State'] = np.where(df['Close'] > df['Apex_Up'], 1, np.where(df['Close'] < df['Apex_Dn'], -1, 0))
@@ -152,9 +152,9 @@ def get_full_analysis(ticker, interval):
     return df
 
 # ==========================================
-# 5. AI CHAIRMAN (UPDATED WITH TRADE PLAN)
+# 5. AI CHAIRMAN (WITH POSITION SIZING)
 # ==========================================
-def ask_chairman(df, ticker):
+def ask_chairman(df, ticker, balance):
     if not api_key: return "⚠️ API Key Missing."
     last = df.iloc[-1]
     
@@ -163,14 +163,27 @@ def ask_chairman(df, ticker):
     atr = float(last['ATR'])
     vec_stop = float(last['Vec_Stop'])
     
-    # Calculate Targets (2.0 and 3.0 Risk Multiples)
-    # Scenario A: If Long
-    long_risk = price - vec_stop
+    # --- POSITION SIZING MATH ---
+    # Risk per trade (2% of balance)
+    risk_amount = balance * 0.02
+    
+    # Scenario A: LONG
+    stop_dist_long = price - vec_stop
+    if stop_dist_long <= 0: stop_dist_long = atr * 2 # Fallback if stop is above price (rare error)
+    
+    shares_long = risk_amount / stop_dist_long
+    stop_pct_long = (stop_dist_long / price) * 100
+    
+    # Scenario B: SHORT
+    stop_dist_short = vec_stop - price
+    if stop_dist_short <= 0: stop_dist_short = atr * 2
+    
+    shares_short = risk_amount / stop_dist_short
+    stop_pct_short = (stop_dist_short / price) * 100
+    
+    # Targets
     tp1_long = price + (atr * 2)
     tp2_long = price + (atr * 4)
-    
-    # Scenario B: If Short
-    short_risk = vec_stop - price
     tp1_short = price - (atr * 2)
     tp2_short = price - (atr * 4)
     
@@ -182,30 +195,28 @@ def ask_chairman(df, ticker):
     flow = "INFLOW 🟩" if last['MFI_Smooth'] > 0 else "OUTFLOW 🟥"
     
     prompt = f"""
-    Act as a Senior Hedge Fund Chairman. Analyze {ticker} at ${price:.2f}.
+    Act as a Senior Risk Manager. Analyze {ticker} at ${price:.2f}.
+    User Balance: ${balance}. Max Risk: $ {risk_amount:.2f} (2%).
     
     --- TECHNICAL DASHBOARD ---
     1. MACRO TREND (Apex): {apex}
-    2. SCALPER (Vector): {vector}. (This is your Hard Stop Level: ${vec_stop:.2f})
+    2. SCALPER (Vector): {vector}. (This is the Hard Stop: ${vec_stop:.2f})
     3. SWING (Gann): {gann}
-    4. VOLATILITY (Squeeze): {sqz}. Momentum: {last['Mom']:.2f}.
-    5. VOLUME (Money Flow): {flow}.
-    6. VOLATILITY (ATR): ${atr:.2f} (Use this for targets).
+    4. MOMENTUM: Squeeze: {sqz}. Money Flow: {flow}.
     
-    --- DATA FOR PLAN ---
-    * IF LONG: Hard Stop: {vec_stop:.2f}. TP1: {tp1_long:.2f}. TP2: {tp2_long:.2f}.
-    * IF SHORT: Hard Stop: {vec_stop:.2f}. TP1: {tp1_short:.2f}. TP2: {tp2_short:.2f}.
+    --- POSITION SIZING DATA ---
+    * IF LONG: Stop Distance: {stop_pct_long:.2f}%. Size to Buy: {shares_long:.4f} units.
+    * IF SHORT: Stop Distance: {stop_pct_short:.2f}%. Size to Sell: {shares_short:.4f} units.
     
     --- YOUR TASK ---
     1. **The Verdict:** DECISIVE LONG, DECISIVE SHORT, or WAIT.
-    2. **The Logic:** Analyze the confluence. Are the Scalper and Macro Trend aligned? Is volume supporting it?
-    3. **The Execution Card (Crucial):**
-       - **Action:** (Buy Now / Sell Now / Wait)
-       - **Entry Zone:** Current Price
-       - **Stop Loss:** (Use the Vector level provided above)
-       - **Take Profit 1:** (Conservative)
-       - **Take Profit 2:** (Aggressive)
-       - **Leverage Advice:** (Low/Med/High based on Volatility)
+    2. **The Execution Card (Crucial):**
+       - **Action:** (Buy / Sell / Wait)
+       - **Entry Price:** Market (${price:.2f})
+       - **Stop Loss:** ${vec_stop:.2f} (Using Vector Level)
+       - **Risk Check:** Is the stop too wide (>4%)? If yes, advise reducing size further or waiting.
+       - **Position Size:** Tell the user EXACTLY how many units to buy/sell to risk only ${risk_amount:.2f}.
+       - **Take Profit 1:** ${tp1_long:.2f} (if long) / ${tp1_short:.2f} (if short)
     """
     
     client = OpenAI(api_key=api_key)
@@ -227,8 +238,11 @@ flat = [i for s in asset_options.values() for i in s]
 ticker = st.sidebar.selectbox("Asset", flat, index=0)
 interval = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d", "1wk"], index=2)
 
+# NEW: ACCOUNT BALANCE INPUT
+balance = st.sidebar.number_input("Account Balance ($)", min_value=100, value=10000, step=100)
+
 if st.sidebar.button("Run Ultimate Analysis"):
-    with st.spinner(f"Consulting the Board of Directors for {ticker}..."):
+    with st.spinner(f"Calculating Risk & Strategy for {ticker}..."):
         df = get_full_analysis(ticker, interval)
         if df is not None:
             # --- MAIN CHART (PRICE + TRENDS) ---
@@ -266,7 +280,7 @@ if st.sidebar.button("Run Ultimate Analysis"):
             # --- AI VERDICT ---
             st.markdown("---")
             st.subheader("🧠 Chairman's Execution Plan")
-            st.info(ask_chairman(df, ticker))
+            st.info(ask_chairman(df, ticker, balance))
             
             # --- DISCLAIMER ---
             st.markdown("---")
