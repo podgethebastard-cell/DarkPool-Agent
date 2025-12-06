@@ -1,10 +1,12 @@
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 from openai import OpenAI
+import calendar
 
 # ==========================================
 # 1. PAGE CONFIGURATION
@@ -103,7 +105,6 @@ def get_macro_data():
         "S&P 500": "SPY", "Bitcoin": "BTC-USD", 
         "10Y Yield": "^TNX", "VIX": "^VIX"
     }
-    # FIX: Initialize with default values to prevent KeyError if download fails
     prices = {k: 0.0 for k in tickers.keys()}
     changes = {k: 0.0 for k in tickers.keys()}
     
@@ -121,7 +122,6 @@ def get_macro_data():
                 prices[name] = curr
                 changes[name] = chg
         except Exception:
-            # If fail, we keep the default 0.0 values
             continue
             
     return prices, changes
@@ -130,6 +130,8 @@ def get_macro_data():
 # 3. MATH LIBRARY & ALGORITHMS
 # ==========================================
 def calc_indicators(df):
+    """Calculates Base Indicators + Dashboard V2 Logic"""
+    # Base Indicators
     df['HMA'] = df['Close'].rolling(55).mean()
     
     high_low = df['High'] - df['Low']
@@ -141,14 +143,69 @@ def calc_indicators(df):
     df['Pivot_Resist'] = df['High'].rolling(20).max()
     df['Pivot_Support'] = df['Low'].rolling(20).min()
     
-    df['MFI'] = (df['Close'].diff() * df['Volume']).rolling(3).mean()
+    df['MFI'] = (df['Close'].diff() * df['Volume']).rolling(14).mean() # Changed to 14 for consistency
     
     df['BB_Mid'] = df['Close'].rolling(20).mean()
     df['BB_Std'] = df['Close'].rolling(20).std()
     df['KC_ATR'] = df['ATR'].rolling(20).mean()
     df['Squeeze_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
     df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
+
+    # --- DASHBOARD V2 SPECIFIC CALCULATIONS ---
+    # 1. MACD
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['Hist'] = df['MACD'] - df['Signal']
+
+    # 2. Stochastic
+    low_min = df['Low'].rolling(14).min()
+    high_max = df['High'].rolling(14).max()
+    df['Stoch_K'] = 100 * (df['Close'] - low_min) / (high_max - low_min)
+    df['Stoch_D'] = df['Stoch_K'].rolling(3).mean()
+
+    # 3. ROC (Rate of Change)
+    df['ROC'] = df['Close'].pct_change(14) * 100
+
+    # 4. EMAs
+    df['EMA_Fast'] = df['Close'].ewm(span=9, adjust=False).mean()
+    df['EMA_Slow'] = df['Close'].ewm(span=21, adjust=False).mean()
+    df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
+
+    # 5. OBV (On Balance Volume)
+    df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
+
+    # 6. VWAP (Approximate for daily timeframe)
+    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
+
+    # 7. ADX
+    plus_dm = df['High'].diff()
+    minus_dm = df['Low'].diff()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm > 0] = 0
     
+    tr14 = tr.rolling(14).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1/14).mean() / tr14)
+    minus_di = 100 * (minus_dm.ewm(alpha=1/14).mean() / tr14)
+    dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
+    df['ADX'] = dx.rolling(14).mean()
+
+    # 8. Momentum Score (Dashboard V2 Logic)
+    # RSI Calc needed first
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    rsi_norm = (df['RSI'] - 50) * 2
+    macd_norm = np.where(df['Hist'] > 0, np.minimum(df['Hist'] * 10, 100), np.maximum(df['Hist'] * 10, -100))
+    stoch_norm = (df['Stoch_K'] - 50) * 2
+    roc_norm = np.where(df['ROC'] > 0, np.minimum(df['ROC'] * 10, 100), np.maximum(df['ROC'] * 10, -100))
+    
+    df['Mom_Score'] = np.round((rsi_norm + macd_norm + stoch_norm + roc_norm) / 4)
+
     return df
 
 def get_sr_channels(df, pivot_period=10, loopback=290, max_width_pct=5, min_strength=1):
@@ -267,6 +324,48 @@ def calc_fear_greed_v4(df):
     df['IS_PANIC'] = sharp_drop & panic_vol & (low_rsi | (daily_drop < -5.0))
     
     return df
+
+@st.cache_data(ttl=3600)
+def get_seasonality_stats(ticker):
+    """Calculates Monthly Seasonality and Probability Stats."""
+    try:
+        df = yf.download(ticker, period="20y", interval="1mo", progress=False)
+        if df.empty or len(df) < 12: return None
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        if 'Close' not in df.columns:
+             if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
+             else: return None
+
+        df = df.dropna()
+        df['Return'] = df['Close'].pct_change() * 100
+        df['Year'] = df.index.year
+        df['Month'] = df.index.month
+        
+        heatmap_data = df.pivot_table(index='Year', columns='Month', values='Return')
+        
+        periods = [1, 3, 6, 12]
+        hold_stats = {}
+        for p in periods:
+            rolling_ret = df['Close'].pct_change(periods=p) * 100
+            rolling_ret = rolling_ret.dropna()
+            
+            win_count = (rolling_ret > 0).sum()
+            total_count = len(rolling_ret)
+            win_rate = (win_count / total_count * 100) if total_count > 0 else 0
+            avg_ret = rolling_ret.mean()
+            
+            hold_stats[p] = {"Win Rate": win_rate, "Avg Return": avg_ret}
+            
+        month_stats = df.groupby('Month')['Return'].agg(['mean', lambda x: (x > 0).mean() * 100, 'count'])
+        month_stats.columns = ['Avg Return', 'Win Rate', 'Count']
+        
+        return heatmap_data, hold_stats, month_stats
+        
+    except Exception as e:
+        return None
 
 # ==========================================
 # 4. AI ANALYST
@@ -388,7 +487,6 @@ risk_pct = st.sidebar.slider(
 )
 
 # --- GLOBAL MACRO HEADER ---
-# FIX: Use Safe Defaults to prevent KeyError
 m_price, m_chg = get_macro_data()
 if m_price:
     c1, c2, c3, c4 = st.columns(4)
@@ -399,7 +497,8 @@ if m_price:
     st.markdown("---")
 
 # --- MAIN ANALYSIS TABS ---
-tab1, tab2 = st.tabs(["📊 Technical Deep Dive", "🌍 Sector & Fundamentals"])
+# UPGRADE: Added "DarkPool Dashboard" Tab
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Technical Deep Dive", "🌍 Sector & Fundamentals", "📅 Seasonality & Probabilities", "📟 DarkPool Dashboard"])
 
 if st.button(f"Analyze {ticker}", help="Click to run the data pipeline and AI analysis for the selected ticker."):
     st.session_state['run_analysis'] = True
@@ -410,14 +509,13 @@ if st.session_state.get('run_analysis'):
         
         if df is not None:
             df = calc_indicators(df)
-            df = calc_fear_greed_v4(df) # Add Fear & Greed Logic
+            df = calc_fear_greed_v4(df)
             fund = get_fundamentals(ticker)
             sr_zones = get_sr_channels(df) 
             
+            # --- TAB 1: TECHNICALS ---
             with tab1:
                 st.subheader(f"🎯 Sniper Scope: {ticker}")
-                
-                # --- LAYOUT: MAIN CHART + F&G GAUGE ---
                 col_chart, col_gauge = st.columns([0.75, 0.25])
                 
                 with col_chart:
@@ -425,34 +523,26 @@ if st.session_state.get('run_analysis'):
                     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
                     fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
                     
-                    # --- S/R CHANNELS ---
                     last_close = df['Close'].iloc[-1]
                     for zone in sr_zones:
                         if last_close > zone['max']: col = "rgba(0, 255, 0, 0.15)"
                         elif last_close < zone['min']: col = "rgba(255, 0, 0, 0.15)"
                         else: col = "rgba(128, 128, 128, 0.15)"
-                            
-                        fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1], xref="x", yref="y",
-                            y0=zone['min'], y1=zone['max'], fillcolor=col, line=dict(width=0), row=1, col=1)
+                        fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1], xref="x", yref="y", y0=zone['min'], y1=zone['max'], fillcolor=col, line=dict(width=0), row=1, col=1)
                     
-                    # --- FOMO / PANIC MARKERS ---
                     fomo_dates = df[df['IS_FOMO']].index
                     panic_dates = df[df['IS_PANIC']].index
-                    
                     fig.add_trace(go.Scatter(x=fomo_dates, y=df.loc[fomo_dates, 'High']*1.02, mode='markers', marker=dict(symbol='triangle-up', size=10, color='purple'), name="FOMO Algo"), row=1, col=1)
                     fig.add_trace(go.Scatter(x=panic_dates, y=df.loc[panic_dates, 'Low']*0.98, mode='markers', marker=dict(symbol='triangle-down', size=10, color='yellow'), name="Panic Algo"), row=1, col=1)
 
                     colors = ['#00ff00' if v > 0 else '#ff0000' for v in df['MFI']]
                     fig.add_trace(go.Bar(x=df.index, y=df['MFI'], marker_color=colors, name="Smart Money"), row=2, col=1)
-                    
                     fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig, use_container_width=True)
                 
                 with col_gauge:
-                    # --- FEAR & GREED GAUGE ---
                     curr_fg = df['FG_Index'].iloc[-1]
                     if np.isnan(curr_fg): curr_fg = 50
-                    
                     fig_gauge = go.Figure(go.Indicator(
                         mode = "gauge+number",
                         value = curr_fg,
@@ -460,18 +550,11 @@ if st.session_state.get('run_analysis'):
                         gauge = {
                             'axis': {'range': [0, 100]},
                             'bar': {'color': "white", 'thickness': 0.2},
-                            'steps': [
-                                {'range': [0, 20], 'color': "#FF0000"}, # Extreme Fear
-                                {'range': [20, 40], 'color': "#FFA500"}, # Fear
-                                {'range': [40, 60], 'color': "#808080"}, # Neutral
-                                {'range': [60, 80], 'color': "#90EE90"}, # Greed
-                                {'range': [80, 100], 'color': "#00FF00"} # Extreme Greed
-                            ]
+                            'steps': [{'range': [0, 20], 'color': "#FF0000"}, {'range': [20, 40], 'color': "#FFA500"}, {'range': [40, 60], 'color': "#808080"}, {'range': [60, 80], 'color': "#90EE90"}, {'range': [80, 100], 'color': "#00FF00"}]
                         }
                     ))
                     fig_gauge.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
                     st.plotly_chart(fig_gauge, use_container_width=True)
-                    
                     st.markdown("#### Psychology Stats")
                     st.metric("RSI Contribution", f"{df['FG_RSI'].iloc[-1]:.1f}/100")
                     st.metric("MACD Momentum", f"{df['FG_MACD'].iloc[-1]:.1f}/100")
@@ -482,6 +565,7 @@ if st.session_state.get('run_analysis'):
                 verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
                 st.info(verdict)
 
+            # --- TAB 2: SECTOR & FUNDAMENTALS ---
             with tab2:
                 st.subheader(f"🏢 Fundamental Health")
                 if fund:
@@ -492,27 +576,94 @@ if st.session_state.get('run_analysis'):
                     st.write(f"**Summary:** {fund.get('Summary', 'No Data')[:300]}...")
                 else:
                     st.warning("Fundamentals not available for this asset.")
-                
                 st.markdown("---")
                 st.subheader("🔥 Global Market Heatmap")
                 s_data = get_global_performance()
                 if s_data is not None:
                     fig_sector = go.Figure()
                     colors = ['#00ff00' if v >= 0 else '#ff0000' for v in s_data.values]
-                    fig_sector.add_trace(go.Bar(
-                        x=s_data.values,
-                        y=s_data.index,
-                        orientation='h',
-                        marker_color=colors,
-                        text=[f"{v:.2f}%" for v in s_data.values],
-                        textposition='auto'
-                    ))
-                    fig_sector.update_layout(
-                        height=400, 
-                        template="plotly_dark", 
-                        margin=dict(l=0, r=0, t=30, b=0),
-                        xaxis_title="5-Day Performance (%)"
-                    )
+                    fig_sector.add_trace(go.Bar(x=s_data.values, y=s_data.index, orientation='h', marker_color=colors, text=[f"{v:.2f}%" for v in s_data.values], textposition='auto'))
+                    fig_sector.update_layout(height=400, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0), xaxis_title="5-Day Performance (%)")
                     st.plotly_chart(fig_sector, use_container_width=True)
+
+            # --- TAB 3: SEASONALITY & PROBABILITIES ---
+            with tab3:
+                st.subheader(f"📅 Seasonality Matrix: {ticker}")
+                seas_res = get_seasonality_stats(ticker)
+                if seas_res:
+                    hm_data, hold_stats, month_stats = seas_res
+                    hm_data = hm_data.reindex(columns=range(1, 13))
+                    fig_hm = px.imshow(hm_data, labels=dict(x="Month", y="Year", color="Return %"), x=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], color_continuous_scale='RdYlGn', text_auto='.1f')
+                    fig_hm.update_layout(template="plotly_dark", height=500, xaxis_side="top")
+                    st.plotly_chart(fig_hm, use_container_width=True)
+                    st.markdown("---")
+                    c_prob1, c_prob2 = st.columns(2)
+                    with c_prob1:
+                        st.markdown("#### 🎲 Holding Period Probabilities")
+                        hold_df = pd.DataFrame(hold_stats).T
+                        hold_df.columns = ["Win Rate %", "Avg Return %"]
+                        hold_df.index.name = "Months Held"
+                        st.dataframe(hold_df.style.format("{:.1f}%").background_gradient(subset=["Win Rate %"], cmap="RdYlGn", vmin=30, vmax=70))
+                    with c_prob2:
+                        st.markdown("#### 🔮 Forecast (Historical Odds)")
+                        import datetime
+                        curr_m = datetime.datetime.now().month
+                        next_m = (curr_m % 12) + 1
+                        m_names = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
+                        try:
+                            curr_data = month_stats.loc[curr_m]
+                            next_data = month_stats.loc[next_m]
+                            col1, col2 = st.columns(2)
+                            col1.metric(f"Current ({m_names[curr_m]})", f"{curr_data['Win Rate']:.1f}% Win", f"{curr_data['Avg Return']:.2f}% Avg")
+                            col2.metric(f"Next ({m_names[next_m]})", f"{next_data['Win Rate']:.1f}% Win", f"{next_data['Avg Return']:.2f}% Avg")
+                        except: st.warning("Insufficient history for monthly forecast.")
+                else: st.warning("Insufficient data to calculate seasonality stats.")
+
+            # --- TAB 4: DARKPOOL DASHBOARD V2 ---
+            with tab4:
+                st.subheader("📟 DarkPool Dashboard v2")
+                
+                last = df.iloc[-1]
+                
+                # Helper to color text
+                def color_val(val, threshold=0, reverse=False):
+                    if reverse: return "color: red" if val > threshold else "color: green"
+                    return "color: green" if val > threshold else "color: red"
+
+                # MAIN SIGNAL
+                mom_score = last['Mom_Score']
+                signal = "STRONG BUY" if mom_score > 50 else "BUY" if mom_score > 20 else "SELL" if mom_score < -50 else "STRONG SELL" if mom_score < -20 else "HOLD"
+                sig_color = "green" if "BUY" in signal else "red" if "SELL" in signal else "yellow"
+
+                # Dashboard Table Data
+                dash_data = {
+                    "Metric": ["Momentum Score", "Signal", "RSI (14)", "Money Flow (MFI)", "Trend (EMA)", "Volume vs MA", "Volatility (Range)"],
+                    "Value": [
+                        f"{mom_score:.0f}", 
+                        signal, 
+                        f"{last['RSI']:.2f}", 
+                        f"{last['MFI']:.2f}", 
+                        "BULLISH" if last['EMA_Fast'] > last['EMA_Slow'] else "BEARISH",
+                        f"{(last['Volume'] / last['Volume'].mean() * 100) - 100:.1f}%",
+                        f"{((last['High']-last['Low'])/last['Low']*100):.2f}%"
+                    ]
+                }
+                
+                dash_df = pd.DataFrame(dash_data)
+                
+                # Custom Styling for the Table
+                st.dataframe(dash_df, height=300, use_container_width=True)
+                
+                st.markdown("#### 🔬 Detailed Indicators")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("ADX Strength", f"{last['ADX']:.2f}")
+                c2.metric("Stoch K/D", f"{last['Stoch_K']:.0f} / {last['Stoch_D']:.0f}")
+                c3.metric("MACD", f"{last['MACD']:.3f}")
+                c4.metric("OBV Trend", "UP" if last['OBV'] > df['OBV'].iloc[-2] else "DOWN")
+
+                # Volume Delta Visual
+                delta_color = 'green' if last['Close'] > last['Open'] else 'red'
+                st.markdown(f"**Volume Delta:** <span style='color:{delta_color}'>{'BUY PRESSURE' if delta_color=='green' else 'SELL PRESSURE'}</span>", unsafe_allow_html=True)
+
         else:
             st.error("Data connection failed. Try another ticker.")
