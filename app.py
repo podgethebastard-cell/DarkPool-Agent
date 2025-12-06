@@ -202,10 +202,11 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
 st.sidebar.header("🎛️ Terminal Controls")
 
 # --- INPUT MODE SELECTION ---
-# This Toggle allows the user to switch between Dropdowns OR Text Search
+# Added Search Box Feature functionality by setting index=1 as default
 input_mode = st.sidebar.radio(
     "Input Mode:", 
     ["Curated Lists", "Manual Search (Global)"],
+    index=1,
     help="Choose 'Curated Lists' to select from preset menus, or 'Manual Search' to type any ticker symbol yourself."
 )
 
@@ -228,11 +229,12 @@ if input_mode == "Curated Lists":
         help="Choose a specific asset from the selected category."
     )
 else:
-    st.sidebar.info("Type ticker (e.g. SSLN.L, BTC-USD)")
+    # --- SEARCH BOX FEATURE ---
+    st.sidebar.info("Type any ticker (e.g. SSLN.L, BTC-USD)")
     ticker = st.sidebar.text_input(
-        "Ticker Symbol", 
+        "Search Ticker Symbol", 
         value="SSLN.L",
-        help="Type any valid Yahoo Finance ticker here. For London Stock Exchange, add '.L' (e.g., SSLN.L)."
+        help="Type any valid Yahoo Finance ticker here. Works for Stocks, Crypto, Indices, and Forex."
     ).upper()
 
 interval = st.sidebar.selectbox(
