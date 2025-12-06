@@ -72,7 +72,7 @@ st.markdown("""
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v3.6 Radar Fixed*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v3.5 Gold Master*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -90,7 +90,7 @@ else:
         )
 
 # ==========================================
-# 2. DATA ENGINE (PURE MATH & DATA)
+# 2. DATA ENGINE (FUNCTIONS DEFINED FIRST)
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -504,7 +504,7 @@ def calc_correlations(ticker, lookback_days=180):
     return target_corr
 
 def calc_mtf_trend(ticker):
-    """📡 Multi-Timeframe Trend Radar (Fixed for Multi-Index)."""
+    """📡 Multi-Timeframe Trend Radar."""
     timeframes = {"1H": "1h", "4H": "1h", "Daily": "1d", "Weekly": "1wk"}
     trends = {}
     
@@ -516,7 +516,7 @@ def calc_mtf_trend(ticker):
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
                 
-            if df.empty or len(df) < 50: 
+            if df.empty: 
                 trends[tf_name] = {"Trend": "N/A", "RSI": "N/A", "EMA Spread": "N/A"}
                 continue
             
@@ -563,8 +563,83 @@ def calc_intraday_dna(ticker):
         return hourly_stats
     except: return None
 
+@st.cache_data(ttl=3600)
+def get_seasonality_stats(ticker):
+    """Calculates Monthly Seasonality and Probability Stats."""
+    try:
+        df = yf.download(ticker, period="20y", interval="1mo", progress=False)
+        if df.empty or len(df) < 12: return None
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        if 'Close' not in df.columns:
+             if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
+             else: return None
+
+        df = df.dropna()
+        df['Return'] = df['Close'].pct_change() * 100
+        df['Year'] = df.index.year
+        df['Month'] = df.index.month
+        
+        heatmap_data = df.pivot_table(index='Year', columns='Month', values='Return')
+        
+        periods = [1, 3, 6, 12]
+        hold_stats = {}
+        for p in periods:
+            rolling_ret = df['Close'].pct_change(periods=p) * 100
+            rolling_ret = rolling_ret.dropna()
+            
+            win_count = (rolling_ret > 0).sum()
+            total_count = len(rolling_ret)
+            win_rate = (win_count / total_count * 100) if total_count > 0 else 0
+            avg_ret = rolling_ret.mean()
+            
+            hold_stats[p] = {"Win Rate": win_rate, "Avg Return": avg_ret}
+            
+        month_stats = df.groupby('Month')['Return'].agg(['mean', lambda x: (x > 0).mean() * 100, 'count'])
+        month_stats.columns = ['Avg Return', 'Win Rate', 'Count']
+        
+        return heatmap_data, hold_stats, month_stats
+        
+    except Exception as e:
+        return None
+
+def calc_day_of_week_dna(ticker, lookback, calc_mode):
+    """DarkPool's Day of Week Seasonality DNA Port"""
+    try:
+        df = yf.download(ticker, period="5y", interval="1d", progress=False)
+        if df.empty: return None
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df = df.iloc[-lookback:].copy()
+        
+        if calc_mode == "Close to Close (Total)":
+            df['Day_Return'] = df['Close'].pct_change() * 100
+        else: # Open to Close (Intraday)
+            df['Day_Return'] = ((df['Close'] - df['Open']) / df['Open']) * 100
+            
+        df = df.dropna()
+        df['Day_Name'] = df.index.day_name()
+        
+        pivot_ret = df.pivot(columns='Day_Name', values='Day_Return').fillna(0)
+        cum_ret = pivot_ret.cumsum()
+        
+        stats = df.groupby('Day_Name')['Day_Return'].agg(['count', 'sum', 'mean', lambda x: (x > 0).mean() * 100])
+        stats.columns = ['Count', 'Total Return', 'Avg Return', 'Win Rate']
+        
+        days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        stats = stats.reindex([d for d in days_order if d in stats.index])
+        
+        return cum_ret, stats
+        
+    except Exception as e:
+        return None
+
 # ==========================================
-# 4. AI ANALYST (RESTORED)
+# 4. AI ANALYST
 # ==========================================
 def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
     if not st.session_state.api_key: 
