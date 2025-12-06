@@ -72,7 +72,7 @@ st.markdown("""
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v3.2 Final*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v3.3 Final Fix*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -218,81 +218,6 @@ def get_macro_data():
             continue
             
     return groups, prices, changes
-
-@st.cache_data(ttl=3600)
-def get_seasonality_stats(ticker):
-    """Calculates Monthly Seasonality and Probability Stats."""
-    try:
-        df = yf.download(ticker, period="20y", interval="1mo", progress=False)
-        if df.empty or len(df) < 12: return None
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        if 'Close' not in df.columns:
-             if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
-             else: return None
-
-        df = df.dropna()
-        df['Return'] = df['Close'].pct_change() * 100
-        df['Year'] = df.index.year
-        df['Month'] = df.index.month
-        
-        heatmap_data = df.pivot_table(index='Year', columns='Month', values='Return')
-        
-        periods = [1, 3, 6, 12]
-        hold_stats = {}
-        for p in periods:
-            rolling_ret = df['Close'].pct_change(periods=p) * 100
-            rolling_ret = rolling_ret.dropna()
-            
-            win_count = (rolling_ret > 0).sum()
-            total_count = len(rolling_ret)
-            win_rate = (win_count / total_count * 100) if total_count > 0 else 0
-            avg_ret = rolling_ret.mean()
-            
-            hold_stats[p] = {"Win Rate": win_rate, "Avg Return": avg_ret}
-            
-        month_stats = df.groupby('Month')['Return'].agg(['mean', lambda x: (x > 0).mean() * 100, 'count'])
-        month_stats.columns = ['Avg Return', 'Win Rate', 'Count']
-        
-        return heatmap_data, hold_stats, month_stats
-        
-    except Exception as e:
-        return None
-
-def calc_day_of_week_dna(ticker, lookback, calc_mode):
-    """DarkPool's Day of Week Seasonality DNA Port"""
-    try:
-        df = yf.download(ticker, period="5y", interval="1d", progress=False)
-        if df.empty: return None
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        df = df.iloc[-lookback:].copy()
-        
-        if calc_mode == "Close to Close (Total)":
-            df['Day_Return'] = df['Close'].pct_change() * 100
-        else: # Open to Close (Intraday)
-            df['Day_Return'] = ((df['Close'] - df['Open']) / df['Open']) * 100
-            
-        df = df.dropna()
-        df['Day_Name'] = df.index.day_name()
-        
-        pivot_ret = df.pivot(columns='Day_Name', values='Day_Return').fillna(0)
-        cum_ret = pivot_ret.cumsum()
-        
-        stats = df.groupby('Day_Name')['Day_Return'].agg(['count', 'sum', 'mean', lambda x: (x > 0).mean() * 100])
-        stats.columns = ['Count', 'Total Return', 'Avg Return', 'Win Rate']
-        
-        days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        stats = stats.reindex([d for d in days_order if d in stats.index])
-        
-        return cum_ret, stats
-        
-    except Exception as e:
-        return None
 
 # ==========================================
 # 3. MATH LIBRARY & ALGORITHMS
@@ -871,7 +796,7 @@ if st.session_state.get('run_analysis'):
                 fig_smc = go.Figure(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']))
                 for ob in smc['order_blocks']: fig_smc.add_shape(type="rect", x0=ob['x0'], x1=ob['x1'], y0=ob['y0'], y1=ob['y1'], fillcolor=ob['color'], opacity=0.5, line_width=0)
                 for fvg in smc['fvgs']: fig_smc.add_shape(type="rect", x0=fvg['x0'], x1=fvg['x1'], y0=fvg['y0'], y1=fvg['y1'], fillcolor=fvg['color'], opacity=0.5, line_width=0)
-                for struct in smc_res['structures']:
+                for struct in smc['structures']: # FIX: Changed from smc_res to smc
                     fig_smc.add_shape(type="line", x0=struct['x0'], x1=struct['x1'], y0=struct['y'], y1=struct['y'], line=dict(color=struct['color'], width=1, dash="dot"))
                     fig_smc.add_annotation(x=struct['x1'], y=struct['y'], text=struct['label'], showarrow=False, yshift=10 if struct['color']=='green' else -10, font=dict(color=struct['color'], size=10))
 
