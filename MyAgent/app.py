@@ -11,7 +11,7 @@ from openai import OpenAI
 # ==========================================
 st.set_page_config(layout="wide", page_title="DarkPool Ultimate Architect")
 st.title("👁️ DarkPool Ultimate Architect")
-st.markdown("### Institutional Multi-Factor Analysis Engine")
+st.markdown("### Institutional Trade Planning Engine")
 
 # Load API Key
 if "OPENAI_API_KEY" in st.secrets:
@@ -20,10 +20,9 @@ else:
     api_key = st.sidebar.text_input("OpenAI API Key", type="password")
 
 # ==========================================
-# 2. MATH LIBRARY (The Engine Room)
+# 2. MATH LIBRARY
 # ==========================================
 def calc_hma(series, length):
-    """Hull Moving Average"""
     wma1 = series.rolling(length // 2).apply(lambda x: np.dot(x, np.arange(1, len(x)+1)) / np.arange(1, len(x)+1).sum(), raw=True)
     wma2 = series.rolling(length).apply(lambda x: np.dot(x, np.arange(1, len(x)+1)) / np.arange(1, len(x)+1).sum(), raw=True)
     diff = 2 * wma1 - wma2
@@ -87,7 +86,7 @@ if m_price is not None:
     st.markdown("---")
 
 # ==========================================
-# 4. DATA PROCESSING (ALL INDICATORS)
+# 4. DATA PROCESSING
 # ==========================================
 def get_full_analysis(ticker, interval):
     if "---" in ticker: return None
@@ -96,7 +95,7 @@ def get_full_analysis(ticker, interval):
 
     # --- 1. APEX TREND ---
     df['HMA'] = calc_hma(df['Close'], 55)
-    df['ATR'] = calc_atr(df, 55)
+    df['ATR'] = calc_atr(df, 14) # Standard ATR for logic
     df['Apex_Up'] = df['HMA'] + (df['ATR'] * 1.5)
     df['Apex_Dn'] = df['HMA'] - (df['ATR'] * 1.5)
     df['Apex_State'] = np.where(df['Close'] > df['Apex_Up'], 1, np.where(df['Close'] < df['Apex_Dn'], -1, 0))
@@ -110,7 +109,7 @@ def get_full_analysis(ticker, interval):
     # Fast Logic for Vector
     closes = df['Close'].values; lows = df['Low'].values; highs = df['High'].values
     trend = np.zeros(len(df)); stop = np.zeros(len(df))
-    curr_t = 0; curr_stop = 0.0
+    curr_t = 0; 
     
     # Pre-calculate rolling min/max
     r_min = df['Low'].rolling(amp).min().fillna(0).values
@@ -135,7 +134,6 @@ def get_full_analysis(ticker, interval):
     gl = 3
     df['Gann_Hi'] = df['High'].rolling(gl).mean()
     df['Gann_Lo'] = df['Low'].rolling(gl).mean()
-    # Simplified Gann State
     df['Gann_State'] = np.where(df['Close'] > df['Gann_Hi'].shift(1), 1, np.where(df['Close'] < df['Gann_Lo'].shift(1), -1, 0))
     df['Gann_State'] = df['Gann_State'].replace(to_replace=0, method='ffill')
 
@@ -151,20 +149,32 @@ def get_full_analysis(ticker, interval):
     df['MFI'] = (rsi - 50) * (df['Volume'] / df['Volume'].rolling(20).mean())
     df['MFI_Smooth'] = df['MFI'].ewm(span=3).mean()
 
-    # --- 6. FEAR & GREED (RSI + Volatility) ---
-    df['RSI'] = rsi
-    df['F_G'] = df['RSI'] # Simplified proxy for chart clarity
-
     return df
 
 # ==========================================
-# 5. AI CHAIRMAN
+# 5. AI CHAIRMAN (UPDATED WITH TRADE PLAN)
 # ==========================================
 def ask_chairman(df, ticker):
     if not api_key: return "⚠️ API Key Missing."
     last = df.iloc[-1]
     
-    # Board of Directors
+    # Extract Key Data
+    price = float(last['Close'])
+    atr = float(last['ATR'])
+    vec_stop = float(last['Vec_Stop'])
+    
+    # Calculate Targets (2.0 and 3.0 Risk Multiples)
+    # Scenario A: If Long
+    long_risk = price - vec_stop
+    tp1_long = price + (atr * 2)
+    tp2_long = price + (atr * 4)
+    
+    # Scenario B: If Short
+    short_risk = vec_stop - price
+    tp1_short = price - (atr * 2)
+    tp2_short = price - (atr * 4)
+    
+    # States
     apex = "BULL 🟢" if last['Apex_State'] == 1 else "BEAR 🔴"
     vector = "BUY 🔵" if last['Vec_Trend'] == 0 else "SELL 🟣"
     gann = "UP 🔼" if last['Gann_State'] == 1 else "DOWN 🔽"
@@ -172,19 +182,30 @@ def ask_chairman(df, ticker):
     flow = "INFLOW 🟩" if last['MFI_Smooth'] > 0 else "OUTFLOW 🟥"
     
     prompt = f"""
-    Analyze {ticker} as a Hedge Fund Chairman.
+    Act as a Senior Hedge Fund Chairman. Analyze {ticker} at ${price:.2f}.
     
-    THE BOARD OF DIRECTORS REPORT:
+    --- TECHNICAL DASHBOARD ---
     1. MACRO TREND (Apex): {apex}
-    2. SCALPER (Vector): {vector} (Stop: {last['Vec_Stop']:.2f})
+    2. SCALPER (Vector): {vector}. (This is your Hard Stop Level: ${vec_stop:.2f})
     3. SWING (Gann): {gann}
-    4. VOLATILITY (Squeeze): {sqz} (Mom: {last['Mom']:.2f})
-    5. VOLUME (Money Flow): {flow}
+    4. VOLATILITY (Squeeze): {sqz}. Momentum: {last['Mom']:.2f}.
+    5. VOLUME (Money Flow): {flow}.
+    6. VOLATILITY (ATR): ${atr:.2f} (Use this for targets).
     
-    TASK:
-    1. Vote Count: How many indicators are Bullish vs Bearish?
-    2. Verdict: STRONG LONG, WEAK LONG, WAIT, WEAK SHORT, or STRONG SHORT?
-    3. Warning: Are there any contradictions (e.g. Trend is Up but Volume is Down)?
+    --- DATA FOR PLAN ---
+    * IF LONG: Hard Stop: {vec_stop:.2f}. TP1: {tp1_long:.2f}. TP2: {tp2_long:.2f}.
+    * IF SHORT: Hard Stop: {vec_stop:.2f}. TP1: {tp1_short:.2f}. TP2: {tp2_short:.2f}.
+    
+    --- YOUR TASK ---
+    1. **The Verdict:** DECISIVE LONG, DECISIVE SHORT, or WAIT.
+    2. **The Logic:** Analyze the confluence. Are the Scalper and Macro Trend aligned? Is volume supporting it?
+    3. **The Execution Card (Crucial):**
+       - **Action:** (Buy Now / Sell Now / Wait)
+       - **Entry Zone:** Current Price
+       - **Stop Loss:** (Use the Vector level provided above)
+       - **Take Profit 1:** (Conservative)
+       - **Take Profit 2:** (Aggressive)
+       - **Leverage Advice:** (Low/Med/High based on Volatility)
     """
     
     client = OpenAI(api_key=api_key)
@@ -196,11 +217,11 @@ def ask_chairman(df, ticker):
 # ==========================================
 st.sidebar.header("Mission Control")
 asset_options = {
-    "--- CRYPTO ---": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"],
+    "--- CRYPTO ---": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD", "ADA-USD"],
     "--- INDICES ---": ["SPY", "QQQ", "IWM", "DIA"], 
-    "--- TECH ---": ["NVDA", "TSLA", "AAPL", "MSFT"],
-    "--- COMMODITIES ---": ["GC=F", "SI=F", "CL=F", "HG=F"],
-    "--- MACRO ---": ["DX-Y.NYB", "^TNX", "^VIX", "HYG"]
+    "--- TECH ---": ["NVDA", "TSLA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AMD"],
+    "--- COMMODITIES ---": ["GC=F", "SI=F", "CL=F", "HG=F", "NG=F"],
+    "--- MACRO ---": ["DX-Y.NYB", "^TNX", "^VIX", "HYG", "TLT"]
 }
 flat = [i for s in asset_options.values() for i in s]
 ticker = st.sidebar.selectbox("Asset", flat, index=0)
@@ -213,7 +234,6 @@ if st.sidebar.button("Run Ultimate Analysis"):
             # --- MAIN CHART (PRICE + TRENDS) ---
             st.subheader(f"1. Strategic Command ({ticker})")
             
-            # Using Subplots to stack indicators cleanly
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                                 vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2],
                                 subplot_titles=("Price & Trends", "Money Flow Matrix", "Momentum & Squeeze"))
@@ -227,8 +247,7 @@ if st.sidebar.button("Run Ultimate Analysis"):
             
             # Vector Scalper (Staircase)
             vec_col = ['#00ffff' if t==0 else '#ff00ff' for t in df['Vec_Trend']]
-            # We plot segments for color change simulation in plotly
-            fig.add_trace(go.Scatter(x=df.index, y=df['Vec_Stop'], mode='markers', marker=dict(color=vec_col, size=2), name="Vector Stop"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Vec_Stop'], mode='markers', marker=dict(color=vec_col, size=3), name="Vector Stop"), row=1, col=1)
 
             # ROW 2: Money Flow
             cols_mf = ['#00ff00' if v>0 else '#ff0000' for v in df['MFI_Smooth']]
@@ -237,17 +256,16 @@ if st.sidebar.button("Run Ultimate Analysis"):
             # ROW 3: Squeeze & Momentum
             cols_mom = ['cyan' if m>0 else 'purple' for m in df['Mom']]
             fig.add_trace(go.Bar(x=df.index, y=df['Mom'], marker_color=cols_mom, name="Momentum"), row=3, col=1)
-            # Squeeze Dots
             sqz_y = [0] * len(df)
             cols_sqz = ['red' if s else 'gray' for s in df['Sq_On']]
             fig.add_trace(go.Scatter(x=df.index, y=sqz_y, mode='markers', marker=dict(color=cols_sqz, size=4), name="Squeeze"), row=3, col=1)
 
-            fig.update_layout(height=800, xaxis_rangeslider_visible=False, template="plotly_dark", title_text=f"DarkPool Architecture: {ticker}")
+            fig.update_layout(height=900, xaxis_rangeslider_visible=False, template="plotly_dark", title_text=f"DarkPool Architecture: {ticker}")
             st.plotly_chart(fig, use_container_width=True)
 
             # --- AI VERDICT ---
             st.markdown("---")
-            st.subheader("🧠 Chairman's Verdict")
+            st.subheader("🧠 Chairman's Execution Plan")
             st.info(ask_chairman(df, ticker))
             
             # --- DISCLAIMER ---
