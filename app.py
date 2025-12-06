@@ -101,11 +101,52 @@ def safe_download(ticker, period, interval):
 
 @st.cache_data(ttl=300)
 def get_macro_data():
-    """Fetches key macro indicators with robust error handling."""
+    """Fetches expanded list of 28 global macro indicators."""
+    # Defined in display order for logical grouping
     tickers = {
-        "S&P 500": "SPY", "Bitcoin": "BTC-USD", 
-        "10Y Yield": "^TNX", "VIX": "^VIX"
+        # --- US INDICES ---
+        "S&P 500": "SPY", 
+        "Nasdaq 100": "QQQ",
+        "Dow Jones": "^DJI",
+        "Russell 2000": "^RUT",
+        
+        # --- GLOBAL INDICES ---
+        "FTSE 100 (UK)": "^FTSE",
+        "DAX (Germany)": "^GDAXI",
+        "Euro Stoxx 50": "^STOXX50E",
+        "Nikkei 225": "^N225",
+        
+        # --- RATES & VOLATILITY ---
+        "10Y Yield": "^TNX", 
+        "2Y Yield": "^IRX",
+        "Dollar Index": "DX-Y.NYB",
+        "VIX (Fear)": "^VIX",
+        
+        # --- CRYPTO & RISK ---
+        "Bitcoin": "BTC-USD", 
+        "Ethereum": "ETH-USD",
+        "Mining (PICK)": "PICK",
+        "Rare Earths": "REMX",
+
+        # --- ENERGY ---
+        "WTI Crude": "CL=F",
+        "Brent Crude": "BZ=F",
+        "Natural Gas": "NG=F",
+        "Uranium": "URA",
+        
+        # --- PRECIOUS METALS ---
+        "Gold": "GC=F",
+        "Silver": "SI=F",
+        "Platinum": "PL=F",
+        "Palladium": "PA=F",
+        
+        # --- INDUSTRIAL & AG ---
+        "Copper": "HG=F",
+        "Corn": "ZC=F",
+        "Wheat": "ZW=F",
+        "Soybeans": "ZS=F"
     }
+    
     prices = {k: 0.0 for k in tickers.keys()}
     changes = {k: 0.0 for k in tickers.keys()}
     
@@ -256,14 +297,12 @@ def calculate_smc(df, swing_length=5):
     Calculates Structure (BOS/CHoCH), Order Blocks (OB), and Fair Value Gaps (FVG).
     """
     smc_data = {
-        'structures': [], # List of dicts: {index, price, type, label}
-        'order_blocks': [], # List of dicts: {x0, x1, y0, y1, color}
-        'fvgs': [] # List of dicts: {x0, x1, y0, y1, color}
+        'structures': [], 
+        'order_blocks': [], 
+        'fvgs': [] 
     }
     
     # 1. FAIR VALUE GAPS (FVG)
-    # Bullish FVG: Low[i] > High[i-2]
-    # Bearish FVG: High[i] < Low[i-2]
     for i in range(2, len(df)):
         # Bullish FVG
         if df['Low'].iloc[i] > df['High'].iloc[i-2]:
@@ -281,7 +320,6 @@ def calculate_smc(df, swing_length=5):
             })
             
     # 2. MARKET STRUCTURE & ORDER BLOCKS
-    # Identify Pivots (Swings)
     df['Pivot_High'] = df['High'].rolling(window=swing_length*2+1, center=True).max() == df['High']
     df['Pivot_Low'] = df['Low'].rolling(window=swing_length*2+1, center=True).min() == df['Low']
     
@@ -289,18 +327,15 @@ def calculate_smc(df, swing_length=5):
     last_low = None
     trend = 0 # 1=Bull, -1=Bear
     
-    # Iterate through bars to determine breaks
     for i in range(swing_length, len(df)):
         curr_idx = df.index[i]
         curr_close = df['Close'].iloc[i]
         
-        # Update Pivots
         if df['Pivot_High'].iloc[i-swing_length]:
             last_high = {'price': df['High'].iloc[i-swing_length], 'idx': df.index[i-swing_length], 'i': i-swing_length}
         if df['Pivot_Low'].iloc[i-swing_length]:
             last_low = {'price': df['Low'].iloc[i-swing_length], 'idx': df.index[i-swing_length], 'i': i-swing_length}
             
-        # Check Breaks
         if last_high and curr_close > last_high['price']:
             if trend != 1:
                 label = "CHoCH"
@@ -308,26 +343,22 @@ def calculate_smc(df, swing_length=5):
             else:
                 label = "BOS"
             
-            # Record Structure
             smc_data['structures'].append({
                 'x0': last_high['idx'], 'x1': curr_idx,
                 'y': last_high['price'], 'color': 'green', 'label': label
             })
             
-            # Find Bullish Order Block (Lowest candle in the move down before the break)
-            # Simplification: Look back from break to last swing low
             if last_low:
-                # Find candle with lowest low between last_low and break
                 subset = df.iloc[last_low['i']:i]
                 if not subset.empty:
                     ob_idx = subset['Low'].idxmin()
                     ob_row = df.loc[ob_idx]
                     smc_data['order_blocks'].append({
-                        'x0': ob_idx, 'x1': df.index[-1], # Extend to current
+                        'x0': ob_idx, 'x1': df.index[-1],
                         'y0': ob_row['Low'], 'y1': ob_row['High'],
                         'color': 'rgba(33, 87, 243, 0.4)' # Blue
                     })
-            last_high = None # Reset break level
+            last_high = None
 
         elif last_low and curr_close < last_low['price']:
             if trend != -1:
@@ -341,7 +372,6 @@ def calculate_smc(df, swing_length=5):
                 'y': last_low['price'], 'color': 'red', 'label': label
             })
             
-            # Find Bearish Order Block
             if last_high:
                 subset = df.iloc[last_high['i']:i]
                 if not subset.empty:
@@ -604,14 +634,29 @@ risk_pct = st.sidebar.slider(
     help="Adjust the percentage of capital you are willing to risk on this trade."
 )
 
-# --- GLOBAL MACRO HEADER ---
+# --- GLOBAL MACRO HEADER (DYNAMIC GRID) ---
 m_price, m_chg = get_macro_data()
 if m_price:
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("S&P 500", f"{m_price.get('S&P 500', 0.0):.2f}", f"{m_chg.get('S&P 500', 0.0):.2f}%")
-    c2.metric("Bitcoin", f"{m_price.get('Bitcoin', 0.0):.2f}", f"{m_chg.get('Bitcoin', 0.0):.2f}%")
-    c3.metric("10Y Yield", f"{m_price.get('10Y Yield', 0.0):.2f}", f"{m_chg.get('10Y Yield', 0.0):.2f}%")
-    c4.metric("VIX", f"{m_price.get('VIX', 0.0):.2f}", f"{m_chg.get('VIX', 0.0):.2f}%")
+    # Convert dictionary to lists for iteration
+    items = list(m_price.keys())
+    
+    # Create rows of 4 columns
+    for i in range(0, len(items), 4):
+        cols = st.columns(4)
+        for j in range(4):
+            if i + j < len(items):
+                name = items[i+j]
+                val = m_price[name]
+                pct = m_chg[name]
+                
+                # Format logic
+                if "Yield" in name or "Index" in name or "VIX" in name:
+                    fmt_val = f"{val:.2f}"
+                else:
+                    fmt_val = f"{val:,.2f}"
+                    
+                cols[j].metric(name, fmt_val, f"{pct:.2f}%")
+                
     st.markdown("---")
 
 # --- MAIN ANALYSIS TABS ---
