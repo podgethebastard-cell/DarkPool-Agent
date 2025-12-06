@@ -18,7 +18,27 @@ else:
 
 # 3. SIDEBAR SETTINGS
 st.sidebar.header("Mission Control")
-ticker = st.sidebar.text_input("Asset", value="BTC-USD", help="Ticker Symbol")
+
+# --- UPDATED DROPDOWN MENU ---
+asset_options = [
+    # Crypto
+    "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD",
+    # Stocks
+    "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "MSFT", "MSTR", "COIN",
+    # Forex
+    "EURUSD=X", "GBPUSD=X", "USDJPY=X",
+    # Precious Metals
+    "GC=F", # Gold Futures
+    "SI=F", # Silver Futures
+    # Macro / Economic
+    "DX-Y.NYB", # US Dollar Index (DXY)
+    "^TNX",     # US 10-Year Treasury Yield
+    "^VIX"      # Volatility Index (Fear Gauge)
+]
+
+ticker = st.sidebar.selectbox("Select Asset", options=asset_options, index=0)
+# -----------------------------
+
 interval = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=2)
 
 # --- MATH LIBRARY ---
@@ -39,6 +59,7 @@ def calc_rsi(series, period):
 # 4. DATA ENGINE
 def get_data(ticker, interval):
     try:
+        # Special handling for DXY or VIX which might need different data calls
         df = yf.download(ticker, period="6mo", interval=interval)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.droplevel(1)
@@ -120,4 +141,4 @@ if st.sidebar.button("Initialize Omni-Agent"):
             st.subheader("🧠 Omni-Agent Verdict")
             st.info(ask_omni_agent(df, ticker))
         else:
-            st.error("Error fetching data.")
+            st.error("Error fetching data. Try a standard ticker.")
