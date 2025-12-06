@@ -72,7 +72,7 @@ st.markdown("""
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v3.3 Final Fix*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v3.5 Gold Master*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -551,7 +551,7 @@ def calc_intraday_dna(ticker):
     except: return None
 
 # ==========================================
-# 4. AI ANALYST (RESTORED)
+# 4. AI ANALYST
 # ==========================================
 def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
     if not st.session_state.api_key: 
@@ -796,7 +796,7 @@ if st.session_state.get('run_analysis'):
                 fig_smc = go.Figure(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']))
                 for ob in smc['order_blocks']: fig_smc.add_shape(type="rect", x0=ob['x0'], x1=ob['x1'], y0=ob['y0'], y1=ob['y1'], fillcolor=ob['color'], opacity=0.5, line_width=0)
                 for fvg in smc['fvgs']: fig_smc.add_shape(type="rect", x0=fvg['x0'], x1=fvg['x1'], y0=fvg['y0'], y1=fvg['y1'], fillcolor=fvg['color'], opacity=0.5, line_width=0)
-                for struct in smc['structures']: # FIX: Changed from smc_res to smc
+                for struct in smc['structures']: 
                     fig_smc.add_shape(type="line", x0=struct['x0'], x1=struct['x1'], y0=struct['y'], y1=struct['y'], line=dict(color=struct['color'], width=1, dash="dot"))
                     fig_smc.add_annotation(x=struct['x1'], y=struct['y'], text=struct['label'], showarrow=False, yshift=10 if struct['color']=='green' else -10, font=dict(color=struct['color'], size=10))
 
