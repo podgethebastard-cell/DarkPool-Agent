@@ -198,7 +198,12 @@ with tab1:
         c1, c2 = st.columns([1, 2])
         with c1:
             st.caption("🏆 Sector Performance (Today)")
-            st.dataframe(sector_data.style.format("{:.2f}%").background_gradient(cmap="RdYlGn", vmin=-2, vmax=2), height=400)
+            # FIX: Convert the Pandas Series to a DataFrame before applying .style
+            styled_df = sector_data.to_frame(name="Change").style.format({
+                "Change": "{:.2f}%"
+            }).background_gradient(cmap="RdYlGn", vmin=-2, vmax=2)
+            
+            st.dataframe(styled_df, height=400)
         
         with c2:
             st.caption("📈 Risk Gauge (SPY vs VIX vs BTC)")
