@@ -52,7 +52,6 @@ def get_fundamentals(ticker):
 @st.cache_data(ttl=300)
 def get_global_performance():
     """Fetches performance of a Global Multi-Asset Basket."""
-    # UPGRADE: Expanded list to include Crypto, Commodities, and Bonds
     assets = {
         "Tech (XLK)": "XLK", 
         "Energy (XLE)": "XLE", 
@@ -77,7 +76,7 @@ def get_global_performance():
                 change = ((price - prev) / prev) * 100
                 results[name] = change
         
-        return pd.Series(results).sort_values(ascending=True) # Sorted for the chart
+        return pd.Series(results).sort_values(ascending=True)
     except: return None
 
 def safe_download(ticker, period, interval):
@@ -127,7 +126,7 @@ def get_macro_data():
     return prices, changes
 
 # ==========================================
-# 3. MATH LIBRARY
+# 3. MATH LIBRARY & ALGORITHMS
 # ==========================================
 def calc_indicators(df):
     df['HMA'] = df['Close'].rolling(55).mean()
@@ -148,6 +147,127 @@ def calc_indicators(df):
     df['KC_ATR'] = df['ATR'].rolling(20).mean()
     df['Squeeze_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
     df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
+    
+    return df
+
+def get_sr_channels(df, pivot_period=10, loopback=290, max_width_pct=5, min_strength=1):
+    """Python implementation of 'Support Resistance Channels' logic."""
+    if len(df) < loopback: loopback = len(df)
+    window = df.iloc[-loopback:].copy()
+    
+    window['Is_Pivot_H'] = window['High'] == window['High'].rolling(pivot_period*2+1, center=True).max()
+    window['Is_Pivot_L'] = window['Low'] == window['Low'].rolling(pivot_period*2+1, center=True).min()
+    
+    pivot_vals = []
+    pivot_vals.extend(window[window['Is_Pivot_H']]['High'].tolist())
+    pivot_vals.extend(window[window['Is_Pivot_L']]['Low'].tolist())
+    
+    if not pivot_vals: return []
+    pivot_vals.sort()
+    
+    price_range = window['High'].max() - window['Low'].min()
+    max_width = price_range * (max_width_pct / 100)
+    
+    potential_zones = []
+    for i in range(len(pivot_vals)):
+        seed = pivot_vals[i]
+        cluster_min = seed
+        cluster_max = seed
+        pivot_count = 1
+        
+        for j in range(i + 1, len(pivot_vals)):
+            curr = pivot_vals[j]
+            if (curr - seed) <= max_width:
+                cluster_max = curr
+                pivot_count += 1
+            else:
+                break
+        
+        touches = ((window['High'] >= cluster_min) & (window['Low'] <= cluster_max)).sum()
+        score = (pivot_count * 20) + touches
+        
+        potential_zones.append({'min': cluster_min, 'max': cluster_max, 'score': score})
+        
+    potential_zones.sort(key=lambda x: x['score'], reverse=True)
+    
+    final_zones = []
+    for zone in potential_zones:
+        is_overlapping = False
+        for existing in final_zones:
+            if (zone['min'] < existing['max']) and (zone['max'] > existing['min']):
+                is_overlapping = True
+                break
+        if not is_overlapping:
+            final_zones.append(zone)
+            if len(final_zones) >= 6: break
+                
+    return final_zones
+
+def calc_fear_greed_v4(df):
+    """
+    🔥 DarkPool's Fear & Greed v4 Port
+    Calculates composite sentiment index, FOMO, and Panic states.
+    """
+    # 1. RSI Component (30% Weight)
+    # Using EWM to approximate Wilder's RMA
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    df['FG_RSI'] = 100 - (100 / (1 + rs))
+    
+    # 2. MACD Component (25% Weight)
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - signal
+    # Normalize: 50 + (Hist * 10) clamped 0-100
+    df['FG_MACD'] = (50 + (hist * 10)).clip(0, 100)
+    
+    # 3. Bollinger Band Component (25% Weight)
+    sma20 = df['Close'].rolling(20).mean()
+    std20 = df['Close'].rolling(20).std()
+    upper = sma20 + (std20 * 2)
+    lower = sma20 - (std20 * 2)
+    # %B Calculation
+    df['FG_BB'] = ((df['Close'] - lower) / (upper - lower) * 100).clip(0, 100)
+    
+    # 4. Moving Average Trend (20% Weight)
+    sma50 = df['Close'].rolling(50).mean()
+    sma200 = df['Close'].rolling(200).mean()
+    
+    # Logic: Bullish Stack=75, Above Short=60, Death Cross=25, Below Short=40
+    conditions = [
+        (df['Close'] > sma50) & (sma50 > sma200),
+        (df['Close'] > sma50),
+        (df['Close'] < sma50) & (sma50 < sma200)
+    ]
+    choices = [75, 60, 25]
+    df['FG_MA'] = np.select(conditions, choices, default=40)
+    
+    # Composite Index
+    df['FG_Raw'] = (df['FG_RSI'] * 0.30) + (df['FG_MACD'] * 0.25) + (df['FG_BB'] * 0.25) + (df['FG_MA'] * 0.20)
+    df['FG_Index'] = df['FG_Raw'].rolling(5).mean()
+    
+    # --- FOMO LOGIC ---
+    vol_ma = df['Volume'].rolling(20).mean()
+    high_vol = df['Volume'] > (vol_ma * 2.5)
+    high_rsi = df['FG_RSI'] > 70
+    momentum = df['Close'] > df['Close'].shift(3) * 1.02 # >2% gain in 3 bars
+    above_bb = df['Close'] > (upper * 1.0) # Approx
+    
+    df['IS_FOMO'] = high_vol & high_rsi & momentum & above_bb
+    
+    # --- PANIC LOGIC ---
+    daily_drop = df['Close'].pct_change() * 100
+    sharp_drop = daily_drop < -3.0
+    panic_vol = df['Volume'] > (vol_ma * 3.0)
+    low_rsi = df['FG_RSI'] < 30
+    
+    df['IS_PANIC'] = sharp_drop & panic_vol & (low_rsi | (daily_drop < -5.0))
     
     return df
 
@@ -180,18 +300,28 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
     if fundamentals:
         fund_text = f"P/E: {fundamentals.get('P/E Ratio', 'N/A')}. Growth: {fundamentals.get('Rev Growth', 0)*100:.1f}%."
     
+    # Get Fear/Greed State
+    fg_val = last['FG_Index']
+    fg_state = "EXTREME GREED" if fg_val >= 80 else "GREED" if fg_val >= 60 else "NEUTRAL" if fg_val >= 40 else "FEAR" if fg_val >= 20 else "EXTREME FEAR"
+    psych_alert = ""
+    if last['IS_FOMO']: psych_alert = "WARNING: ALGORITHMIC FOMO DETECTED."
+    if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
+
     prompt = f"""
     Act as a Global Macro Strategist. Analyze {ticker} at ${last['Close']:.2f}.
     --- FUNDAMENTALS ---
     {fund_text}
     --- TECHNICALS ---
-    Trend: {trend}. Money Flow: {last['MFI']:.0f}. Volatility (ATR): {last['ATR']:.2f}.
+    Trend: {trend}. Volatility (ATR): {last['ATR']:.2f}.
+    --- PSYCHOLOGY (DarkPool Index) ---
+    Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
+    {psych_alert}
     --- RISK PROTOCOL (1% Rule) ---
     Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
     Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
     --- MISSION ---
     1. Verdict: BUY, SELL, or WAIT.
-    2. Reasoning: Market Structure, Trend, Fundamentals.
+    2. Reasoning: Integrate Technicals, Fundamentals, and Market Psychology.
     3. Trade Plan: Entry, Stop, Target (2.5R), Size.
     """
     
@@ -283,25 +413,74 @@ if st.session_state.get('run_analysis'):
         
         if df is not None:
             df = calc_indicators(df)
+            df = calc_fear_greed_v4(df) # Add Fear & Greed Logic
             fund = get_fundamentals(ticker)
+            sr_zones = get_sr_channels(df) 
             
             with tab1:
                 st.subheader(f"🎯 Sniper Scope: {ticker}")
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-                fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
                 
-                if not pd.isna(df['Pivot_Resist'].iloc[-1]):
-                    fig.add_hline(y=df['Pivot_Resist'].iloc[-1], line_dash="dash", line_color="red", row=1, col=1)
-                if not pd.isna(df['Pivot_Support'].iloc[-1]):
-                    fig.add_hline(y=df['Pivot_Support'].iloc[-1], line_dash="dash", line_color="green", row=1, col=1)
+                # --- LAYOUT: MAIN CHART + F&G GAUGE ---
+                col_chart, col_gauge = st.columns([0.75, 0.25])
                 
-                colors = ['#00ff00' if v > 0 else '#ff0000' for v in df['MFI']]
-                fig.add_trace(go.Bar(x=df.index, y=df['MFI'], marker_color=colors, name="Smart Money"), row=2, col=1)
+                with col_chart:
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+                    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
+                    
+                    # --- S/R CHANNELS ---
+                    last_close = df['Close'].iloc[-1]
+                    for zone in sr_zones:
+                        if last_close > zone['max']: col = "rgba(0, 255, 0, 0.15)"
+                        elif last_close < zone['min']: col = "rgba(255, 0, 0, 0.15)"
+                        else: col = "rgba(128, 128, 128, 0.15)"
+                            
+                        fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1], xref="x", yref="y",
+                            y0=zone['min'], y1=zone['max'], fillcolor=col, line=dict(width=0), row=1, col=1)
+                    
+                    # --- FOMO / PANIC MARKERS ---
+                    fomo_dates = df[df['IS_FOMO']].index
+                    panic_dates = df[df['IS_PANIC']].index
+                    
+                    fig.add_trace(go.Scatter(x=fomo_dates, y=df.loc[fomo_dates, 'High']*1.02, mode='markers', marker=dict(symbol='triangle-up', size=10, color='purple'), name="FOMO Algo"), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=panic_dates, y=df.loc[panic_dates, 'Low']*0.98, mode='markers', marker=dict(symbol='triangle-down', size=10, color='yellow'), name="Panic Algo"), row=1, col=1)
+
+                    colors = ['#00ff00' if v > 0 else '#ff0000' for v in df['MFI']]
+                    fig.add_trace(go.Bar(x=df.index, y=df['MFI'], marker_color=colors, name="Smart Money"), row=2, col=1)
+                    
+                    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+                    st.plotly_chart(fig, use_container_width=True)
                 
-                fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
-                
+                with col_gauge:
+                    # --- FEAR & GREED GAUGE ---
+                    curr_fg = df['FG_Index'].iloc[-1]
+                    if np.isnan(curr_fg): curr_fg = 50
+                    
+                    fig_gauge = go.Figure(go.Indicator(
+                        mode = "gauge+number",
+                        value = curr_fg,
+                        title = {'text': "Fear & Greed Index"},
+                        gauge = {
+                            'axis': {'range': [0, 100]},
+                            'bar': {'color': "white", 'thickness': 0.2},
+                            'steps': [
+                                {'range': [0, 20], 'color': "#FF0000"}, # Extreme Fear
+                                {'range': [20, 40], 'color': "#FFA500"}, # Fear
+                                {'range': [40, 60], 'color': "#808080"}, # Neutral
+                                {'range': [60, 80], 'color': "#90EE90"}, # Greed
+                                {'range': [80, 100], 'color': "#00FF00"} # Extreme Greed
+                            ]
+                        }
+                    ))
+                    fig_gauge.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
+                    st.plotly_chart(fig_gauge, use_container_width=True)
+                    
+                    st.markdown("#### Psychology Stats")
+                    st.metric("RSI Contribution", f"{df['FG_RSI'].iloc[-1]:.1f}/100")
+                    st.metric("MACD Momentum", f"{df['FG_MACD'].iloc[-1]:.1f}/100")
+                    if df['IS_FOMO'].iloc[-1]: st.error("🚀 FOMO DETECTED")
+                    if df['IS_PANIC'].iloc[-1]: st.warning("💥 PANIC DETECTED")
+
                 st.markdown("### 🤖 Strategy Briefing")
                 verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
                 st.info(verdict)
@@ -318,16 +497,11 @@ if st.session_state.get('run_analysis'):
                     st.warning("Fundamentals not available for this asset.")
                 
                 st.markdown("---")
-                # UPGRADE: Replaced Dataframe with Plotly Heatmap
                 st.subheader("🔥 Global Market Heatmap")
                 s_data = get_global_performance()
                 if s_data is not None:
-                    # Create a horizontal bar chart
                     fig_sector = go.Figure()
-                    
-                    # Color logic: Green for positive, Red for negative
                     colors = ['#00ff00' if v >= 0 else '#ff0000' for v in s_data.values]
-                    
                     fig_sector.add_trace(go.Bar(
                         x=s_data.values,
                         y=s_data.index,
@@ -336,7 +510,6 @@ if st.session_state.get('run_analysis'):
                         text=[f"{v:.2f}%" for v in s_data.values],
                         textposition='auto'
                     ))
-                    
                     fig_sector.update_layout(
                         height=400, 
                         template="plotly_dark", 
