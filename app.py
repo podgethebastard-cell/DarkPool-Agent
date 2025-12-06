@@ -17,14 +17,11 @@ st.set_page_config(layout="wide", page_title="DarkPool Titan Terminal", page_ico
 # --- CUSTOM CSS FOR "DARKPOOL" AESTHETIC ---
 st.markdown("""
 <style>
-    /* Main Background & Font */
     .stApp {
         background-color: #0e1117;
         color: #e0e0e0;
         font-family: 'Roboto Mono', monospace;
     }
-    
-    /* Title Glow Effect */
     .title-glow {
         font-size: 3em;
         font-weight: bold;
@@ -32,8 +29,6 @@ st.markdown("""
         text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00, 0 0 40px #00ff00;
         margin-bottom: 20px;
     }
-    
-    /* Metric Card Styling (Glassmorphism) */
     div[data-testid="stMetric"] {
         background-color: rgba(255, 255, 255, 0.05);
         border: 1px solid rgba(255, 255, 255, 0.1);
@@ -45,14 +40,10 @@ st.markdown("""
         transform: scale(1.02);
         border-color: #00ff00;
     }
-    
-    /* Metric Value Coloring */
     div[data-testid="stMetricValue"] {
         font-size: 1.2rem !important;
         font-weight: 700;
     }
-    
-    /* Tabs Styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 2px;
         background-color: transparent;
@@ -73,8 +64,6 @@ st.markdown("""
         color: #00ff00;
         border-bottom: 2px solid #00ff00;
     }
-    
-    /* Container Borders */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         border-color: #30363d !important;
     }
@@ -83,7 +72,7 @@ st.markdown("""
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v3.1 Stable*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v3.2 Final*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -230,6 +219,81 @@ def get_macro_data():
             
     return groups, prices, changes
 
+@st.cache_data(ttl=3600)
+def get_seasonality_stats(ticker):
+    """Calculates Monthly Seasonality and Probability Stats."""
+    try:
+        df = yf.download(ticker, period="20y", interval="1mo", progress=False)
+        if df.empty or len(df) < 12: return None
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        if 'Close' not in df.columns:
+             if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
+             else: return None
+
+        df = df.dropna()
+        df['Return'] = df['Close'].pct_change() * 100
+        df['Year'] = df.index.year
+        df['Month'] = df.index.month
+        
+        heatmap_data = df.pivot_table(index='Year', columns='Month', values='Return')
+        
+        periods = [1, 3, 6, 12]
+        hold_stats = {}
+        for p in periods:
+            rolling_ret = df['Close'].pct_change(periods=p) * 100
+            rolling_ret = rolling_ret.dropna()
+            
+            win_count = (rolling_ret > 0).sum()
+            total_count = len(rolling_ret)
+            win_rate = (win_count / total_count * 100) if total_count > 0 else 0
+            avg_ret = rolling_ret.mean()
+            
+            hold_stats[p] = {"Win Rate": win_rate, "Avg Return": avg_ret}
+            
+        month_stats = df.groupby('Month')['Return'].agg(['mean', lambda x: (x > 0).mean() * 100, 'count'])
+        month_stats.columns = ['Avg Return', 'Win Rate', 'Count']
+        
+        return heatmap_data, hold_stats, month_stats
+        
+    except Exception as e:
+        return None
+
+def calc_day_of_week_dna(ticker, lookback, calc_mode):
+    """DarkPool's Day of Week Seasonality DNA Port"""
+    try:
+        df = yf.download(ticker, period="5y", interval="1d", progress=False)
+        if df.empty: return None
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df = df.iloc[-lookback:].copy()
+        
+        if calc_mode == "Close to Close (Total)":
+            df['Day_Return'] = df['Close'].pct_change() * 100
+        else: # Open to Close (Intraday)
+            df['Day_Return'] = ((df['Close'] - df['Open']) / df['Open']) * 100
+            
+        df = df.dropna()
+        df['Day_Name'] = df.index.day_name()
+        
+        pivot_ret = df.pivot(columns='Day_Name', values='Day_Return').fillna(0)
+        cum_ret = pivot_ret.cumsum()
+        
+        stats = df.groupby('Day_Name')['Day_Return'].agg(['count', 'sum', 'mean', lambda x: (x > 0).mean() * 100])
+        stats.columns = ['Count', 'Total Return', 'Avg Return', 'Win Rate']
+        
+        days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        stats = stats.reindex([d for d in days_order if d in stats.index])
+        
+        return cum_ret, stats
+        
+    except Exception as e:
+        return None
+
 # ==========================================
 # 3. MATH LIBRARY & ALGORITHMS
 # ==========================================
@@ -300,7 +364,6 @@ def calc_indicators(df):
 
     return df
 
-# --- RESTORED FUNCTION ---
 def calc_fear_greed_v4(df):
     """
     🔥 DarkPool's Fear & Greed v4 Port
@@ -561,6 +624,66 @@ def calc_intraday_dna(ticker):
         
         return hourly_stats
     except: return None
+
+# ==========================================
+# 4. AI ANALYST (RESTORED)
+# ==========================================
+def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
+    if not st.session_state.api_key: 
+        return "⚠️ Waiting for OpenAI API Key in the sidebar..."
+    
+    last = df.iloc[-1]
+    trend = "BULLISH" if last['Close'] > last['HMA'] else "BEARISH"
+    risk_dollars = balance * (risk_pct / 100)
+    
+    if trend == "BULLISH":
+        stop_level = last['Pivot_Support']
+        direction = "LONG"
+    else:
+        stop_level = last['Pivot_Resist']
+        direction = "SHORT"
+        
+    if pd.isna(stop_level) or abs(last['Close'] - stop_level) < (last['ATR']*0.5):
+        stop_level = last['Close'] - (last['ATR']*2) if direction == "LONG" else last['Close'] + (last['ATR']*2)
+        
+    dist = abs(last['Close'] - stop_level)
+    if dist == 0: dist = last['ATR']
+    shares = risk_dollars / dist 
+    
+    fund_text = "N/A"
+    if fundamentals:
+        fund_text = f"P/E: {fundamentals.get('P/E Ratio', 'N/A')}. Growth: {fundamentals.get('Rev Growth', 0)*100:.1f}%."
+    
+    fg_val = last['FG_Index']
+    fg_state = "EXTREME GREED" if fg_val >= 80 else "GREED" if fg_val >= 60 else "NEUTRAL" if fg_val >= 40 else "FEAR" if fg_val >= 20 else "EXTREME FEAR"
+    psych_alert = ""
+    if last['IS_FOMO']: psych_alert = "WARNING: ALGORITHMIC FOMO DETECTED."
+    if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
+
+    prompt = f"""
+    Act as a Global Macro Strategist. Analyze {ticker} at ${last['Close']:.2f}.
+    --- FUNDAMENTALS ---
+    {fund_text}
+    --- TECHNICALS ---
+    Trend: {trend}. Volatility (ATR): {last['ATR']:.2f}.
+    --- PSYCHOLOGY (DarkPool Index) ---
+    Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
+    {psych_alert}
+    --- RISK PROTOCOL (1% Rule) ---
+    Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
+    Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
+    --- MISSION ---
+    1. Verdict: BUY, SELL, or WAIT.
+    2. Reasoning: Integrate Technicals, Fundamentals, and Market Psychology.
+    3. Trade Plan: Entry, Stop, Target (2.5R), Size.
+    """
+    
+    try:
+        client = OpenAI(api_key=st.session_state.api_key)
+        res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
+        return res.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ AI Error: {e}"
 
 # ==========================================
 # 5. UI DASHBOARD LAYOUT
