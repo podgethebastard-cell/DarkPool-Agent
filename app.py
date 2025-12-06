@@ -330,10 +330,16 @@ with c2:
     df_coin = yf.download(sel_ticker, period="3mo", interval="1d", progress=False)
     
     if not df_coin.empty:
-        # Check structure: if multi-index (Ticker -> Close), flatten it
+        # --- KEY ERROR FIX: Handle Single Ticker Flattening ---
+        # If columns are MultiIndex (Ticker -> Open/Close), strip the ticker level
         if isinstance(df_coin.columns, pd.MultiIndex):
-            df_coin = df_coin.xs(sel_ticker, axis=1, level=0)
-            
+            # Check if the ticker is actually in the columns before slicing
+            if sel_ticker in df_coin.columns.levels[0]:
+                df_coin = df_coin.xs(sel_ticker, axis=1, level=0)
+            else:
+                # If ticker key missing but data exists, it likely dropped the level already
+                df_coin = df_coin.droplevel(0, axis=1)
+                
         # 2. RUN TITAN ANALYTICS
         df_coin = TitanAnalytics.calculate_all(df_coin)
         latest = df_coin.iloc[-1]
