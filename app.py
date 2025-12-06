@@ -98,18 +98,19 @@ def safe_download(ticker, period, interval):
 
 @st.cache_data(ttl=300)
 def get_macro_data():
-    """Fetches key macro indicators."""
+    """Fetches key macro indicators with robust error handling."""
     tickers = {
         "S&P 500": "SPY", "Bitcoin": "BTC-USD", 
         "10Y Yield": "^TNX", "VIX": "^VIX"
     }
-    prices = {}
-    changes = {}
+    # FIX: Initialize with default values to prevent KeyError if download fails
+    prices = {k: 0.0 for k in tickers.keys()}
+    changes = {k: 0.0 for k in tickers.keys()}
     
     for name, sym in tickers.items():
         try:
             df = yf.download(sym, period="5d", interval="1d", progress=False)
-            if not df.empty:
+            if not df.empty and len(df) >= 2:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
                 
@@ -119,9 +120,9 @@ def get_macro_data():
                 
                 prices[name] = curr
                 changes[name] = chg
-        except:
-            prices[name] = 0.0
-            changes[name] = 0.0
+        except Exception:
+            # If fail, we keep the default 0.0 values
+            continue
             
     return prices, changes
 
@@ -209,7 +210,6 @@ def calc_fear_greed_v4(df):
     Calculates composite sentiment index, FOMO, and Panic states.
     """
     # 1. RSI Component (30% Weight)
-    # Using EWM to approximate Wilder's RMA
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -224,7 +224,6 @@ def calc_fear_greed_v4(df):
     macd = ema12 - ema26
     signal = macd.ewm(span=9, adjust=False).mean()
     hist = macd - signal
-    # Normalize: 50 + (Hist * 10) clamped 0-100
     df['FG_MACD'] = (50 + (hist * 10)).clip(0, 100)
     
     # 3. Bollinger Band Component (25% Weight)
@@ -232,14 +231,12 @@ def calc_fear_greed_v4(df):
     std20 = df['Close'].rolling(20).std()
     upper = sma20 + (std20 * 2)
     lower = sma20 - (std20 * 2)
-    # %B Calculation
     df['FG_BB'] = ((df['Close'] - lower) / (upper - lower) * 100).clip(0, 100)
     
     # 4. Moving Average Trend (20% Weight)
     sma50 = df['Close'].rolling(50).mean()
     sma200 = df['Close'].rolling(200).mean()
     
-    # Logic: Bullish Stack=75, Above Short=60, Death Cross=25, Below Short=40
     conditions = [
         (df['Close'] > sma50) & (sma50 > sma200),
         (df['Close'] > sma50),
@@ -256,8 +253,8 @@ def calc_fear_greed_v4(df):
     vol_ma = df['Volume'].rolling(20).mean()
     high_vol = df['Volume'] > (vol_ma * 2.5)
     high_rsi = df['FG_RSI'] > 70
-    momentum = df['Close'] > df['Close'].shift(3) * 1.02 # >2% gain in 3 bars
-    above_bb = df['Close'] > (upper * 1.0) # Approx
+    momentum = df['Close'] > df['Close'].shift(3) * 1.02
+    above_bb = df['Close'] > (upper * 1.0)
     
     df['IS_FOMO'] = high_vol & high_rsi & momentum & above_bb
     
@@ -300,7 +297,6 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
     if fundamentals:
         fund_text = f"P/E: {fundamentals.get('P/E Ratio', 'N/A')}. Growth: {fundamentals.get('Rev Growth', 0)*100:.1f}%."
     
-    # Get Fear/Greed State
     fg_val = last['FG_Index']
     fg_state = "EXTREME GREED" if fg_val >= 80 else "GREED" if fg_val >= 60 else "NEUTRAL" if fg_val >= 40 else "FEAR" if fg_val >= 20 else "EXTREME FEAR"
     psych_alert = ""
@@ -392,13 +388,14 @@ risk_pct = st.sidebar.slider(
 )
 
 # --- GLOBAL MACRO HEADER ---
+# FIX: Use Safe Defaults to prevent KeyError
 m_price, m_chg = get_macro_data()
 if m_price:
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("S&P 500", f"{m_price['S&P 500']:.2f}", f"{m_chg['S&P 500']:.2f}%")
-    c2.metric("Bitcoin", f"{m_price['Bitcoin']:.2f}", f"{m_chg['Bitcoin']:.2f}%")
-    c3.metric("10Y Yield", f"{m_price['10Y Yield']:.2f}", f"{m_chg['10Y Yield']:.2f}%")
-    c4.metric("VIX", f"{m_price['VIX']:.2f}", f"{m_chg['VIX']:.2f}%")
+    c1.metric("S&P 500", f"{m_price.get('S&P 500', 0.0):.2f}", f"{m_chg.get('S&P 500', 0.0):.2f}%")
+    c2.metric("Bitcoin", f"{m_price.get('Bitcoin', 0.0):.2f}", f"{m_chg.get('Bitcoin', 0.0):.2f}%")
+    c3.metric("10Y Yield", f"{m_price.get('10Y Yield', 0.0):.2f}", f"{m_chg.get('10Y Yield', 0.0):.2f}%")
+    c4.metric("VIX", f"{m_price.get('VIX', 0.0):.2f}", f"{m_chg.get('VIX', 0.0):.2f}%")
     st.markdown("---")
 
 # --- MAIN ANALYSIS TABS ---
