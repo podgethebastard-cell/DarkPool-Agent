@@ -13,21 +13,32 @@ st.set_page_config(layout="wide", page_title="DarkPool Titan Terminal")
 st.title("👁️ DarkPool Titan Terminal")
 st.markdown("### Institutional-Grade Market Intelligence")
 
+# --- API Key Management ---
+# Use session state to persist the API key
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = None
+
 if "OPENAI_API_KEY" in st.secrets:
-    api_key = st.secrets["OPENAI_API_KEY"]
+    st.session_state.api_key = st.secrets["OPENAI_API_KEY"]
+elif st.session_state.api_key:
+    # Key already in session state, no need to ask again
+    pass
 else:
-    api_key = st.sidebar.text_input("OpenAI API Key", type="password")
+    st.session_state.api_key = st.sidebar.text_input("OpenAI API Key", type="password")
 
 # ==========================================
 # 2. DATA ENGINE (ROBUST & CACHED)
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
-    """Fetches key financial metrics for Stocks (UTP Rule I, Fundamentals)"""
-    if "-" in ticker or "=" in ticker or "^" in ticker: return None 
+    """Fetches key financial metrics for Stocks."""
+    if "-" in ticker or "=" in ticker or "^" in ticker: 
+        return None 
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
+        if not info or 'regularMarketPrice' not in info:
+            return None # Return None if data is incomplete
         return {
             "Market Cap": info.get("marketCap", 0),
             "P/E Ratio": info.get("trailingPE", 0),
@@ -37,11 +48,13 @@ def get_fundamentals(ticker):
             "Currency": info.get('currency', 'USD'),
             "Summary": info.get("longBusinessSummary", "No Data")
         }
-    except: return None
+    except Exception as e:
+        # st.error(f"Error fetching fundamentals for {ticker}: {e}")
+        return None
 
 @st.cache_data(ttl=300)
 def get_sector_data():
-    """Fetches performance of key US Sectors for Rotation Analysis"""
+    """Fetches performance of key US Sectors for Rotation Analysis."""
     sectors = {
         "Tech (XLK)": "XLK", "Energy (XLE)": "XLE", "Financials (XLF)": "XLF", 
         "Healthcare (XLV)": "XLV", "Utilities (XLU)": "XLU", "Consumer (XLY)": "XLY",
@@ -49,45 +62,76 @@ def get_sector_data():
     }
     try:
         data = yf.download(list(sectors.values()), period="5d", interval="1d", progress=False)['Close']
+        if data.empty:
+            return None
         changes = data.pct_change().iloc[-1] * 100
         results = {name: changes[ticker] for name, ticker in sectors.items()}
         return pd.Series(results).sort_values(ascending=False)
-    except: return None
+    except Exception as e:
+        # st.error(f"Error fetching sector data: {e}")
+        return None
 
 def get_news(ticker):
-    """Fetches latest news headlines safely"""
+    """Fetches latest news headlines safely."""
     try:
-        if "=" in ticker or "^" in ticker: return []
+        if "=" in ticker or "^" in ticker: 
+            return []
         stock = yf.Ticker(ticker)
         return stock.news[:5] 
-    except: return []
+    except: 
+        return []
 
 def safe_download(ticker, period, interval):
-    """Robust price downloader that handles multi-index issues"""
+    """Robust price downloader that handles multi-index issues."""
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False)
         if isinstance(df.columns, pd.MultiIndex):
-            try: df.columns = df.columns.droplevel(1) 
-            except: pass 
-        if df.empty or 'Close' not in df.columns: return None
+            df.columns = df.columns.droplevel(1) 
+        if df.empty or 'Close' not in df.columns: 
+            return None
         return df
-    except: return None
+    except: 
+        return None
+
+# --- FIX: Added the missing get_macro_data function ---
+@st.cache_data(ttl=300)
+def get_macro_data():
+    """Fetches key macro indicators for the global market overview."""
+    tickers = {
+        "SPY": "S&P 500", "QQQ": "NASDAQ", "BTC-USD": "Bitcoin", 
+        "^TNX": "10Y Yield", "^VIX": "VIX", "^FTSE": "FTSE 100", "^N225": "Nikkei 225"
+    }
+    try:
+        # Download 2 days to calculate the change
+        data = yf.download(list(tickers.keys()), period="2d", interval="1d", progress=False)['Close']
+        if data.empty or len(data) < 2:
+            return None, None, None
+
+        prev_close = data.iloc[-2]
+        current_close = data.iloc[-1]
+        
+        # Calculate percentage change
+        changes = ((current_close - prev_close) / prev_close) * 100
+        
+        return current_close.to_dict(), changes.to_dict(), tickers
+    except:
+        return None, None, None
 
 # ==========================================
 # 3. MATH LIBRARY (FULL INDICATOR STACK)
 # ==========================================
 def calc_indicators(df):
-    # 1. Apex Trend (HMA 55)
+    # 1. Apex Trend (HMA 55) - Simplified to SMA for robustness
     df['HMA'] = df['Close'].rolling(55).mean()
     
     # 2. ATR (Volatility)
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
-    df['TR'] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df['ATR'] = df['TR'].rolling(14).mean()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df['ATR'] = tr.rolling(14).mean()
     
-    # 3. Auto Support/Resistance (Pivots - UTP Rule III)
+    # 3. Auto Support/Resistance (Pivots)
     df['Pivot_Resist'] = df['High'].rolling(20, center=False).max()
     df['Pivot_Support'] = df['Low'].rolling(20, center=False).min()
     
@@ -98,7 +142,8 @@ def calc_indicators(df):
     df['BB_Mid'] = df['Close'].rolling(20).mean()
     df['BB_Std'] = df['Close'].rolling(20).std()
     df['KC_ATR'] = df['ATR'].rolling(20).mean()
-    df['Sq_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
+    # --- FIX: Renamed 'Sq_On' to 'Squeeze_On' to match UI reference ---
+    df['Squeeze_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
     df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
     
     return df
@@ -107,17 +152,18 @@ def calc_indicators(df):
 # 4. AI TITAN BRAIN (RISK MANAGER)
 # ==========================================
 def ask_ai_analyst(df, ticker, fundamentals, news_list, balance, risk_pct):
-    if not api_key: return "⚠️ Waiting for API Key..."
+    if not st.session_state.api_key: 
+        return "⚠️ Waiting for OpenAI API Key in the sidebar..."
     
     last = df.iloc[-1]
     
-    # Format News safely (FIX for KeyError: 'title')
+    # Format News safely
     news_text = "\n".join([f"- {n.get('title', 'Headline Missing')}" for n in news_list]) if news_list else "No specific news headlines available."
     
     # Technical States
     trend = "BULLISH" if last['Close'] > last['HMA'] else "BEARISH"
     
-    # Risk Calculations (UTP Rule I & II)
+    # Risk Calculations
     risk_dollars = balance * (risk_pct / 100)
     
     if trend == "BULLISH":
@@ -167,9 +213,12 @@ def ask_ai_analyst(df, ticker, fundamentals, news_list, balance, risk_pct):
        - **Size:** {shares:.4f} units
     """
     
-    client = OpenAI(api_key=api_key)
-    res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
-    return res.choices[0].message.content
+    try:
+        client = OpenAI(api_key=st.session_state.api_key)
+        res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
+        return res.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ AI Analyst Error: {e}"
 
 # ==========================================
 # 5. UI DASHBOARD LAYOUT
@@ -222,6 +271,9 @@ if m_price is not None:
     show_metric(c5, "VIX", "^VIX")
     show_metric(c6, "FTSE 100", "^FTSE")
     st.markdown("---")
+else:
+    st.warning("Could not load global macro data. Check connection or try again later.")
+    st.markdown("---")
 
 
 # --- MAIN ANALYSIS TABS ---
@@ -235,7 +287,7 @@ if st.session_state.get('run_analysis'):
     with st.spinner(f"Connecting to Global Exchanges for {ticker}..."):
         df = safe_download(ticker, "2y", interval)
         
-        if df is not None:
+        if df is not None and not df.empty:
             df = calc_indicators(df)
             fund = get_fundamentals(ticker)
             news = get_news(ticker)
@@ -270,6 +322,7 @@ if st.session_state.get('run_analysis'):
                 
                 m1.metric("Current Price", f"${last_bar['Close']:.2f}")
                 m2.metric("Money Flow", f"{last_bar['MFI']:.0f}", delta_color="normal" if last_bar['MFI'] > 0 else "inverse")
+                # --- FIX: Referenced the corrected column name 'Squeeze_On' ---
                 m3.metric("Squeeze", "FIRING 🔥" if last_bar['Squeeze_On'] else "OFF", delta_color="off")
                 m4.metric("Volatility (ATR)", f"{last_bar['ATR']:.2f}")
                 
@@ -288,20 +341,24 @@ if st.session_state.get('run_analysis'):
                     c3.metric("Debt/Equity", f"{fund.get('Debt/Equity', 'N/A')}")
                     st.write(f"**Business Summary:** {fund.get('Summary', 'No Data')[:400]}...")
                 else:
-                    st.warning("Fundamental data not available for this asset class (Crypto/Forex/Futures).")
+                    st.warning("Fundamental data not available for this asset class (e.g., Crypto, Forex, Futures, or Indices).")
                 
                 st.markdown("---")
                 st.subheader("🏆 Sector Performance")
-                # Sector Data is already cached and ready to display here
                 sector_data = get_sector_data()
                 if sector_data is not None:
                     st.dataframe(sector_data.style.format("{:.2f}%").background_gradient(cmap="RdYlGn", vmin=-2, vmax=2), height=400)
+                else:
+                    st.warning("Could not load sector data.")
                 
                 st.markdown("---")
                 st.subheader("📰 Live News Wire")
-                for n in news:
-                    st.write(f"• **{n.get('title', 'Headline Missing')}**")
-                    st.caption(f"Source: {n.get('publisher', 'N/A')} | [Read Story]({n.get('link', '#')})")
+                if news:
+                    for n in news:
+                        st.write(f"• **{n.get('title', 'Headline Missing')}**")
+                        st.caption(f"Source: {n.get('publisher', 'N/A')} | [Read Story]({n.get('link', '#')})")
+                else:
+                    st.warning("No recent news found for this ticker.")
                     
         else:
-            st.error("Data connection failed. Try another ticker or wait 1 min.")
+            st.error(f"Data connection failed for {ticker}. The ticker may be delisted or an invalid symbol. Try another one.")
