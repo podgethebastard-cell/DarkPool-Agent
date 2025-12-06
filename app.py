@@ -83,7 +83,7 @@ st.markdown("""
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v3.0 Final*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v3.1 Stable*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -172,7 +172,6 @@ def safe_download(ticker, period, interval):
 @st.cache_data(ttl=300)
 def get_macro_data():
     """Fetches 40 global macro indicators grouped by sector."""
-    
     groups = {
         "🇺🇸 US Equities": {
             "S&P 500": "SPY", "Nasdaq 100": "QQQ", "Dow Jones": "^DJI", "Russell 2000": "^RUT"
@@ -299,6 +298,71 @@ def calc_indicators(df):
     
     df['Mom_Score'] = np.round((rsi_norm + macd_norm + stoch_norm + roc_norm) / 4)
 
+    return df
+
+# --- RESTORED FUNCTION ---
+def calc_fear_greed_v4(df):
+    """
+    🔥 DarkPool's Fear & Greed v4 Port
+    Calculates composite sentiment index, FOMO, and Panic states.
+    """
+    # 1. RSI Component (30% Weight)
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    df['FG_RSI'] = 100 - (100 / (1 + rs))
+    
+    # 2. MACD Component (25% Weight)
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - signal
+    df['FG_MACD'] = (50 + (hist * 10)).clip(0, 100)
+    
+    # 3. Bollinger Band Component (25% Weight)
+    sma20 = df['Close'].rolling(20).mean()
+    std20 = df['Close'].rolling(20).std()
+    upper = sma20 + (std20 * 2)
+    lower = sma20 - (std20 * 2)
+    df['FG_BB'] = ((df['Close'] - lower) / (upper - lower) * 100).clip(0, 100)
+    
+    # 4. Moving Average Trend (20% Weight)
+    sma50 = df['Close'].rolling(50).mean()
+    sma200 = df['Close'].rolling(200).mean()
+    
+    conditions = [
+        (df['Close'] > sma50) & (sma50 > sma200),
+        (df['Close'] > sma50),
+        (df['Close'] < sma50) & (sma50 < sma200)
+    ]
+    choices = [75, 60, 25]
+    df['FG_MA'] = np.select(conditions, choices, default=40)
+    
+    # Composite Index
+    df['FG_Raw'] = (df['FG_RSI'] * 0.30) + (df['FG_MACD'] * 0.25) + (df['FG_BB'] * 0.25) + (df['FG_MA'] * 0.20)
+    df['FG_Index'] = df['FG_Raw'].rolling(5).mean()
+    
+    # --- FOMO LOGIC ---
+    vol_ma = df['Volume'].rolling(20).mean()
+    high_vol = df['Volume'] > (vol_ma * 2.5)
+    high_rsi = df['FG_RSI'] > 70
+    momentum = df['Close'] > df['Close'].shift(3) * 1.02
+    above_bb = df['Close'] > (upper * 1.0)
+    
+    df['IS_FOMO'] = high_vol & high_rsi & momentum & above_bb
+    
+    # --- PANIC LOGIC ---
+    daily_drop = df['Close'].pct_change() * 100
+    sharp_drop = daily_drop < -3.0
+    panic_vol = df['Volume'] > (vol_ma * 3.0)
+    low_rsi = df['FG_RSI'] < 30
+    
+    df['IS_PANIC'] = sharp_drop & panic_vol & (low_rsi | (daily_drop < -5.0))
+    
     return df
 
 def run_monte_carlo(df, days=30, simulations=1000):
@@ -438,23 +502,14 @@ def calc_correlations(ticker, lookback_days=180):
         "Dollar (DXY)": "DX-Y.NYB", "Gold": "GC=F", "Oil": "CL=F"
     }
     
-    # Download data for main ticker
     df_main = yf.download(ticker, period="1y", interval="1d", progress=False)['Close']
-    
-    # Download macro basket
     df_macro = yf.download(list(macro_tickers.values()), period="1y", interval="1d", progress=False)['Close']
     
-    # Combine
     combined = df_macro.copy()
     combined[ticker] = df_main
-    
-    # Calculate Correlation
     corr_matrix = combined.iloc[-lookback_days:].corr()
-    
-    # Filter to show only correlations WITH the target ticker
     target_corr = corr_matrix[ticker].drop(ticker).sort_values(ascending=False)
     
-    # Map tickers back to names
     inv_map = {v: k for k, v in macro_tickers.items()}
     target_corr.index = [inv_map.get(x, x) for x in target_corr.index]
     
@@ -462,7 +517,7 @@ def calc_correlations(ticker, lookback_days=180):
 
 def calc_mtf_trend(ticker):
     """📡 Multi-Timeframe Trend Radar."""
-    timeframes = {"1H": "1h", "4H": "1h", "Daily": "1d", "Weekly": "1wk"} # 4H approximated
+    timeframes = {"1H": "1h", "4H": "1h", "Daily": "1d", "Weekly": "1wk"}
     trends = {}
     
     for tf_name, tf_code in timeframes.items():
@@ -472,11 +527,9 @@ def calc_mtf_trend(ticker):
             
             if df.empty: continue
             
-            # 4H Approximation (Resample 1H)
             if tf_name == "4H":
-                df = df.resample('4H').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+                df = df.resample('4h').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
             
-            # Calc EMA 20 & 50
             df['EMA20'] = df['Close'].ewm(span=20).mean()
             df['EMA50'] = df['Close'].ewm(span=50).mean()
             df['RSI'] = 100 - (100 / (1 + df['Close'].diff().where(df['Close'].diff() > 0, 0).rolling(14).mean() / -df['Close'].diff().where(df['Close'].diff() < 0, 0).rolling(14).mean()))
@@ -497,15 +550,12 @@ def calc_mtf_trend(ticker):
 def calc_intraday_dna(ticker):
     """⏱️ Intraday Seasonality (Hour of Day)."""
     try:
-        # Need 60 days of 1h data (max for yfinance)
         df = yf.download(ticker, period="60d", interval="1h", progress=False)
         if df.empty: return None
         
-        # Calculate hourly returns
         df['Return'] = df['Close'].pct_change() * 100
         df['Hour'] = df.index.hour
         
-        # Group by Hour
         hourly_stats = df.groupby('Hour')['Return'].agg(['mean', 'sum', 'count', lambda x: (x > 0).mean() * 100])
         hourly_stats.columns = ['Avg Return', 'Total Return', 'Count', 'Win Rate']
         
@@ -559,13 +609,12 @@ if m_price:
     st.markdown("---")
 
 # --- MAIN ANALYSIS TABS ---
-# UPGRADE: 9 TABS NOW
 tab1, tab2, tab3, tab4, tab9, tab5, tab6, tab7, tab8 = st.tabs([
     "📊 Technical Deep Dive", 
     "🌍 Sector & Fundamentals", 
     "📅 Monthly Seasonality", 
     "📆 Day of Week DNA", 
-    "🧩 Correlation & MTF", # NEW TAB
+    "🧩 Correlation & MTF", 
     "📟 DarkPool Dashboard", 
     "🏦 Smart Money Concepts",
     "🔮 Quantitative Forecasting",
@@ -664,7 +713,7 @@ if st.session_state.get('run_analysis'):
                         st.plotly_chart(fig_hr, use_container_width=True)
                         st.dataframe(hourly_res.style.format("{:.2f}"))
 
-            # --- TAB 9: CORRELATION & MTF (NEW) ---
+            # --- TAB 9: CORRELATION & MTF ---
             with tab9:
                 st.subheader("🧩 Cross-Asset Intelligence")
                 c1, c2 = st.columns([0.4, 0.6])
@@ -699,6 +748,10 @@ if st.session_state.get('run_analysis'):
                 fig_smc = go.Figure(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']))
                 for ob in smc['order_blocks']: fig_smc.add_shape(type="rect", x0=ob['x0'], x1=ob['x1'], y0=ob['y0'], y1=ob['y1'], fillcolor=ob['color'], opacity=0.5, line_width=0)
                 for fvg in smc['fvgs']: fig_smc.add_shape(type="rect", x0=fvg['x0'], x1=fvg['x1'], y0=fvg['y0'], y1=fvg['y1'], fillcolor=fvg['color'], opacity=0.5, line_width=0)
+                for struct in smc_res['structures']:
+                    fig_smc.add_shape(type="line", x0=struct['x0'], x1=struct['x1'], y0=struct['y'], y1=struct['y'], line=dict(color=struct['color'], width=1, dash="dot"))
+                    fig_smc.add_annotation(x=struct['x1'], y=struct['y'], text=struct['label'], showarrow=False, yshift=10 if struct['color']=='green' else -10, font=dict(color=struct['color'], size=10))
+
                 fig_smc.update_layout(height=600, template="plotly_dark", title="SMC Analysis")
                 st.plotly_chart(fig_smc, use_container_width=True)
 
