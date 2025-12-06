@@ -8,6 +8,8 @@ import numpy as np
 from openai import OpenAI
 import calendar
 import datetime
+import requests
+import urllib.parse
 
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM UI
@@ -72,7 +74,7 @@ st.markdown("""
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v3.5 Gold Master*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v4.0 Broadcast Edition*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -90,7 +92,7 @@ else:
         )
 
 # ==========================================
-# 2. DATA ENGINE (FUNCTIONS DEFINED FIRST)
+# 2. DATA ENGINE (PURE MATH & DATA)
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -703,6 +705,11 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
 # ==========================================
 st.sidebar.header("🎛️ Terminal Controls")
 
+# --- BROADCAST CENTER (NEW SIDEBAR) ---
+st.sidebar.subheader("📢 Social Broadcaster")
+tg_token = st.sidebar.text_input("Telegram Bot Token", type="password")
+tg_chat = st.sidebar.text_input("Telegram Chat ID")
+
 input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"], index=1)
 
 if input_mode == "Curated Lists":
@@ -745,7 +752,7 @@ if m_price:
     st.markdown("---")
 
 # --- MAIN ANALYSIS TABS ---
-tab1, tab2, tab3, tab4, tab9, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab9, tab5, tab6, tab7, tab8, tab10 = st.tabs([
     "📊 Technical Deep Dive", 
     "🌍 Sector & Fundamentals", 
     "📅 Monthly Seasonality", 
@@ -754,7 +761,8 @@ tab1, tab2, tab3, tab4, tab9, tab5, tab6, tab7, tab8 = st.tabs([
     "📟 DarkPool Dashboard", 
     "🏦 Smart Money Concepts",
     "🔮 Quantitative Forecasting",
-    "📊 Volume Profile"
+    "📊 Volume Profile",
+    "📡 Broadcast & TradingView"
 ])
 
 if st.button(f"Analyze {ticker}", help="Run Analysis"):
@@ -792,7 +800,8 @@ if st.session_state.get('run_analysis'):
                     st.metric("MACD", f"{df['FG_MACD'].iloc[-1]:.1f}")
 
                 st.markdown("### 🤖 Strategy Briefing")
-                st.info(ask_ai_analyst(df, ticker, fund, balance, risk_pct))
+                ai_verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
+                st.info(ai_verdict)
 
             # --- TAB 2: FUNDAMENTALS ---
             with tab2:
@@ -910,5 +919,66 @@ if st.session_state.get('run_analysis'):
                 fig_vp.update_layout(height=600, template="plotly_dark", title="Volume Profile (VPVR)")
                 st.plotly_chart(fig_vp, use_container_width=True)
 
+            # --- TAB 10: BROADCAST ---
+            with tab10:
+                st.subheader("📡 Social Command Center")
+                
+                # TradingView Widget (Embed)
+                tv_ticker = ticker.replace("-", "") if "BTC" in ticker else ticker # Simple fix for crypto symbols
+                
+                # Dynamic HTML for TradingView Widget
+                tv_widget_html = f"""
+                <div class="tradingview-widget-container">
+                  <div id="tradingview_widget"></div>
+                  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+                  <script type="text/javascript">
+                  new TradingView.widget(
+                  {{
+                  "width": "100%",
+                  "height": 500,
+                  "symbol": "{tv_ticker}",
+                  "interval": "D",
+                  "timezone": "Etc/UTC",
+                  "theme": "dark",
+                  "style": "1",
+                  "locale": "en",
+                  "toolbar_bg": "#f1f3f6",
+                  "enable_publishing": false,
+                  "allow_symbol_change": true,
+                  "container_id": "tradingview_widget"
+                  }}
+                  );
+                  </script>
+                </div>
+                """
+                st.components.v1.html(tv_widget_html, height=500)
+                
+                st.markdown("---")
+                st.markdown("#### 🚀 Broadcast Signal")
+                
+                # Signal Message Draft
+                signal_text = f"🔥 {ticker} Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict[:50]}...\n\n#Trading #DarkPool #Titan"
+                
+                msg = st.text_area("Message Preview", value=signal_text, height=150)
+                
+                col_b1, col_b2 = st.columns(2)
+                
+                if col_b1.button("Send to Telegram"):
+                    if tg_token and tg_chat:
+                        try:
+                            url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+                            data = {"chat_id": tg_chat, "text": msg}
+                            requests.post(url, data=data)
+                            st.success("✅ Sent to Telegram!")
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
+                    else:
+                        st.warning("⚠️ Enter Telegram Keys in Sidebar.")
+                
+                if col_b2.button("Post to X (Twitter)"):
+                    # Open Twitter Intent
+                    encoded_msg = urllib.parse.quote(msg)
+                    st.link_button("🐦 Tweet This", f"https://twitter.com/intent/tweet?text={encoded_msg}")
+
         else:
-            st.error("Connection failed.")
+            st.error("Data connection failed. Try another ticker.")
