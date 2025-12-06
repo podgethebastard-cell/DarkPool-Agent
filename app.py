@@ -1,206 +1,226 @@
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 from openai import OpenAI
 
-# ==========================================
-# 1. PAGE CONFIGURATION
-# ==========================================
-st.set_page_config(layout="wide", page_title="DarkPool Ultimate Architect")
-st.title("👁️ DarkPool Ultimate Architect")
+# 1. SETUP PAGE
+st.set_page_config(layout="wide", page_title="DarkPool Omni-Agent")
+st.title("👁️ DarkPool Omni-Agent")
 
-# Load API Key
+# 2. LOAD KEY
 if "OPENAI_API_KEY" in st.secrets:
     api_key = st.secrets["OPENAI_API_KEY"]
 else:
     api_key = st.sidebar.text_input("OpenAI API Key", type="password")
 
-# ==========================================
-# 2. MATH & DATA ENGINE
-# ==========================================
-@st.cache_data(ttl=300) # Cache data for 5 mins to speed up the app
-def get_global_data():
-    # The "Big Board" Ticker List
-    tickers = {
-        "Indices": ["SPY", "QQQ", "IWM", "DIA", "^VIX"],
-        "Global": ["EEM", "VGK", "FXI", "EWJ"], # Emerging, Europe, China, Japan
-        "Rates & Fx": ["^TNX", "DX-Y.NYB", "UUP", "TLT"],
-        "Commodities": ["GC=F", "SI=F", "CL=F", "HG=F"], # Gold, Silver, Oil, Copper
-        "Crypto": ["BTC-USD", "ETH-USD", "SOL-USD"]
-    }
-    
-    flat_list = [item for sublist in tickers.values() for item in sublist]
-    
+# --- MACRO DASHBOARD FUNCTION ---
+def get_macro_data():
+    # Tickers: S&P500, Nasdaq, 10Y Yield, Dollar, VIX, Bitcoin
+    tickers = ["SPY", "QQQ", "^TNX", "DX-Y.NYB", "^VIX", "BTC-USD"]
     try:
-        data = yf.download(flat_list, period="1mo", interval="1d", progress=False)
+        # Bulk download for speed
+        data = yf.download(tickers, period="5d", interval="1d")
+        
+        # Clean multi-index columns if necessary
         if isinstance(data.columns, pd.MultiIndex):
-            df = data['Close']
+            # Extract just the 'Close' prices for easier handling
+            df_close = data['Close']
         else:
-            df = data['Close']
+            df_close = data['Close']
+
+        # Calculate daily % change
+        changes = df_close.pct_change().iloc[-1] * 100
+        prices = df_close.iloc[-1]
+        
+        return prices, changes
+    except Exception as e:
+        return None, None
+
+# --- RENDER MACRO DASHBOARD ---
+st.markdown("### 🌍 Global Macro Regime")
+macro_price, macro_change = get_macro_data()
+
+if macro_price is not None:
+    # Determine Regime
+    # Simple Logic: If SPY & QQQ are Green -> Risk On. If VIX & DXY are Green -> Risk Off.
+    spy_chg = macro_change.get("SPY", 0)
+    vix_price = macro_price.get("^VIX", 0)
+    
+    regime = "NEUTRAL 🟡"
+    if spy_chg > 0.5 and vix_price < 20:
+        regime = "RISK-ON (Bullish) 🟢"
+    elif spy_chg < -0.5 or vix_price > 25:
+        regime = "RISK-OFF (Bearish) 🔴"
+        
+    st.info(f"**Current Market Regime:** {regime}")
+
+    # Display Metrics in a Row
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    
+    def show_metric(col, label, ticker_key, fmt="{:.2f}"):
+        val = macro_price.get(ticker_key, 0)
+        chg = macro_change.get(ticker_key, 0)
+        col.metric(label, fmt.format(val), f"{chg:.2f}%")
+
+    show_metric(m1, "S&P 500", "SPY")
+    show_metric(m2, "Nasdaq", "QQQ")
+    show_metric(m3, "Bitcoin", "BTC-USD")
+    show_metric(m4, "10Y Yield", "^TNX")
+    show_metric(m5, "Dollar (DXY)", "DX-Y.NYB")
+    show_metric(m6, "VIX (Fear)", "^VIX")
+    
+    st.markdown("---") # Divider line
+
+# 3. SIDEBAR SETTINGS
+st.sidebar.header("Mission Control")
+
+asset_options = {
+    "--- CRYPTO ---": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD", "ADA-USD"],
+    "--- INDICES ---": ["SPY", "QQQ", "IWM", "DIA"], 
+    "--- BIG TECH ---": ["NVDA", "TSLA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AMD"],
+    "--- ENERGY & METALS ---": ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "PL=F", "PA=F"],
+    "--- AGRO COMMODITIES ---": ["ZC=F", "ZS=F", "ZW=F", "CC=F", "KC=F"],
+    "--- MACRO & RATES ---": ["DX-Y.NYB", "^TNX", "^FVX", "^TYX", "^VIX", "HYG", "TLT"],
+    "--- FOREX ---": ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X"]
+}
+
+flat_options = []
+for category, tickers in asset_options.items():
+    flat_options.append(category)
+    flat_options.extend(tickers)
+
+ticker = st.sidebar.selectbox("Select Asset", options=flat_options, index=1)
+interval = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d", "1wk"], index=3)
+
+# --- MATH LIBRARY ---
+def calc_hma(series, length):
+    wma1 = series.rolling(length // 2).apply(lambda x: np.dot(x, np.arange(1, len(x)+1)) / np.arange(1, len(x)+1).sum(), raw=True)
+    wma2 = series.rolling(length).apply(lambda x: np.dot(x, np.arange(1, len(x)+1)) / np.arange(1, len(x)+1).sum(), raw=True)
+    diff = 2 * wma1 - wma2
+    sqrt_len = int(np.sqrt(length))
+    return diff.rolling(sqrt_len).apply(lambda x: np.dot(x, np.arange(1, len(x)+1)) / np.arange(1, len(x)+1).sum(), raw=True)
+
+def calc_rsi(series, period):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+# 4. DATA ENGINE
+def get_data(ticker, interval):
+    if "---" in ticker: return None
+    try:
+        df = yf.download(ticker, period="1y", interval=interval)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.droplevel(1)
+        if df.empty: return None
+
+        # A. APEX TREND
+        length, mult = 55, 1.5
+        df['HMA'] = calc_hma(df['Close'], length)
+        df['TR'] = np.maximum(df['High'] - df['Low'], np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
+        df['ATR'] = df['TR'].rolling(length).mean()
+        df['Apex_Upper'] = df['HMA'] + (df['ATR'] * mult)
+        df['Apex_Lower'] = df['HMA'] - (df['ATR'] * mult)
+        df['Apex_State'] = np.where(df['Close'] > df['Apex_Upper'], 1, np.where(df['Close'] < df['Apex_Lower'], -1, 0))
+        df['Apex_State'] = df['Apex_State'].replace(to_replace=0, method='ffill')
+
+        # B. SQUEEZE PRO
+        df['BB_Mid'] = df['Close'].rolling(20).mean()
+        df['BB_Std'] = df['Close'].rolling(20).std()
+        df['BB_Up'] = df['BB_Mid'] + (2.0 * df['BB_Std'])
+        df['BB_Low'] = df['BB_Mid'] - (2.0 * df['BB_Std'])
+        df['KC_Mid'] = df['BB_Mid']
+        df['KC_ATR'] = df['TR'].rolling(20).mean()
+        df['KC_Up'] = df['KC_Mid'] + (1.5 * df['KC_ATR'])
+        df['KC_Low'] = df['KC_Mid'] - (1.5 * df['KC_ATR'])
+        df['Squeeze_On'] = (df['BB_Low'] > df['KC_Low']) & (df['BB_Up'] < df['KC_Up'])
+        df['Momentum'] = df['Close'] - df['Close'].rolling(20).mean()
+
+        # C. MONEY FLOW MATRIX
+        rsi = calc_rsi(df['Close'], 14)
+        df['MFI_Raw'] = (rsi - 50) * (df['Volume'] / df['Volume'].rolling(20).mean())
+        df['Matrix_Flow'] = df['MFI_Raw'].ewm(span=3).mean()
+
         return df
-    except: return None
+    except Exception as e:
+        return None
 
-def calc_indicators(df):
-    # Calculate Apex, Vector, etc (The "Sniper" Logic)
-    df['HMA'] = df['Close'].rolling(55).mean() # Simplified HMA for speed
-    df['ATR'] = df['High'] - df['Low'] # Simplified TR
+# 5. AI SYNTHESIS
+def ask_omni_agent(df, ticker):
+    if not api_key: return "⚠️ Please insert API Key."
     
-    # Vector Scalper Logic (Simplified for Python Speed)
-    df['Vector_Stop'] = df['Low'].rolling(5).min() # Basic trailing support
+    last = df.iloc[-1]
+    price = float(last['Close'])
+    apex = "BULLISH 🟢" if last['Apex_State'] == 1 else "BEARISH 🔴"
+    sqz = "FIRING (Active)" if last['Squeeze_On'] else "RELEASED (Trending)"
+    mom = float(last['Momentum'])
+    flow = float(last['Matrix_Flow'])
+    atr = float(last['ATR'])
     
-    # Money Flow
-    df['MFI'] = (df['Close'].diff() * df['Volume']).rolling(3).mean()
-    
-    return df
-
-# ==========================================
-# 3. AI PERSONAS
-# ==========================================
-def ask_cio(df_change):
-    if not api_key: return "⚠️ API Key Missing."
-    
-    # Prepare a summary string of performance
-    summary = df_change.to_string()
+    stop_long = price - (2 * atr)
     
     prompt = f"""
-    Act as a Chief Investment Officer (CIO) for a Macro Hedge Fund.
-    Here is the Daily Performance (%) of key global assets:
-    {summary}
+    Analyze {ticker}. Price: {price:.2f}.
+    
+    1. TREND: {apex}
+    2. VOLATILITY: Squeeze is {sqz}. Momentum is {mom:.2f}.
+    3. VOLUME: Money Flow is {flow:.2f}.
+    4. RISK: ATR is {atr:.2f}.
     
     YOUR MISSION:
-    1. **Regime Identification:** Are we Risk-On (Tech/Crypto up, Dollar down) or Risk-Off (Gold/Dollar up)?
-    2. **Anomalies:** Is Copper dropping while Stocks rise? (Bad signal). Is Yield (^TNX) spiking?
-    3. **Strategy:** Where should capital flow today? (e.g., "Rotate into Commodities" or "Cash is King").
-    4. **Warning:** One sentence on the biggest danger in the market right now.
+    1. Verdict: LONG, SHORT, or WAIT?
+    2. Why? (Cite indicators).
+    3. Risk: Suggest Stop Loss around {stop_long:.2f} (if Long).
     """
     
     client = OpenAI(api_key=api_key)
-    res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
-    return res.choices[0].message.content
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
 
-def ask_sniper(ticker, price, stop, atr, balance):
-    if not api_key: return "⚠️ API Key Missing."
-    
-    risk_amt = balance * 0.02
-    shares = risk_amt / (price - stop) if price > stop else 0
-    
-    prompt = f"""
-    Act as a Senior Execution Trader.
-    Asset: {ticker}. Price: {price}. Stop Loss Level: {stop}. ATR: {atr}.
-    Risk Budget: ${risk_amt} (2% of ${balance}).
-    
-    TASK:
-    1. **Signal:** BUY, SELL, or WAIT.
-    2. **The Math:** Confirm position size is {shares:.4f} units.
-    3. **Targets:** Set TP1 at {price + (2*atr):.2f} and TP2 at {price + (4*atr):.2f}.
-    """
-    client = OpenAI(api_key=api_key)
-    res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
-    return res.choices[0].message.content
+# 6. RENDER UI
+if st.sidebar.button("Initialize Omni-Agent"):
+    with st.spinner(f"Analyzing {ticker}..."):
+        df = get_data(ticker, interval)
+        
+        if df is not None:
+            # Row 1: Main Chart
+            st.subheader(f"1. Apex Trend ({ticker})")
+            fig1 = go.Figure()
+            fig1.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"))
+            fig1.add_trace(go.Scatter(x=df.index, y=df['Apex_Upper'], line=dict(color='green', width=1), name="Upper"))
+            fig1.add_trace(go.Scatter(x=df.index, y=df['Apex_Lower'], line=dict(color='red', width=1), name="Lower"))
+            fig1.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_dark")
+            st.plotly_chart(fig1, use_container_width=True)
+            
+            # Row 2: Indicators
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("2. Money Flow")
+                fig2 = go.Figure()
+                colors = ['#00ff00' if v > 0 else '#ff0000' for v in df['Matrix_Flow']]
+                fig2.add_trace(go.Bar(x=df.index, y=df['Matrix_Flow'], marker_color=colors, name="Net Flow"))
+                fig2.update_layout(height=300, template="plotly_dark", title="Volume Flow")
+                st.plotly_chart(fig2, use_container_width=True)
+            with col2:
+                st.subheader("3. Squeeze Pro")
+                fig3 = go.Figure()
+                sqz_col = ['red' if s else 'gray' for s in df['Squeeze_On']]
+                fig3.add_trace(go.Scatter(x=df.index, y=[0]*len(df), mode='markers', marker=dict(color=sqz_col, size=5)))
+                mom_col = ['cyan' if m > 0 else 'purple' for m in df['Momentum']]
+                fig3.add_trace(go.Bar(x=df.index, y=df['Momentum'], marker_color=mom_col))
+                fig3.update_layout(height=300, template="plotly_dark", title="Momentum")
+                st.plotly_chart(fig3, use_container_width=True)
 
-# ==========================================
-# 4. MAIN INTERFACE (TABS)
-# ==========================================
-tab1, tab2 = st.tabs(["🌍 Global Macro War Room", "🎯 Sniper Scope (Charts)"])
-
-# --- TAB 1: THE MACRO VIEW ---
-with tab1:
-    st.subheader("Global Market Pulse")
-    df_macro = get_global_data()
-    
-    if df_macro is not None:
-        # Calculate % Changes
-        daily_change = df_macro.pct_change().iloc[-1] * 100
-        
-        # 1. METRIC ROW
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("S&P 500", f"{df_macro['SPY'].iloc[-1]:.2f}", f"{daily_change['SPY']:.2f}%")
-        c2.metric("Bitcoin", f"{df_macro['BTC-USD'].iloc[-1]:.2f}", f"{daily_change['BTC-USD']:.2f}%")
-        c3.metric("10Y Yield", f"{df_macro['^TNX'].iloc[-1]:.2f}", f"{daily_change['^TNX']:.2f}%")
-        c4.metric("Gold", f"{df_macro['GC=F'].iloc[-1]:.2f}", f"{daily_change['GC=F']:.2f}%")
-        c5.metric("VIX (Fear)", f"{df_macro['^VIX'].iloc[-1]:.2f}", f"{daily_change['^VIX']:.2f}%")
-        
-        st.markdown("---")
-        
-        # 2. CORRELATION MATRIX & CIO BRIEF
-        col_left, col_right = st.columns([2, 1])
-        
-        with col_left:
-            st.write("#### 📊 Asset Correlation Matrix (30 Days)")
-            # Compute correlation on last 30 days
-            corr_matrix = df_macro.tail(30).corr()
-            fig_corr = px.imshow(corr_matrix, text_auto=True, color_continuous_scale='RdBu_r', aspect="auto")
-            st.plotly_chart(fig_corr, use_container_width=True)
-            
-        with col_right:
-            st.write("#### 🧠 CIO Morning Brief")
-            if st.button("Generate Macro Report"):
-                with st.spinner("Analyzing Global Flows..."):
-                    report = ask_cio(daily_change)
-                    st.info(report)
-            else:
-                st.info("Click to let the AI analyze cross-asset flows.")
-
-# --- TAB 2: THE SNIPER SCOPE ---
-with tab2:
-    st.sidebar.header("Sniper Controls")
-    
-    # Enhanced Asset List
-    assets = ["BTC-USD", "ETH-USD", "SOL-USD", "SPY", "QQQ", "NVDA", "TSLA", "MSTR", "COIN", "GC=F", "CL=F", "EURUSD=X"]
-    ticker = st.sidebar.selectbox("Target Asset", assets)
-    timeframe = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=2)
-    balance = st.sidebar.number_input("Account Balance ($)", 1000, 1000000, 10000)
-    
-    if st.button("Analyze Target"):
-        with st.spinner(f"Deploying Algorithms on {ticker}..."):
-            # Get specific data
-            data = yf.download(ticker, period="6mo", interval=timeframe, progress=False)
-            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.droplevel(1)
-            
-            # --- MATH CALCS (Re-implemented for the chart) ---
-            # 1. Apex
-            data['HMA'] = data['Close'].rolling(55).mean() # Proxy for full calc
-            data['ATR'] = (data['High'] - data['Low']).rolling(14).mean()
-            
-            # 2. ATR Stops
-            stop_long = data['Low'] - (data['ATR'] * 2)
-            stop_short = data['High'] + (data['ATR'] * 2)
-            
-            # 3. Money Flow
-            data['Flow'] = (data['Close'].diff() * data['Volume']).rolling(3).mean()
-            
-            # --- CHARTING ---
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            
-            # Candles
-            fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Price"), row=1, col=1)
-            
-            # ATR Stops (The Channels)
-            fig.add_trace(go.Scatter(x=data.index, y=stop_long, line=dict(color='cyan', width=1), name="Long Stop"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=data.index, y=stop_short, line=dict(color='magenta', width=1), name="Short Stop"), row=1, col=1)
-            
-            # Money Flow
-            colors = ['#00ff00' if v > 0 else '#ff0000' for v in data['Flow']]
-            fig.add_trace(go.Bar(x=data.index, y=data['Flow'], marker_color=colors, name="Smart Money"), row=2, col=1)
-            
-            fig.update_layout(height=700, template="plotly_dark", title=f"{ticker} Institutional View")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # --- AI SNIPER ---
+            # Row 3: Verdict
             st.markdown("---")
-            st.subheader("🎯 Execution Plan")
-            
-            # Get latest values
-            last_price = data['Close'].iloc[-1]
-            last_stop = stop_long.iloc[-1]
-            last_atr = data['ATR'].iloc[-1]
-            
-            plan = ask_sniper(ticker, last_price, last_stop, last_atr, balance)
-            st.success(plan)
-            
-            with st.expander("⚠️ Risk Disclaimer"):
-                st.caption("Not financial advice. For educational and research purposes only.")
+            st.subheader("🧠 Expert Verdict")
+            st.info(ask_omni_agent(df, ticker))
+        else:
+            st.error("Select a valid asset.")
