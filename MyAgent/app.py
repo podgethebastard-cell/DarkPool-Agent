@@ -13,7 +13,6 @@ st.set_page_config(layout="wide", page_title="DarkPool Ultimate Architect")
 st.title("👁️ DarkPool Ultimate Architect")
 st.markdown("### Institutional Trade Planning Engine")
 
-# Load API Key
 if "OPENAI_API_KEY" in st.secrets:
     api_key = st.secrets["OPENAI_API_KEY"]
 else:
@@ -36,13 +35,9 @@ def calc_rsi(series, period):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def calc_atr(df, length=14):
-    high_low = df['High'] - df['Low']
-    high_close = np.abs(df['High'] - df['Close'].shift())
-    low_close = np.abs(df['Low'] - df['Close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = np.max(ranges, axis=1)
-    return true_range.rolling(length).mean()
+def calc_rma(series, length):
+    """Wilder's Smoothing (RMA) for ATR"""
+    return series.ewm(alpha=1/length, adjust=False).mean()
 
 def safe_download(ticker, period, interval):
     try:
@@ -95,40 +90,29 @@ def get_full_analysis(ticker, interval):
 
     # --- 1. APEX TREND ---
     df['HMA'] = calc_hma(df['Close'], 55)
-    df['ATR'] = calc_atr(df, 14) 
-    df['Apex_Up'] = df['HMA'] + (df['ATR'] * 1.5)
-    df['Apex_Dn'] = df['HMA'] - (df['ATR'] * 1.5)
+    # Basic ATR for Apex logic
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    df['TR'] = np.max(ranges, axis=1)
+    
+    df['ATR_55'] = df['TR'].rolling(55).mean()
+    df['Apex_Up'] = df['HMA'] + (df['ATR_55'] * 1.5)
+    df['Apex_Dn'] = df['HMA'] - (df['ATR_55'] * 1.5)
     df['Apex_State'] = np.where(df['Close'] > df['Apex_Up'], 1, np.where(df['Close'] < df['Apex_Dn'], -1, 0))
     df['Apex_State'] = df['Apex_State'].replace(to_replace=0, method='ffill')
 
-    # --- 2. DARK VECTOR SCALPER (Staircase) ---
-    amp = 5
-    df['Vec_ATR'] = calc_atr(df, 100)
-    dev = (df['Vec_ATR'] / 2) * 3.0
+    # --- 2. ATR STOP LOSS FINDER (The New Script) ---
+    # Logic: ATR(14, RMA) * 1.5
+    # Long Stop = Low - (ATR * 1.5)
+    # Short Stop = High + (ATR * 1.5)
+    atr_len = 14
+    atr_mult = 1.5
     
-    # Fast Logic for Vector
-    closes = df['Close'].values; lows = df['Low'].values; highs = df['High'].values
-    trend = np.zeros(len(df)); stop = np.zeros(len(df))
-    curr_t = 0; 
-    
-    # Pre-calculate rolling min/max
-    r_min = df['Low'].rolling(amp).min().fillna(0).values
-    r_max = df['High'].rolling(amp).max().fillna(0).values
-    
-    for i in range(1, len(df)):
-        d = dev.iloc[i] if not pd.isna(dev.iloc[i]) else 0
-        if curr_t == 0: # Bull
-            s = r_min[i] + d
-            if s < stop[i-1]: s = stop[i-1]
-            if closes[i] < r_min[i]: curr_t = 1; s = r_max[i] - d
-        else: # Bear
-            s = r_max[i] - d
-            if s > stop[i-1] and stop[i-1] != 0: s = stop[i-1]
-            if closes[i] > r_max[i]: curr_t = 0; s = r_min[i] + d
-        trend[i] = curr_t; stop[i] = s
-        
-    df['Vec_Trend'] = trend
-    df['Vec_Stop'] = stop
+    df['ATR_RMA'] = calc_rma(df['TR'], atr_len)
+    df['ATR_Stop_Long'] = df['Low'] - (df['ATR_RMA'] * atr_mult)
+    df['ATR_Stop_Short'] = df['High'] + (df['ATR_RMA'] * atr_mult)
 
     # --- 3. GANN HI/LO ACTIVATOR ---
     gl = 3
@@ -140,7 +124,7 @@ def get_full_analysis(ticker, interval):
     # --- 4. SQUEEZE PRO ---
     df['BB_Mid'] = df['Close'].rolling(20).mean()
     df['BB_Std'] = df['Close'].rolling(20).std()
-    df['KC_ATR'] = calc_atr(df, 20)
+    df['KC_ATR'] = df['TR'].rolling(20).mean() # SMA ATR for Squeeze
     df['Sq_On'] = (df['BB_Mid'] - (2*df['BB_Std'])) > (df['BB_Mid'] - (1.5*df['KC_ATR']))
     df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
 
@@ -152,71 +136,64 @@ def get_full_analysis(ticker, interval):
     return df
 
 # ==========================================
-# 5. AI CHAIRMAN (WITH POSITION SIZING)
+# 5. AI CHAIRMAN (WITH ATR STOP LOGIC)
 # ==========================================
 def ask_chairman(df, ticker, balance):
     if not api_key: return "⚠️ API Key Missing."
     last = df.iloc[-1]
     
-    # Extract Key Data
     price = float(last['Close'])
-    atr = float(last['ATR'])
-    vec_stop = float(last['Vec_Stop'])
+    # Get the new ATR Stops
+    stop_long_level = float(last['ATR_Stop_Long'])
+    stop_short_level = float(last['ATR_Stop_Short'])
     
-    # --- POSITION SIZING MATH ---
-    # Risk per trade (2% of balance)
+    # --- POSITION SIZING (2% RISK) ---
     risk_amount = balance * 0.02
     
-    # Scenario A: LONG
-    stop_dist_long = price - vec_stop
-    if stop_dist_long <= 0: stop_dist_long = atr * 2 # Fallback if stop is above price (rare error)
+    # LONG MATH
+    dist_long = price - stop_long_level
+    if dist_long <= 0: dist_long = price * 0.01 # Safety
+    qty_long = risk_amount / dist_long
     
-    shares_long = risk_amount / stop_dist_long
-    stop_pct_long = (stop_dist_long / price) * 100
+    # SHORT MATH
+    dist_short = stop_short_level - price
+    if dist_short <= 0: dist_short = price * 0.01
+    qty_short = risk_amount / dist_short
     
-    # Scenario B: SHORT
-    stop_dist_short = vec_stop - price
-    if stop_dist_short <= 0: stop_dist_short = atr * 2
+    # Targets (2R and 3R)
+    tp1_long = price + (dist_long * 2)
+    tp2_long = price + (dist_long * 3)
     
-    shares_short = risk_amount / stop_dist_short
-    stop_pct_short = (stop_dist_short / price) * 100
-    
-    # Targets
-    tp1_long = price + (atr * 2)
-    tp2_long = price + (atr * 4)
-    tp1_short = price - (atr * 2)
-    tp2_short = price - (atr * 4)
+    tp1_short = price - (dist_short * 2)
+    tp2_short = price - (dist_short * 3)
     
     # States
     apex = "BULL 🟢" if last['Apex_State'] == 1 else "BEAR 🔴"
-    vector = "BUY 🔵" if last['Vec_Trend'] == 0 else "SELL 🟣"
     gann = "UP 🔼" if last['Gann_State'] == 1 else "DOWN 🔽"
     sqz = "ACTIVE ⚡" if last['Sq_On'] else "OFF"
     flow = "INFLOW 🟩" if last['MFI_Smooth'] > 0 else "OUTFLOW 🟥"
     
     prompt = f"""
-    Act as a Senior Risk Manager. Analyze {ticker} at ${price:.2f}.
-    User Balance: ${balance}. Max Risk: $ {risk_amount:.2f} (2%).
+    Act as a Hedge Fund Risk Manager. Analyze {ticker} at ${price:.2f}.
+    User Balance: ${balance}. Max Risk per trade: ${risk_amount:.2f} (2%).
     
     --- TECHNICAL DASHBOARD ---
     1. MACRO TREND (Apex): {apex}
-    2. SCALPER (Vector): {vector}. (This is the Hard Stop: ${vec_stop:.2f})
-    3. SWING (Gann): {gann}
-    4. MOMENTUM: Squeeze: {sqz}. Money Flow: {flow}.
+    2. SWING (Gann): {gann}
+    3. MOMENTUM: Squeeze: {sqz}. Money Flow: {flow}.
     
-    --- POSITION SIZING DATA ---
-    * IF LONG: Stop Distance: {stop_pct_long:.2f}%. Size to Buy: {shares_long:.4f} units.
-    * IF SHORT: Stop Distance: {stop_pct_short:.2f}%. Size to Sell: {shares_short:.4f} units.
+    --- ATR STOP LOSS FINDER DATA ---
+    * **IF LONG:** Stop Price: ${stop_long_level:.2f}. (Buy {qty_long:.4f} units).
+    * **IF SHORT:** Stop Price: ${stop_short_level:.2f}. (Sell {qty_short:.4f} units).
     
     --- YOUR TASK ---
-    1. **The Verdict:** DECISIVE LONG, DECISIVE SHORT, or WAIT.
-    2. **The Execution Card (Crucial):**
-       - **Action:** (Buy / Sell / Wait)
-       - **Entry Price:** Market (${price:.2f})
-       - **Stop Loss:** ${vec_stop:.2f} (Using Vector Level)
-       - **Risk Check:** Is the stop too wide (>4%)? If yes, advise reducing size further or waiting.
-       - **Position Size:** Tell the user EXACTLY how many units to buy/sell to risk only ${risk_amount:.2f}.
-       - **Take Profit 1:** ${tp1_long:.2f} (if long) / ${tp1_short:.2f} (if short)
+    1. **Verdict:** LONG, SHORT, or WAIT? (Is the trend clear?)
+    2. **The Plan (Only for the winning side):**
+       - **Action:** (e.g. Buy Market)
+       - **Hard Stop:** (Use the ATR Stop level above)
+       - **Position Size:** (Use the calculated units above)
+       - **Target 1:** ${tp1_long:.2f} (Long) / ${tp1_short:.2f} (Short)
+       - **Target 2:** ${tp2_long:.2f} (Long) / ${tp2_short:.2f} (Short)
     """
     
     client = OpenAI(api_key=api_key)
@@ -237,37 +214,35 @@ asset_options = {
 flat = [i for s in asset_options.values() for i in s]
 ticker = st.sidebar.selectbox("Asset", flat, index=0)
 interval = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d", "1wk"], index=2)
-
-# NEW: ACCOUNT BALANCE INPUT
 balance = st.sidebar.number_input("Account Balance ($)", min_value=100, value=10000, step=100)
 
 if st.sidebar.button("Run Ultimate Analysis"):
-    with st.spinner(f"Calculating Risk & Strategy for {ticker}..."):
+    with st.spinner(f"Calculating ATR Stops & Strategy for {ticker}..."):
         df = get_full_analysis(ticker, interval)
         if df is not None:
-            # --- MAIN CHART (PRICE + TRENDS) ---
+            # --- MAIN CHART ---
             st.subheader(f"1. Strategic Command ({ticker})")
             
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                                 vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2],
-                                subplot_titles=("Price & Trends", "Money Flow Matrix", "Momentum & Squeeze"))
+                                subplot_titles=("Price & ATR Stops", "Money Flow Matrix", "Momentum & Squeeze"))
 
-            # ROW 1: Price, Apex Cloud, Vector Stop, Gann
+            # ROW 1: Price
             fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
             
-            # Apex Cloud
-            fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Up'], line=dict(color='green', width=1), name="Apex Top"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Dn'], line=dict(color='red', width=1), name="Apex Bot"), row=1, col=1)
+            # ATR Stops (Teal for Long Stop, Red for Short Stop)
+            fig.add_trace(go.Scatter(x=df.index, y=df['ATR_Stop_Long'], line=dict(color='teal', width=1), name="ATR Support (Long Stop)"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['ATR_Stop_Short'], line=dict(color='red', width=1), name="ATR Resist (Short Stop)"), row=1, col=1)
             
-            # Vector Scalper (Staircase)
-            vec_col = ['#00ffff' if t==0 else '#ff00ff' for t in df['Vec_Trend']]
-            fig.add_trace(go.Scatter(x=df.index, y=df['Vec_Stop'], mode='markers', marker=dict(color=vec_col, size=3), name="Vector Stop"), row=1, col=1)
+            # Apex Cloud (Background Context)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Up'], line=dict(color='rgba(0, 255, 0, 0.3)', width=1, dash='dot'), name="Apex Top"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Dn'], line=dict(color='rgba(255, 0, 0, 0.3)', width=1, dash='dot'), name="Apex Bot"), row=1, col=1)
 
             # ROW 2: Money Flow
             cols_mf = ['#00ff00' if v>0 else '#ff0000' for v in df['MFI_Smooth']]
             fig.add_trace(go.Bar(x=df.index, y=df['MFI_Smooth'], marker_color=cols_mf, name="Money Flow"), row=2, col=1)
 
-            # ROW 3: Squeeze & Momentum
+            # ROW 3: Squeeze
             cols_mom = ['cyan' if m>0 else 'purple' for m in df['Mom']]
             fig.add_trace(go.Bar(x=df.index, y=df['Mom'], marker_color=cols_mom, name="Momentum"), row=3, col=1)
             sqz_y = [0] * len(df)
