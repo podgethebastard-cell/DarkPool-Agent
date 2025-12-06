@@ -1,310 +1,357 @@
 import streamlit as st
 import yfinance as yf
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
-from openai import OpenAI
 
-# ==========================================
-# 1. PAGE CONFIGURATION
-# ==========================================
-st.set_page_config(layout="wide", page_title="DarkPool Titan Terminal")
-st.title("👁️ DarkPool Titan Terminal")
-st.markdown("### Institutional-Grade Market Intelligence")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="DarkPool Titan Terminal", layout="wide")
 
-# --- API Key Management ---
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = None
-
-if "OPENAI_API_KEY" in st.secrets:
-    st.session_state.api_key = st.secrets["OPENAI_API_KEY"]
-else:
-    if not st.session_state.api_key:
-        st.session_state.api_key = st.sidebar.text_input("OpenAI API Key", type="password")
-
-# ==========================================
-# 2. DATA ENGINE (PURE MATH & DATA)
-# ==========================================
-@st.cache_data(ttl=3600)
-def get_fundamentals(ticker):
-    """Fetches key financial metrics safely."""
-    if "-" in ticker or "=" in ticker or "^" in ticker: 
-        return None 
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        if not info: return None
+# ==============================================================================
+# 1. TITAN ANALYTICS ENGINE (PINE SCRIPT TRANSLATIONS)
+# ==============================================================================
+class TitanAnalytics:
+    @staticmethod
+    def calculate_all(df):
+        if df.empty: return df
         
-        return {
-            "Market Cap": info.get("marketCap", 0),
-            "P/E Ratio": info.get("trailingPE", 0),
-            "Rev Growth": info.get("revenueGrowth", 0),
-            "Debt/Equity": info.get("debtToEquity", 0),
-            "Summary": info.get("longBusinessSummary", "No Data Available")
-        }
-    except: return None
-
-@st.cache_data(ttl=300)
-def get_sector_data():
-    """Fetches performance of key US Sectors."""
-    sectors = {
-        "Tech": "XLK", "Energy": "XLE", "Financials": "XLF", 
-        "Healthcare": "XLV", "Consumer": "XLY"
-    }
-    try:
-        # Download individually to avoid MultiIndex errors
-        results = {}
-        for name, ticker in sectors.items():
-            df = yf.download(ticker, period="5d", interval="1d", progress=False)
-            if not df.empty:
-                # Handle MultiIndex columns if present
-                if isinstance(df.columns, pd.MultiIndex):
-                    price = df.xs('Close', axis=1, level=0).iloc[-1].iloc[0]
-                    prev = df.xs('Close', axis=1, level=0).iloc[-2].iloc[0]
-                else:
-                    price = df['Close'].iloc[-1]
-                    prev = df['Close'].iloc[-2]
-                
-                change = ((price - prev) / prev) * 100
-                results[name] = change
+        # Ensure we are working with a copy to avoid SettingWithCopy warnings
+        df = df.copy()
         
-        return pd.Series(results).sort_values(ascending=False)
-    except: return None
+        # --- A. HELPER FUNCTIONS ---
+        def get_wma(series, length):
+            weights = np.arange(1, length + 1)
+            return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
 
-def safe_download(ticker, period, interval):
-    """Robust price downloader."""
-    try:
-        df = yf.download(ticker, period=period, interval=interval, progress=False)
+        def get_hma(series, length):
+            half_length = int(length / 2)
+            sqrt_length = int(np.sqrt(length))
+            wma_half = get_wma(series, half_length)
+            wma_full = get_wma(series, length)
+            diff = 2 * wma_half - wma_full
+            return get_wma(diff, sqrt_length)
+
+        def get_rma(series, length):
+            # exponential moving average with alpha = 1 / length
+            return series.ewm(alpha=1/length, adjust=False).mean()
+
+        def get_atr(df, length=14):
+            high_low = df['High'] - df['Low']
+            high_close = np.abs(df['High'] - df['Close'].shift())
+            low_close = np.abs(df['Low'] - df['Close'].shift())
+            ranges = pd.concat([high_low, high_close, low_close], axis=1)
+            true_range = ranges.max(axis=1)
+            return get_rma(true_range, length)
+
+        # --- B. APEX TREND (HMA Logic) ---
+        # Matches: Apex Trend & Liquidity Master
+        length_main = 55
+        mult = 1.5
         
-        # FIX: Flatten MultiIndex columns if they exist
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        # Calculate Baseline (HMA)
+        df['Apex_Baseline'] = get_hma(df['Close'], length_main)
+        df['Apex_ATR'] = get_atr(df, length_main)
+        df['Apex_Upper'] = df['Apex_Baseline'] + (df['Apex_ATR'] * mult)
+        df['Apex_Lower'] = df['Apex_Baseline'] - (df['Apex_ATR'] * mult)
+        
+        # Determine Trend
+        df['Apex_Trend'] = 0
+        # Vectorized trend logic is complex, using simplified loop for latest state
+        trend_col = []
+        curr_trend = 0
+        for i in range(len(df)):
+            close = df['Close'].iloc[i]
+            upper = df['Apex_Upper'].iloc[i]
+            lower = df['Apex_Lower'].iloc[i]
             
-        if df.empty: return None
+            if close > upper: curr_trend = 1
+            elif close < lower: curr_trend = -1
+            trend_col.append(curr_trend)
+        df['Apex_Trend'] = trend_col
+
+        # --- C. SQUEEZE MOMENTUM (LazyBear) ---
+        # Bollinger Bands
+        bb_len = 20
+        bb_mult = 2.0
+        df['BB_Basis'] = df['Close'].rolling(bb_len).mean()
+        df['BB_Dev'] = df['Close'].rolling(bb_len).std()
+        df['BB_Upper'] = df['BB_Basis'] + (bb_mult * df['BB_Dev'])
+        df['BB_Lower'] = df['BB_Basis'] - (bb_mult * df['BB_Dev'])
         
-        # Ensure 'Close' exists
-        if 'Close' not in df.columns:
-            if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
-            else: return None
-            
+        # Keltner Channels
+        kc_len = 20
+        kc_mult = 1.5
+        df['KC_Basis'] = df['Close'].rolling(kc_len).mean()
+        df['KC_ATR'] = get_atr(df, kc_len)
+        df['KC_Upper'] = df['KC_Basis'] + (kc_mult * df['KC_ATR'])
+        df['KC_Lower'] = df['KC_Basis'] - (kc_mult * df['KC_ATR'])
+        
+        # Squeeze Status (ON if BB inside KC)
+        df['Squeeze_On'] = (df['BB_Lower'] > df['KC_Lower']) & (df['BB_Upper'] < df['KC_Upper'])
+
+        # --- D. GANN HIGH LOW ACTIVATOR ---
+        # Logic: SMA of Highs vs SMA of Lows
+        gann_len = 3
+        df['Gann_High'] = df['High'].rolling(gann_len).mean()
+        df['Gann_Low'] = df['Low'].rolling(gann_len).mean()
+        
+        # --- E. FEAR & GREED COMPONENT ---
+        # Simplified composite of RSI + Volatility
+        df['RSI'] = 100 - (100 / (1 + (df['Close'].diff().clip(lower=0).rolling(14).mean() / df['Close'].diff().clip(upper=0).abs().rolling(14).mean())))
+        df['Volatility_Score'] = (df['Close'].rolling(20).std() / df['Close']) * 100
+        
         return df
-    except: return None
 
-@st.cache_data(ttl=300)
-def get_macro_data():
-    """Fetches key macro indicators."""
-    tickers = {
-        "S&P 500": "SPY", "Bitcoin": "BTC-USD", 
-        "10Y Yield": "^TNX", "VIX": "^VIX"
-    }
-    prices = {}
-    changes = {}
-    
-    for name, sym in tickers.items():
-        try:
-            df = yf.download(sym, period="5d", interval="1d", progress=False)
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                
-                curr = df['Close'].iloc[-1]
-                prev = df['Close'].iloc[-2]
-                chg = ((curr - prev) / prev) * 100
-                
-                prices[name] = curr
-                changes[name] = chg
-        except:
-            prices[name] = 0.0
-            changes[name] = 0.0
-            
-    return prices, changes
+# ==============================================================================
+# 2. DEFINE ASSET LISTS
+# ==============================================================================
 
-# ==========================================
-# 3. MATH LIBRARY
-# ==========================================
-def calc_indicators(df):
-    # 1. Apex Trend (SMA Proxy)
-    df['HMA'] = df['Close'].rolling(55).mean()
-    
-    # 2. ATR
-    high_low = df['High'] - df['Low']
-    high_close = np.abs(df['High'] - df['Close'].shift())
-    low_close = np.abs(df['Low'] - df['Close'].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df['ATR'] = tr.rolling(14).mean()
-    
-    # 3. Support/Resistance
-    df['Pivot_Resist'] = df['High'].rolling(20).max()
-    df['Pivot_Support'] = df['Low'].rolling(20).min()
-    
-    # 4. Money Flow
-    df['MFI'] = (df['Close'].diff() * df['Volume']).rolling(3).mean()
-    
-    # 5. Squeeze
-    df['BB_Mid'] = df['Close'].rolling(20).mean()
-    df['BB_Std'] = df['Close'].rolling(20).std()
-    df['KC_ATR'] = df['ATR'].rolling(20).mean()
-    df['Squeeze_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
-    df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
-    
-    return df
+# A. MACRO DASHBOARD ROWS
+row1_core = [
+    ("S&P 500", "^GSPC", "US Large Cap Benchmark."),
+    ("Bitcoin", "BTC-USD", "Crypto/Liquidity Proxy."),
+    ("10Y Yield", "^TNX", "US Risk-Free Rate."),
+    ("VIX", "^VIX", "Implied Volatility (Fear Gauge).")
+]
 
-# ==========================================
-# 4. AI ANALYST (PURE DATA - NO NEWS)
-# ==========================================
-def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
-    if not st.session_state.api_key: 
-        return "⚠️ Waiting for OpenAI API Key in the sidebar..."
-    
-    last = df.iloc[-1]
-    
-    # Technical States
-    trend = "BULLISH" if last['Close'] > last['HMA'] else "BEARISH"
-    
-    # Risk Calculations
-    risk_dollars = balance * (risk_pct / 100)
-    
-    if trend == "BULLISH":
-        stop_level = last['Pivot_Support']
-        direction = "LONG"
-    else:
-        stop_level = last['Pivot_Resist']
-        direction = "SHORT"
-        
-    # Safety Check
-    if pd.isna(stop_level) or abs(last['Close'] - stop_level) < (last['ATR']*0.5):
-        stop_level = last['Close'] - (last['ATR']*2) if direction == "LONG" else last['Close'] + (last['ATR']*2)
-        
-    dist = abs(last['Close'] - stop_level)
-    if dist == 0: dist = last['ATR']
-    shares = risk_dollars / dist 
-    target = last['Close'] + (dist * 2.5) if direction == "LONG" else last['Close'] - (dist * 2.5)
-    
-    fund_text = "N/A"
-    if fundamentals:
-        fund_text = f"P/E: {fundamentals.get('P/E Ratio', 'N/A')}. Growth: {fundamentals.get('Rev Growth', 0)*100:.1f}%."
-    
-    prompt = f"""
-    Act as a Global Macro Strategist. Analyze {ticker} at ${last['Close']:.2f}.
-    
-    --- FUNDAMENTALS ---
-    {fund_text}
-    
-    --- TECHNICALS ---
-    Trend: {trend}. Money Flow: {last['MFI']:.0f}. Volatility (ATR): {last['ATR']:.2f}.
-    
-    --- RISK PROTOCOL (1% Rule) ---
-    Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
-    Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
-    
-    --- MISSION ---
-    1. **Verdict:** BUY, SELL, or WAIT.
-    2. **Reasoning:** Based strictly on Market Structure, Trend, and Fundamentals.
-    3. **Trade Plan:** Entry, Stop, Target (2.5R), Size.
-    """
-    
+row2_uk = [
+    ("FTSE 100", "^FTSE", "UK Blue Chips (Energy/Mining)."),
+    ("FTSE 250", "^FTMC", "UK Domestic Economy."),
+    ("GBP/USD", "GBPUSD=X", "Cable - Sterling vs USD."),
+    ("EUR/GBP", "EURGBP=X", "Sterling vs Euro.")
+]
+
+row3_global = [
+    ("Gold", "GC=F", "Inflation hedge & Safe-haven."),
+    ("Brent Crude", "BZ=F", "North Sea Oil (UK/EU Benchmark)."),
+    ("Dollar Index", "DX-Y.NYB", "DXY - Global Currency Strength."),
+    ("Emerging Mkts", "EEM", "Global Growth Proxy.")
+]
+
+row4_eu_japan = [
+    ("Nikkei 225", "^N225", "Japan Benchmark."),
+    ("DAX", "^GDAXI", "Germany 40 (Industrial)."),
+    ("CAC 40", "^FCHI", "France 40 (Luxury/Finance)."),
+    ("Euro Stoxx 50", "^STOXX50E", "Eurozone Blue Chips.")
+]
+
+# B. SCREENSHOT ASSETS (Deep Dive Sections)
+sect1_crypto_metals = [
+    ("BTC/USD", "BTC-USD", "Bitcoin."), ("ETH/USD", "ETH-USD", "Ethereum."),
+    ("Gold Futures", "GC=F", "Gold."), ("Silver Futures", "SI=F", "Silver."),
+    ("Copper", "HG=F", "Copper (Dr. Copper).")
+]
+
+sect2_indices = [
+    ("Nasdaq 100", "^NDX", "Tech Benchmark."), ("Invesco QQQ", "QQQ", "Nasdaq ETF."),
+    ("UK 100", "^FTSE", "FTSE 100."), ("Euro Stoxx 50", "^STOXX50E", "EU Stoxx."),
+    ("Nikkei 225", "^N225", "Japan.")
+]
+
+sect3_miners_themes = [
+    ("Global Miners", "PICK", "Mining Producers."), ("Gold Miners", "RING", "Gold Miners."),
+    ("Rare Earths", "REMX", "Strategic Metals."), ("Copper Miners", "COPX", "Copper Miners."),
+    ("WTI Crude", "CL=F", "US Oil.")
+]
+
+sect4_forex_bonds = [
+    ("EUR/USD", "EURUSD=X", "Euro/Dollar."), ("USD/JPY", "JPY=X", "Dollar/Yen."),
+    ("US 10Y Yield", "^TNX", "10Y Treasury."), ("US 05Y Yield", "^FVX", "5Y Treasury.") 
+]
+
+# C. CRYPTO SNIPER LIST (Top 20)
+top_crypto_assets = [
+    ("BTC-USD", "Bitcoin (BTC)", "The Market King."),
+    ("ETH-USD", "Ethereum (ETH)", "L1 King."),
+    ("SOL-USD", "Solana (SOL)", "High Speed L1."),
+    ("XRP-USD", "XRP (Ripple)", "Payments."),
+    ("BNB-USD", "Binance Coin", "Exchange Token."),
+    ("DOGE-USD", "Dogecoin", "Meme King."),
+    ("ADA-USD", "Cardano", "Academic L1."),
+    ("TRX-USD", "TRON", "USDT Network."),
+    ("AVAX-USD", "Avalanche", "Subnets."),
+    ("SHIB-USD", "Shiba Inu", "Meme Beta."),
+    ("LINK-USD", "Chainlink", "Oracles."),
+    ("BCH-USD", "Bitcoin Cash", "OG Fork."),
+    ("DOT-USD", "Polkadot", "Interoperability."),
+    ("LTC-USD", "Litecoin", "Digital Silver."),
+    ("NEAR-USD", "NEAR", "Sharding."),
+    ("UNI7083-USD", "Uniswap", "DEX King."),
+    ("ICP-USD", "Internet Comp", "Web3 Cloud."),
+    ("XLM-USD", "Stellar", "Payments."),
+    ("HBAR-USD", "Hedera", "Enterprise."),
+    ("FET-USD", "Fetch.ai", "AI Agent Proxy.")
+]
+
+# ==============================================================================
+# 3. DATA FUNCTIONS
+# ==============================================================================
+
+def get_all_data(all_lists_combined):
+    tickers = list(set([item[1] for item in all_lists_combined]))
+    # Fetching 60 days to ensure enough history for Moving Averages (55 period HMA)
+    data = yf.download(tickers, period="60d", interval="1d", progress=False)['Close']
+    return data
+
+def calculate_ratios(data):
+    ratios = {}
     try:
-        client = OpenAI(api_key=st.session_state.api_key)
-        res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
-        return res.choices[0].message.content
-    except Exception as e:
-        return f"⚠️ AI Error: {e}"
+        get_price = lambda t: data[t].dropna().iloc[-1]
+        p_gold = get_price('GC=F')
+        p_spx = get_price('^GSPC')
+        p_btc = get_price('BTC-USD')
+        p_copper = get_price('HG=F')
+        y_10 = get_price('^TNX')
+        y_5 = get_price('^FVX')
 
-# ==========================================
-# 5. UI DASHBOARD LAYOUT
-# ==========================================
-st.sidebar.header("🎛️ Terminal Controls")
+        ratios["SPX/Gold"] = p_spx / p_gold
+        ratios["Gold/BTC"] = p_gold / p_btc
+        ratios["Copper/Gold"] = p_copper / p_gold
+        ratios["10Y/5Y Spread"] = y_10 / y_5 
+    except KeyError:
+        pass
+    return ratios
 
-input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"])
+def render_row(title, asset_list, data_frame):
+    st.markdown(f"#### {title}")
+    cols = st.columns(len(asset_list))
+    for col, (label, ticker, tip) in zip(cols, asset_list):
+        try:
+            if ticker in data_frame.columns:
+                series = data_frame[ticker].dropna()
+            else:
+                series = pd.Series()
 
-if input_mode == "Curated Lists":
-    assets = {
-        "Indices": ["SPY", "QQQ", "IWM", "^VIX"],
-        "Crypto": ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD"],
-        "Tech": ["NVDA", "TSLA", "AAPL", "MSFT"],
-        "Macro": ["^TNX", "DX-Y.NYB", "TLT"]
-    }
-    cat = st.sidebar.selectbox("Asset Class", list(assets.keys()))
-    ticker = st.sidebar.selectbox("Ticker", assets[cat])
-else:
-    st.sidebar.info("Type ticker (e.g. SHEL.L, 7203.T)")
-    ticker = st.sidebar.text_input("Ticker Symbol", value="AAPL").upper()
+            if not series.empty:
+                curr = series.iloc[-1]
+                prev = series.iloc[-2]
+                delta = (curr - prev) / prev
+                
+                if "Yield" in label or "VIX" in label: fmt = f"{curr:.2f}"
+                elif "GBP" in label or "USD" in label or "EUR" in label: fmt = f"{curr:.4f}"
+                else: fmt = f"{curr:,.2f}"
 
-interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=2)
-st.sidebar.markdown("---")
-balance = st.sidebar.number_input("Capital ($)", 1000, 1000000, 10000)
-risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, 1.0)
+                with col:
+                    st.metric(label=label, value=fmt, delta=f"{delta:.2%}", help=tip)
+            else:
+                with col: st.warning(f"No Data")
+        except Exception:
+             with col: st.metric(label=label, value="--")
 
-# --- GLOBAL MACRO HEADER ---
-m_price, m_chg = get_macro_data()
-if m_price:
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("S&P 500", f"{m_price['S&P 500']:.2f}", f"{m_chg['S&P 500']:.2f}%")
-    c2.metric("Bitcoin", f"{m_price['Bitcoin']:.2f}", f"{m_chg['Bitcoin']:.2f}%")
-    c3.metric("10Y Yield", f"{m_price['10Y Yield']:.2f}", f"{m_chg['10Y Yield']:.2f}%")
-    c4.metric("VIX", f"{m_price['VIX']:.2f}", f"{m_chg['VIX']:.2f}%")
-    st.markdown("---")
+# ==============================================================================
+# 4. MAIN APP EXECUTION
+# ==============================================================================
 
-# --- MAIN ANALYSIS TABS ---
-tab1, tab2 = st.tabs(["📊 Technical Deep Dive", "🌍 Sector & Fundamentals"])
+st.title("👁️ DarkPool Titan Terminal")
+st.markdown("**Institutional-Grade Market Intelligence**")
 
-# SHARED TRIGGER
-if st.button(f"Analyze {ticker}"):
-    st.session_state['run_analysis'] = True
+# 1. FETCH DATA
+master_list = (row1_core + row2_uk + row3_global + row4_eu_japan + 
+               sect1_crypto_metals + sect2_indices + sect3_miners_themes + sect4_forex_bonds + top_crypto_assets)
 
-if st.session_state.get('run_analysis'):
-    with st.spinner(f"Analyzing {ticker}..."):
-        df = safe_download(ticker, "2y", interval)
+with st.spinner("Initializing Titan Data Feed & Computing Indicators..."):
+    market_data = get_all_data(master_list)
+    ratios = calculate_ratios(market_data)
+
+# --- SECTION A: MACRO OUTLOOK ---
+st.markdown("### 🌍 World Macro View")
+st.markdown("---")
+render_row("1. Core Drivers", row1_core, market_data)
+st.markdown("")
+render_row("2. UK Strategic View", row2_uk, market_data)
+st.markdown("")
+render_row("3. Global Commodities & Macro", row3_global, market_data)
+st.markdown("")
+render_row("4. Japan & Eurozone Indices", row4_eu_japan, market_data)
+st.markdown("---")
+
+# --- SECTION B: DEEP DIVE ---
+st.markdown("### 🦅 Deep Dive: Sectors & Themes")
+render_row("💎 Crypto & Precious Metals", sect1_crypto_metals, market_data)
+st.divider()
+render_row("📊 Global Indices (Expanded)", sect2_indices, market_data)
+st.divider()
+render_row("⛏️ Miners, Energy & Rare Earths", sect3_miners_themes, market_data)
+st.divider()
+render_row("💱 Currencies & Bonds", sect4_forex_bonds, market_data)
+st.divider()
+
+# --- SECTION C: RATIOS ---
+st.markdown("#### ⚡ Inter-market Ratios")
+r_cols = st.columns(4)
+r_metrics = [
+    ("SPX/Gold", ratios.get("SPX/Gold"), "Equities priced in Gold."),
+    ("Gold/BTC", ratios.get("Gold/BTC"), "Old vs Digital Gold."),
+    ("Copper/Gold", ratios.get("Copper/Gold"), "Growth vs Fear."),
+    ("10Y/5Y Yield", ratios.get("10Y/5Y Spread"), "Curve Shape.")
+]
+for col, (label, val, tip) in zip(r_cols, r_metrics):
+    with col:
+        if val: st.metric(label=label, value=f"{val:.3f}", help=tip)
+        else: st.metric(label=label, value="--")
+
+st.markdown("---")
+
+# --- SECTION D: CRYPTO SNIPER + TITAN INDICATORS ---
+st.markdown("### 🪙 Crypto Sniper Scope")
+
+c1, c2 = st.columns([1, 3])
+
+with c1:
+    crypto_options = {name: (ticker, tip) for ticker, name, tip in top_crypto_assets}
+    selected_name = st.selectbox("Select Asset:", options=list(crypto_options.keys()))
+    sel_ticker, sel_tip = crypto_options[selected_name]
+
+with c2:
+    # 1. Fetch Detailed History for Indicators
+    df_coin = yf.download(sel_ticker, period="3mo", interval="1d", progress=False)
+    
+    if not df_coin.empty:
+        # 2. RUN TITAN ANALYTICS
+        df_coin = TitanAnalytics.calculate_all(df_coin)
         
-        if df is not None:
-            df = calc_indicators(df)
-            fund = get_fundamentals(ticker)
-            # NO NEWS FETCHING HERE
-            
-            # TAB 1: TECHNICALS
-            with tab1:
-                st.subheader(f"🎯 Sniper Scope: {ticker}")
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-                fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
-                
-                # Auto S/R
-                if not pd.isna(df['Pivot_Resist'].iloc[-1]):
-                    fig.add_hline(y=df['Pivot_Resist'].iloc[-1], line_dash="dash", line_color="red", row=1, col=1)
-                if not pd.isna(df['Pivot_Support'].iloc[-1]):
-                    fig.add_hline(y=df['Pivot_Support'].iloc[-1], line_dash="dash", line_color="green", row=1, col=1)
-                
-                # Money Flow
-                colors = ['#00ff00' if v > 0 else '#ff0000' for v in df['MFI']]
-                fig.add_trace(go.Bar(x=df.index, y=df['MFI'], marker_color=colors, name="Smart Money"), row=2, col=1)
-                
-                fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                st.markdown("### 🤖 Strategy Briefing")
-                # AI Analyst called WITHOUT news
-                verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
-                st.info(verdict)
+        # Get Latest Values
+        latest = df_coin.iloc[-1]
+        
+        # --- TAB INTERFACE ---
+        tab_chart, tab_tech = st.tabs(["📈 Price Action", "🧠 Titan Intelligence"])
+        
+        with tab_chart:
+            curr = latest['Close']
+            delta = (curr - df_coin['Close'].iloc[-2]) / df_coin['Close'].iloc[-2]
+            st.metric(label=f"{selected_name} Price", value=f"${curr:,.4f}", delta=f"{delta:.2%}", help=sel_tip)
+            st.line_chart(df_coin['Close'], height=300)
 
-            # TAB 2: FUNDAMENTALS
-            with tab2:
-                st.subheader(f"🏢 Fundamental Health")
-                if fund:
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("P/E Ratio", f"{fund.get('P/E Ratio', 'N/A')}")
-                    c2.metric("Rev Growth", f"{fund.get('Rev Growth', 0)*100:.1f}%")
-                    c3.metric("Debt/Equity", f"{fund.get('Debt/Equity', 'N/A')}")
-                    st.write(f"**Summary:** {fund.get('Summary', 'No Data')[:300]}...")
-                else:
-                    st.warning("Fundamentals not available for this asset.")
+        with tab_tech:
+            st.markdown("#### 🛡️ DarkPool Indicator Matrix")
+            
+            # --- APEX TREND ---
+            col_t1, col_t2, col_t3 = st.columns(3)
+            apex_status = "BULLISH 🟢" if latest['Apex_Trend'] == 1 else "BEARISH 🔴"
+            with col_t1:
+                st.metric("Apex Trend (SMC)", apex_status, help="Hull MA + ATR Trailing Stop Logic")
+            
+            # --- SQUEEZE MOMENTUM ---
+            sqz_status = "ACTIVE 💥" if latest['Squeeze_On'] else "RELEASED 💨"
+            with col_t2:
+                st.metric("Squeeze Pro", sqz_status, help="Bollinger Bands inside Keltner Channels")
+            
+            # --- GANN ACTIVATOR ---
+            gann_status = "LONG 🔼" if latest['Close'] > latest['Gann_High'] else "SHORT 🔽"
+            with col_t3:
+                st.metric("Gann Activator", gann_status, help="High/Low Moving Average Logic")
                 
-                st.markdown("---")
-                st.subheader("🏆 Sector Performance")
-                s_data = get_sector_data()
-                if s_data is not None:
-                    # Fix for DataFrame styling error
-                    s_df = s_data.to_frame(name="Change").style.format("{:.2f}%").background_gradient(cmap="RdYlGn", vmin=-2, vmax=2)
-                    st.dataframe(s_df, height=400)
-        else:
-            st.error("Data connection failed. Try another ticker.")
+            st.divider()
+            
+            # --- METRICS GRID ---
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.metric("RSI (14)", f"{latest['RSI']:.1f}", help=">70 Overbought, <30 Oversold")
+            with m2:
+                # Money Flow Proxy using RSI logic on Volume
+                st.metric("Volatility Score", f"{latest['Volatility_Score']:.2f}", help="Standard Deviation normalized")
+            with m3:
+                dist_ma = latest['Close'] - latest['Apex_Baseline']
+                st.metric("Dist to Baseline", f"{dist_ma:.2f}", help="Distance to Hull Moving Average")
+
+    else:
+        st.error(f"Data Unavailable for {selected_name}")
