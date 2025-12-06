@@ -77,7 +77,9 @@ def get_news(ticker):
         if "=" in ticker or "^" in ticker: 
             return []
         stock = yf.Ticker(ticker)
-        return stock.news[:5] 
+        # Ensure that each news item is a dictionary before returning
+        news_items = stock.news[:5]
+        return [item for item in news_items if isinstance(item, dict)]
     except: 
         return []
 
@@ -93,7 +95,6 @@ def safe_download(ticker, period, interval):
     except: 
         return None
 
-# --- FIX: Added the missing get_macro_data function ---
 @st.cache_data(ttl=300)
 def get_macro_data():
     """Fetches key macro indicators for the global market overview."""
@@ -102,7 +103,6 @@ def get_macro_data():
         "^TNX": "10Y Yield", "^VIX": "VIX", "^FTSE": "FTSE 100", "^N225": "Nikkei 225"
     }
     try:
-        # Download 2 days to calculate the change
         data = yf.download(list(tickers.keys()), period="2d", interval="1d", progress=False)['Close']
         if data.empty or len(data) < 2:
             return None, None, None
@@ -110,7 +110,6 @@ def get_macro_data():
         prev_close = data.iloc[-2]
         current_close = data.iloc[-1]
         
-        # Calculate percentage change
         changes = ((current_close - prev_close) / prev_close) * 100
         
         return current_close.to_dict(), changes.to_dict(), tickers
@@ -142,7 +141,6 @@ def calc_indicators(df):
     df['BB_Mid'] = df['Close'].rolling(20).mean()
     df['BB_Std'] = df['Close'].rolling(20).std()
     df['KC_ATR'] = df['ATR'].rolling(20).mean()
-    # --- FIX: Renamed 'Sq_On' to 'Squeeze_On' to match UI reference ---
     df['Squeeze_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
     df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
     
@@ -157,8 +155,8 @@ def ask_ai_analyst(df, ticker, fundamentals, news_list, balance, risk_pct):
     
     last = df.iloc[-1]
     
-    # Format News safely (FIX for KeyError: 'title')
-    # Use .get() to safely access the 'title' key, providing a default if it's missing.
+    # --- FINAL FIX: Use .get() for safe access to 'title' key ---
+    # This line was causing the error. It is now safe.
     news_text = "\n".join([f"- {n.get('title', 'Headline Missing')}" for n in news_list]) if news_list else "No specific news headlines available."
     
     # Technical States
@@ -323,13 +321,11 @@ if st.session_state.get('run_analysis'):
                 
                 m1.metric("Current Price", f"${last_bar['Close']:.2f}")
                 m2.metric("Money Flow", f"{last_bar['MFI']:.0f}", delta_color="normal" if last_bar['MFI'] > 0 else "inverse")
-                # --- FIX: Referenced the corrected column name 'Squeeze_On' ---
                 m3.metric("Squeeze", "FIRING 🔥" if last_bar['Squeeze_On'] else "OFF", delta_color="off")
                 m4.metric("Volatility (ATR)", f"{last_bar['ATR']:.2f}")
                 
                 # --- AI VERDICT ---
                 st.markdown("### 🤖 Strategy Briefing")
-                # --- FIX: Added the missing 'fundamentals' argument to the function call ---
                 verdict = ask_ai_analyst(df, ticker, fund, news, balance, risk_pct)
                 st.info(verdict)
 
@@ -357,7 +353,7 @@ if st.session_state.get('run_analysis'):
                 st.subheader("📰 Live News Wire")
                 if news:
                     for n in news:
-                        # Also use .get() here for safety, though the error was in the AI prompt
+                        # --- FINAL FIX: Also use .get() here for safety ---
                         st.write(f"• **{n.get('title', 'Headline Missing')}**")
                         st.caption(f"Source: {n.get('publisher', 'N/A')} | [Read Story]({n.get('link', '#')})")
                 else:
