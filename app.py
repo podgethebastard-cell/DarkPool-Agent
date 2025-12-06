@@ -9,10 +9,11 @@ from openai import OpenAI
 # ==========================================
 # 1. PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="DarkPool Quant Terminal")
-st.title("👁️ DarkPool Quant Terminal")
-st.markdown("### Multi-Timeframe Quantitative Analysis")
+st.set_page_config(layout="wide", page_title="DarkPool Titan Terminal")
+st.title("👁️ DarkPool Titan Terminal")
+st.markdown("### Institutional-Grade Market Intelligence")
 
+# --- API Key Management ---
 if 'api_key' not in st.session_state:
     st.session_state.api_key = None
 
@@ -23,236 +24,287 @@ else:
         st.session_state.api_key = st.sidebar.text_input("OpenAI API Key", type="password")
 
 # ==========================================
-# 2. DATA ENGINE (MULTI-TIMEFRAME)
+# 2. DATA ENGINE (PURE MATH & DATA)
 # ==========================================
-def safe_download(ticker, period, interval):
-    """Robust downloader."""
-    try:
-        df = yf.download(ticker, period=period, interval=interval, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        
-        if df.empty: return None
-        if 'Close' not in df.columns:
-            if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
-            else: return None
-        return df
-    except: return None
-
-@st.cache_data(ttl=300)
-def get_quant_data(ticker, timeframe):
-    """Downloads BOTH the trading timeframe AND the Daily timeframe for context."""
-    # 1. Trading Data (e.g., 4h)
-    df_trade = safe_download(ticker, "1y", timeframe)
-    
-    # 2. Macro Data (Daily)
-    df_daily = safe_download(ticker, "2y", "1d")
-    
-    if df_trade is None or df_daily is None: return None, None
-    
-    return df_trade, df_daily
-
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
-    if "-" in ticker or "=" in ticker or "^" in ticker: return None 
+    """Fetches key financial metrics safely."""
+    if "-" in ticker or "=" in ticker or "^" in ticker: 
+        return None 
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
         if not info: return None
+        
         return {
             "Market Cap": info.get("marketCap", 0),
-            "P/E": info.get("trailingPE", 0),
-            "Growth": info.get("revenueGrowth", 0),
-            "Sector": info.get("sector", "Unknown")
+            "P/E Ratio": info.get("trailingPE", 0),
+            "Rev Growth": info.get("revenueGrowth", 0),
+            "Debt/Equity": info.get("debtToEquity", 0),
+            "Summary": info.get("longBusinessSummary", "No Data Available")
         }
     except: return None
 
-# ==========================================
-# 3. MATH ENGINE (QUANT LOGIC)
-# ==========================================
-def calculate_quant_metrics(df):
-    # --- 1. TREND ---
-    df['EMA_50'] = df['Close'].ewm(span=50).mean()
-    df['EMA_200'] = df['Close'].ewm(span=200).mean()
-    df['Trend'] = np.where(df['Close'] > df['EMA_50'], 1, -1) # 1=Bull, -1=Bear
+@st.cache_data(ttl=300)
+def get_sector_data():
+    """Fetches performance of key US Sectors."""
+    sectors = {
+        "Tech": "XLK", "Energy": "XLE", "Financials": "XLF", 
+        "Healthcare": "XLV", "Consumer": "XLY"
+    }
+    try:
+        # Download individually to avoid MultiIndex errors
+        results = {}
+        for name, ticker in sectors.items():
+            df = yf.download(ticker, period="5d", interval="1d", progress=False)
+            if not df.empty:
+                # Handle MultiIndex columns if present
+                if isinstance(df.columns, pd.MultiIndex):
+                    price = df.xs('Close', axis=1, level=0).iloc[-1].iloc[0]
+                    prev = df.xs('Close', axis=1, level=0).iloc[-2].iloc[0]
+                else:
+                    price = df['Close'].iloc[-1]
+                    prev = df['Close'].iloc[-2]
+                
+                change = ((price - prev) / prev) * 100
+                results[name] = change
+        
+        return pd.Series(results).sort_values(ascending=False)
+    except: return None
+
+def safe_download(ticker, period, interval):
+    """Robust price downloader."""
+    try:
+        df = yf.download(ticker, period=period, interval=interval, progress=False)
+        
+        # FIX: Flatten MultiIndex columns if they exist
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        if df.empty: return None
+        
+        # Ensure 'Close' exists
+        if 'Close' not in df.columns:
+            if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
+            else: return None
+            
+        return df
+    except: return None
+
+@st.cache_data(ttl=300)
+def get_macro_data():
+    """Fetches key macro indicators."""
+    tickers = {
+        "S&P 500": "SPY", "Bitcoin": "BTC-USD", 
+        "10Y Yield": "^TNX", "VIX": "^VIX"
+    }
+    prices = {}
+    changes = {}
     
-    # --- 2. MOMENTUM (RSI) ---
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    for name, sym in tickers.items():
+        try:
+            df = yf.download(sym, period="5d", interval="1d", progress=False)
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                
+                curr = df['Close'].iloc[-1]
+                prev = df['Close'].iloc[-2]
+                chg = ((curr - prev) / prev) * 100
+                
+                prices[name] = curr
+                changes[name] = chg
+        except:
+            prices[name] = 0.0
+            changes[name] = 0.0
+            
+    return prices, changes
+
+# ==========================================
+# 3. MATH LIBRARY
+# ==========================================
+def calc_indicators(df):
+    # 1. Apex Trend (SMA Proxy)
+    df['HMA'] = df['Close'].rolling(55).mean()
     
-    # --- 3. VOLATILITY (ATR & REGIME) ---
+    # 2. ATR
     high_low = df['High'] - df['Low']
-    df['ATR'] = high_low.rolling(14).mean()
-    # Volatility Regime: Is current range > average range?
-    df['Vol_Regime'] = np.where(high_low > df['ATR'], "EXPANDING", "COMPRESSING")
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df['ATR'] = tr.rolling(14).mean()
     
-    # --- 4. MONEY FLOW ---
+    # 3. Support/Resistance
+    df['Pivot_Resist'] = df['High'].rolling(20).max()
+    df['Pivot_Support'] = df['Low'].rolling(20).min()
+    
+    # 4. Money Flow
     df['MFI'] = (df['Close'].diff() * df['Volume']).rolling(3).mean()
     
-    # --- 5. SUPPORT/RESISTANCE ---
-    df['Resist'] = df['High'].rolling(20).max()
-    df['Support'] = df['Low'].rolling(20).min()
+    # 5. Squeeze
+    df['BB_Mid'] = df['Close'].rolling(20).mean()
+    df['BB_Std'] = df['Close'].rolling(20).std()
+    df['KC_ATR'] = df['ATR'].rolling(20).mean()
+    df['Squeeze_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
+    df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
     
     return df
 
-def generate_score(df_trade, df_daily):
-    """Calculates a 0-100 Quant Score based on confluence."""
-    last_t = df_trade.iloc[-1]
-    last_d = df_daily.iloc[-1]
-    
-    score = 50 # Start Neutral
-    
-    # Trend Alignment (+30)
-    if last_t['Close'] > last_t['EMA_50']: score += 15
-    if last_d['Close'] > last_d['EMA_50']: score += 15 # Daily trend is powerful
-    
-    # Momentum (+20)
-    if 50 < last_t['RSI'] < 70: score += 10
-    if 50 < last_d['RSI'] < 70: score += 10
-    
-    # Volume (+10)
-    if last_t['MFI'] > 0: score += 10
-    
-    # Penalties
-    if last_t['RSI'] > 75: score -= 10 (Overbought)
-    if last_t['RSI'] < 25: score -= 10 (Oversold - catching knife)
-    
-    return max(0, min(100, score))
-
 # ==========================================
-# 4. AI QUANT BRAIN
+# 4. AI ANALYST (PURE DATA - NO NEWS)
 # ==========================================
-def ask_quant_brain(df_trade, df_daily, ticker, score, balance, risk_pct):
-    if not st.session_state.api_key: return "⚠️ API Key Missing"
+def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
+    if not st.session_state.api_key: 
+        return "⚠️ Waiting for OpenAI API Key in the sidebar..."
     
-    last_t = df_trade.iloc[-1]
-    last_d = df_daily.iloc[-1]
+    last = df.iloc[-1]
     
-    # Determine Trend Alignment
-    trend_micro = "BULLISH" if last_t['Close'] > last_t['EMA_50'] else "BEARISH"
-    trend_macro = "BULLISH" if last_d['Close'] > last_d['EMA_50'] else "BEARISH"
+    # Technical States
+    trend = "BULLISH" if last['Close'] > last['HMA'] else "BEARISH"
     
-    alignment = "PERFECT ALIGNMENT ✅" if trend_micro == trend_macro else "CONFLICT ⚠️"
-    
-    # Risk Math
+    # Risk Calculations
     risk_dollars = balance * (risk_pct / 100)
-    stop = last_t['Support'] if trend_micro == "BULLISH" else last_t['Resist']
-    if pd.isna(stop): stop = last_t['Close'] * 0.95
     
-    dist = abs(last_t['Close'] - stop)
-    if dist == 0: dist = last_t['ATR']
-    shares = risk_dollars / dist
+    if trend == "BULLISH":
+        stop_level = last['Pivot_Support']
+        direction = "LONG"
+    else:
+        stop_level = last['Pivot_Resist']
+        direction = "SHORT"
+        
+    # Safety Check
+    if pd.isna(stop_level) or abs(last['Close'] - stop_level) < (last['ATR']*0.5):
+        stop_level = last['Close'] - (last['ATR']*2) if direction == "LONG" else last['Close'] + (last['ATR']*2)
+        
+    dist = abs(last['Close'] - stop_level)
+    if dist == 0: dist = last['ATR']
+    shares = risk_dollars / dist 
+    target = last['Close'] + (dist * 2.5) if direction == "LONG" else last['Close'] - (dist * 2.5)
+    
+    fund_text = "N/A"
+    if fundamentals:
+        fund_text = f"P/E: {fundamentals.get('P/E Ratio', 'N/A')}. Growth: {fundamentals.get('Rev Growth', 0)*100:.1f}%."
     
     prompt = f"""
-    Act as a Quantitative Hedge Fund Manager. Analyze {ticker}.
+    Act as a Global Macro Strategist. Analyze {ticker} at ${last['Close']:.2f}.
     
-    --- QUANT METRICS ---
-    Quant Score: {score}/100.
-    Micro Trend ({last_t.name}): {trend_micro}.
-    Macro Trend (Daily): {trend_macro}.
-    Status: {alignment}.
-    Volatility: {last_t['Vol_Regime']}.
-    RSI: {last_t['RSI']:.1f}.
+    --- FUNDAMENTALS ---
+    {fund_text}
     
-    --- RISK PARAMETERS ---
-    Capital: ${balance}. Risk: ${risk_dollars:.2f} ({risk_pct}%).
-    Stop Level: ${stop:.2f}. Position Size: {shares:.4f} units.
+    --- TECHNICALS ---
+    Trend: {trend}. Money Flow: {last['MFI']:.0f}. Volatility (ATR): {last['ATR']:.2f}.
+    
+    --- RISK PROTOCOL (1% Rule) ---
+    Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
+    Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
     
     --- MISSION ---
-    1. **Verdict:** STRONG BUY, BUY, NEUTRAL, SELL, STRONG SELL.
-    2. **Analysis:** Analyze the Alignment. Is the Daily chart supporting the trade?
-    3. **The Plan:** Entry, Stop, Target (2R), and Size.
+    1. **Verdict:** BUY, SELL, or WAIT.
+    2. **Reasoning:** Based strictly on Market Structure, Trend, and Fundamentals.
+    3. **Trade Plan:** Entry, Stop, Target (2.5R), Size.
     """
     
     try:
         client = OpenAI(api_key=st.session_state.api_key)
         res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
         return res.choices[0].message.content
-    except Exception as e: return f"AI Error: {e}"
+    except Exception as e:
+        return f"⚠️ AI Error: {e}"
 
 # ==========================================
-# 5. UI DASHBOARD
+# 5. UI DASHBOARD LAYOUT
 # ==========================================
-st.sidebar.header("🎛️ Quant Controls")
+st.sidebar.header("🎛️ Terminal Controls")
 
-# Input
 input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"])
+
 if input_mode == "Curated Lists":
-    assets = {"Crypto": ["BTC-USD", "ETH-USD", "SOL-USD"], "Indices": ["SPY", "QQQ"], "Tech": ["NVDA", "TSLA", "AAPL"]}
-    cat = st.sidebar.selectbox("Category", list(assets.keys()))
+    assets = {
+        "Indices": ["SPY", "QQQ", "IWM", "^VIX"],
+        "Crypto": ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD"],
+        "Tech": ["NVDA", "TSLA", "AAPL", "MSFT"],
+        "Macro": ["^TNX", "DX-Y.NYB", "TLT"]
+    }
+    cat = st.sidebar.selectbox("Asset Class", list(assets.keys()))
     ticker = st.sidebar.selectbox("Ticker", assets[cat])
 else:
-    st.sidebar.info("Type ticker (e.g. SHEL.L)")
-    ticker = st.sidebar.text_input("Symbol", value="AAPL").upper()
+    st.sidebar.info("Type ticker (e.g. SHEL.L, 7203.T)")
+    ticker = st.sidebar.text_input("Ticker Symbol", value="AAPL").upper()
 
-timeframe = st.sidebar.selectbox("Trading Timeframe", ["15m", "1h", "4h"], index=2)
+interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=2)
 st.sidebar.markdown("---")
 balance = st.sidebar.number_input("Capital ($)", 1000, 1000000, 10000)
 risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, 1.0)
 
-# MAIN TRIGGER
-if st.button("Run Quant Analysis"):
-    with st.spinner(f"Running Multi-Timeframe Analysis on {ticker}..."):
-        # Fetch TWO datasets
-        df_trade, df_daily = get_quant_data(ticker, timeframe)
+# --- GLOBAL MACRO HEADER ---
+m_price, m_chg = get_macro_data()
+if m_price:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("S&P 500", f"{m_price['S&P 500']:.2f}", f"{m_chg['S&P 500']:.2f}%")
+    c2.metric("Bitcoin", f"{m_price['Bitcoin']:.2f}", f"{m_chg['Bitcoin']:.2f}%")
+    c3.metric("10Y Yield", f"{m_price['10Y Yield']:.2f}", f"{m_chg['10Y Yield']:.2f}%")
+    c4.metric("VIX", f"{m_price['VIX']:.2f}", f"{m_chg['VIX']:.2f}%")
+    st.markdown("---")
+
+# --- MAIN ANALYSIS TABS ---
+tab1, tab2 = st.tabs(["📊 Technical Deep Dive", "🌍 Sector & Fundamentals"])
+
+# SHARED TRIGGER
+if st.button(f"Analyze {ticker}"):
+    st.session_state['run_analysis'] = True
+
+if st.session_state.get('run_analysis'):
+    with st.spinner(f"Analyzing {ticker}..."):
+        df = safe_download(ticker, "2y", interval)
         
-        if df_trade is not None and df_daily is not None:
-            # Process Indicators
-            df_trade = calculate_quant_metrics(df_trade)
-            df_daily = calculate_quant_metrics(df_daily)
+        if df is not None:
+            df = calc_indicators(df)
+            fund = get_fundamentals(ticker)
+            # NO NEWS FETCHING HERE
             
-            # Generate Quant Score
-            score = generate_score(df_trade, df_daily)
-            
-            # --- SCORECARD HEADER ---
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Quant Score", f"{score}/100", delta="Bullish" if score > 60 else "Bearish")
-            
-            # Trend Alignment
-            t_micro = "🟢 Up" if df_trade['Trend'].iloc[-1] == 1 else "🔴 Down"
-            t_macro = "🟢 Up" if df_daily['Trend'].iloc[-1] == 1 else "🔴 Down"
-            c2.metric("Trend Alignment", f"{t_micro} vs {t_macro}")
-            
-            # Volatility
-            c3.metric("Volatility Regime", df_trade['Vol_Regime'].iloc[-1])
-            
-            st.markdown("---")
-            
-            # --- CHARTING (The "Triple Screen" View) ---
-            tab_chart, tab_data = st.tabs(["Charts", "Raw Data"])
-            
-            with tab_chart:
-                # We plot the Trading Timeframe with Daily Context levels
+            # TAB 1: TECHNICALS
+            with tab1:
+                st.subheader(f"🎯 Sniper Scope: {ticker}")
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+                fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
                 
-                # Price
-                fig.add_trace(go.Candlestick(x=df_trade.index, open=df_trade['Open'], high=df_trade['High'], low=df_trade['Low'], close=df_trade['Close'], name="Price"), row=1, col=1)
+                # Auto S/R
+                if not pd.isna(df['Pivot_Resist'].iloc[-1]):
+                    fig.add_hline(y=df['Pivot_Resist'].iloc[-1], line_dash="dash", line_color="red", row=1, col=1)
+                if not pd.isna(df['Pivot_Support'].iloc[-1]):
+                    fig.add_hline(y=df['Pivot_Support'].iloc[-1], line_dash="dash", line_color="green", row=1, col=1)
                 
-                # EMAs
-                fig.add_trace(go.Scatter(x=df_trade.index, y=df_trade['EMA_50'], line=dict(color='cyan', width=1), name="EMA 50"), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df_trade.index, y=df_trade['EMA_200'], line=dict(color='blue', width=2), name="EMA 200"), row=1, col=1)
+                # Money Flow
+                colors = ['#00ff00' if v > 0 else '#ff0000' for v in df['MFI']]
+                fig.add_trace(go.Bar(x=df.index, y=df['MFI'], marker_color=colors, name="Smart Money"), row=2, col=1)
                 
-                # Support/Resist
-                last_r = df_trade['Resist'].iloc[-1]
-                last_s = df_trade['Support'].iloc[-1]
-                if not pd.isna(last_r): fig.add_hline(y=last_r, line_dash="dash", line_color="red", row=1, col=1)
-                if not pd.isna(last_s): fig.add_hline(y=last_s, line_dash="dash", line_color="green", row=1, col=1)
-                
-                # RSI
-                fig.add_trace(go.Scatter(x=df_trade.index, y=df_trade['RSI'], line=dict(color='purple', width=2), name="RSI"), row=2, col=1)
-                fig.add_hline(y=70, line_dash="dot", line_color="gray", row=2, col=1)
-                fig.add_hline(y=30, line_dash="dot", line_color="gray", row=2, col=1)
-                
-                fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, title=f"{ticker} ({timeframe}) Structure")
+                fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
-            
-            # --- AI VERDICT ---
-            st.subheader("🧠 Quant Manager Briefing")
-            verdict = ask_quant_brain(df_trade, df_daily, ticker, score, balance, risk_pct)
-            st.success(verdict)
-            
+                
+                st.markdown("### 🤖 Strategy Briefing")
+                # AI Analyst called WITHOUT news
+                verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
+                st.info(verdict)
+
+            # TAB 2: FUNDAMENTALS
+            with tab2:
+                st.subheader(f"🏢 Fundamental Health")
+                if fund:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("P/E Ratio", f"{fund.get('P/E Ratio', 'N/A')}")
+                    c2.metric("Rev Growth", f"{fund.get('Rev Growth', 0)*100:.1f}%")
+                    c3.metric("Debt/Equity", f"{fund.get('Debt/Equity', 'N/A')}")
+                    st.write(f"**Summary:** {fund.get('Summary', 'No Data')[:300]}...")
+                else:
+                    st.warning("Fundamentals not available for this asset.")
+                
+                st.markdown("---")
+                st.subheader("🏆 Sector Performance")
+                s_data = get_sector_data()
+                if s_data is not None:
+                    # Fix for DataFrame styling error
+                    s_df = s_data.to_frame(name="Change").style.format("{:.2f}%").background_gradient(cmap="RdYlGn", vmin=-2, vmax=2)
+                    st.dataframe(s_df, height=400)
         else:
-            st.error("Data fetch error. Check ticker symbol.")
+            st.error("Data connection failed. Try another ticker.")
