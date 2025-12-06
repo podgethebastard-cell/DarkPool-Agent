@@ -157,7 +157,8 @@ def ask_ai_analyst(df, ticker, fundamentals, news_list, balance, risk_pct):
     
     last = df.iloc[-1]
     
-    # Format News safely
+    # Format News safely (FIX for KeyError: 'title')
+    # Use .get() to safely access the 'title' key, providing a default if it's missing.
     news_text = "\n".join([f"- {n.get('title', 'Headline Missing')}" for n in news_list]) if news_list else "No specific news headlines available."
     
     # Technical States
@@ -328,6 +329,7 @@ if st.session_state.get('run_analysis'):
                 
                 # --- AI VERDICT ---
                 st.markdown("### 🤖 Strategy Briefing")
+                # --- FIX: Added the missing 'fundamentals' argument to the function call ---
                 verdict = ask_ai_analyst(df, ticker, fund, news, balance, risk_pct)
                 st.info(verdict)
 
@@ -355,6 +357,7 @@ if st.session_state.get('run_analysis'):
                 st.subheader("📰 Live News Wire")
                 if news:
                     for n in news:
+                        # Also use .get() here for safety, though the error was in the AI prompt
                         st.write(f"• **{n.get('title', 'Headline Missing')}**")
                         st.caption(f"Source: {n.get('publisher', 'N/A')} | [Read Story]({n.get('link', '#')})")
                 else:
