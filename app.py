@@ -24,7 +24,7 @@ else:
         st.session_state.api_key = st.sidebar.text_input("OpenAI API Key", type="password")
 
 # ==========================================
-# 2. DATA ENGINE (ROBUST & CACHED)
+# 2. DATA ENGINE (PURE MATH & DATA)
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -72,23 +72,12 @@ def get_sector_data():
         return pd.Series(results).sort_values(ascending=False)
     except: return None
 
-def get_news(ticker):
-    """Fetches latest news headlines safely."""
-    try:
-        if "=" in ticker or "^" in ticker: return []
-        stock = yf.Ticker(ticker)
-        news_items = stock.news
-        # Return empty list if news is None or empty
-        if not news_items: return []
-        return news_items[:5]
-    except: return []
-
 def safe_download(ticker, period, interval):
     """Robust price downloader."""
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False)
         
-        # FIX: Flatten MultiIndex columns if they exist (Common yfinance issue)
+        # FIX: Flatten MultiIndex columns if they exist
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
@@ -96,7 +85,6 @@ def safe_download(ticker, period, interval):
         
         # Ensure 'Close' exists
         if 'Close' not in df.columns:
-            # Fallback for weird column names
             if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
             else: return None
             
@@ -105,7 +93,7 @@ def safe_download(ticker, period, interval):
 
 @st.cache_data(ttl=300)
 def get_macro_data():
-    """Fetches key macro indicators individually to prevent NaNs."""
+    """Fetches key macro indicators."""
     tickers = {
         "S&P 500": "SPY", "Bitcoin": "BTC-USD", 
         "10Y Yield": "^TNX", "VIX": "^VIX"
@@ -117,7 +105,6 @@ def get_macro_data():
         try:
             df = yf.download(sym, period="5d", interval="1d", progress=False)
             if not df.empty:
-                # Flatten columns
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
                 
@@ -164,20 +151,13 @@ def calc_indicators(df):
     return df
 
 # ==========================================
-# 4. AI ANALYST (RISK MANAGER)
+# 4. AI ANALYST (PURE DATA - NO NEWS)
 # ==========================================
-def ask_ai_analyst(df, ticker, fundamentals, news_list, balance, risk_pct):
+def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
     if not st.session_state.api_key: 
         return "⚠️ Waiting for OpenAI API Key in the sidebar..."
     
     last = df.iloc[-1]
-    
-    # --- CRITICAL FIX FOR KEYERROR ---
-    # We use .get('title', 'No Title') to ensure it never crashes if title is missing
-    if news_list and isinstance(news_list, list):
-        news_text = "\n".join([f"- {n.get('title', 'No Title Available')}" for n in news_list if isinstance(n, dict)])
-    else:
-        news_text = "No recent news found."
     
     # Technical States
     trend = "BULLISH" if last['Close'] > last['HMA'] else "BEARISH"
@@ -212,10 +192,7 @@ def ask_ai_analyst(df, ticker, fundamentals, news_list, balance, risk_pct):
     {fund_text}
     
     --- TECHNICALS ---
-    Trend: {trend}. Money Flow: {last['MFI']:.0f}.
-    
-    --- NEWS ---
-    {news_text}
+    Trend: {trend}. Money Flow: {last['MFI']:.0f}. Volatility (ATR): {last['ATR']:.2f}.
     
     --- RISK PROTOCOL (1% Rule) ---
     Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
@@ -223,7 +200,7 @@ def ask_ai_analyst(df, ticker, fundamentals, news_list, balance, risk_pct):
     
     --- MISSION ---
     1. **Verdict:** BUY, SELL, or WAIT.
-    2. **Reasoning:** Combine Charts + News.
+    2. **Reasoning:** Based strictly on Market Structure, Trend, and Fundamentals.
     3. **Trade Plan:** Entry, Stop, Target (2.5R), Size.
     """
     
@@ -254,12 +231,10 @@ else:
     st.sidebar.info("Type ticker (e.g. SHEL.L, 7203.T)")
     ticker = st.sidebar.text_input("Ticker Symbol", value="AAPL").upper()
 
-interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=3)
-
+interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=2)
 st.sidebar.markdown("---")
-st.sidebar.header("💰 Risk Parameters")
 balance = st.sidebar.number_input("Capital ($)", 1000, 1000000, 10000)
-risk_pct = st.sidebar.slider("Risk Per Trade (%)", 0.5, 3.0, 1.0)
+risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, 1.0)
 
 # --- GLOBAL MACRO HEADER ---
 m_price, m_chg = get_macro_data()
@@ -279,19 +254,57 @@ if st.button(f"Analyze {ticker}"):
     st.session_state['run_analysis'] = True
 
 if st.session_state.get('run_analysis'):
-    with st.spinner(f"Connecting to Global Exchanges for {ticker}..."):
+    with st.spinner(f"Analyzing {ticker}..."):
         df = safe_download(ticker, "2y", interval)
         
         if df is not None:
             df = calc_indicators(df)
             fund = get_fundamentals(ticker)
-            news = get_news(ticker)
+            # NO NEWS FETCHING HERE
             
-            # --- TAB 1: TECHNICALS ---
+            # TAB 1: TECHNICALS
             with tab1:
                 st.subheader(f"🎯 Sniper Scope: {ticker}")
-                
-                # Charting
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
                 fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row
+                fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
+                
+                # Auto S/R
+                if not pd.isna(df['Pivot_Resist'].iloc[-1]):
+                    fig.add_hline(y=df['Pivot_Resist'].iloc[-1], line_dash="dash", line_color="red", row=1, col=1)
+                if not pd.isna(df['Pivot_Support'].iloc[-1]):
+                    fig.add_hline(y=df['Pivot_Support'].iloc[-1], line_dash="dash", line_color="green", row=1, col=1)
+                
+                # Money Flow
+                colors = ['#00ff00' if v > 0 else '#ff0000' for v in df['MFI']]
+                fig.add_trace(go.Bar(x=df.index, y=df['MFI'], marker_color=colors, name="Smart Money"), row=2, col=1)
+                
+                fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("### 🤖 Strategy Briefing")
+                # AI Analyst called WITHOUT news
+                verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
+                st.info(verdict)
+
+            # TAB 2: FUNDAMENTALS
+            with tab2:
+                st.subheader(f"🏢 Fundamental Health")
+                if fund:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("P/E Ratio", f"{fund.get('P/E Ratio', 'N/A')}")
+                    c2.metric("Rev Growth", f"{fund.get('Rev Growth', 0)*100:.1f}%")
+                    c3.metric("Debt/Equity", f"{fund.get('Debt/Equity', 'N/A')}")
+                    st.write(f"**Summary:** {fund.get('Summary', 'No Data')[:300]}...")
+                else:
+                    st.warning("Fundamentals not available for this asset.")
+                
+                st.markdown("---")
+                st.subheader("🏆 Sector Performance")
+                s_data = get_sector_data()
+                if s_data is not None:
+                    # Fix for DataFrame styling error
+                    s_df = s_data.to_frame(name="Change").style.format("{:.2f}%").background_gradient(cmap="RdYlGn", vmin=-2, vmax=2)
+                    st.dataframe(s_df, height=400)
+        else:
+            st.error("Data connection failed. Try another ticker.")
