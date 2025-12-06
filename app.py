@@ -10,11 +10,81 @@ import calendar
 import datetime
 
 # ==========================================
-# 1. PAGE CONFIGURATION
+# 1. PAGE CONFIGURATION & CUSTOM UI
 # ==========================================
-st.set_page_config(layout="wide", page_title="DarkPool Titan Terminal")
-st.title("👁️ DarkPool Titan Terminal")
-st.markdown("### Institutional-Grade Market Intelligence")
+st.set_page_config(layout="wide", page_title="DarkPool Titan Terminal", page_icon="👁️")
+
+# --- CUSTOM CSS FOR "DARKPOOL" AESTHETIC ---
+st.markdown("""
+<style>
+    /* Main Background & Font */
+    .stApp {
+        background-color: #0e1117;
+        color: #e0e0e0;
+        font-family: 'Roboto Mono', monospace;
+    }
+    
+    /* Title Glow Effect */
+    .title-glow {
+        font-size: 3em;
+        font-weight: bold;
+        color: #ffffff;
+        text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00, 0 0 40px #00ff00;
+        margin-bottom: 20px;
+    }
+    
+    /* Metric Card Styling (Glassmorphism) */
+    div[data-testid="stMetric"] {
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 10px;
+        border-radius: 8px;
+        transition: transform 0.2s;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: scale(1.02);
+        border-color: #00ff00;
+    }
+    
+    /* Metric Value Coloring */
+    div[data-testid="stMetricValue"] {
+        font-size: 1.2rem !important;
+        font-weight: 700;
+    }
+    
+    /* Tabs Styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+        background-color: transparent;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #161b22;
+        border-radius: 4px 4px 0px 0px;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        border: 1px solid #30363d;
+        color: #8b949e;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #0e1117;
+        color: #00ff00;
+        border-bottom: 2px solid #00ff00;
+    }
+    
+    /* Container Borders */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-color: #30363d !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- HEADER ---
+st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
+st.markdown("##### *Institutional-Grade Market Intelligence // v3.0 Final*")
+st.markdown("---")
 
 # --- API Key Management ---
 if 'api_key' not in st.session_state:
@@ -60,8 +130,8 @@ def get_global_performance():
         "Energy (XLE)": "XLE", 
         "Financials (XLF)": "XLF", 
         "Bitcoin (BTC)": "BTC-USD", 
-        "Gold (GLD)": "GLD",
-        "Oil (USO)": "USO",
+        "Gold (GLD)": "GLD", 
+        "Oil (USO)": "USO", 
         "Treasuries (TLT)": "TLT"
     }
     try:
@@ -101,56 +171,49 @@ def safe_download(ticker, period, interval):
 
 @st.cache_data(ttl=300)
 def get_macro_data():
-    """Fetches expanded list of 28 global macro indicators."""
-    # Defined in display order for logical grouping
-    tickers = {
-        # --- US INDICES ---
-        "S&P 500": "SPY", 
-        "Nasdaq 100": "QQQ",
-        "Dow Jones": "^DJI",
-        "Russell 2000": "^RUT",
-        
-        # --- GLOBAL INDICES ---
-        "FTSE 100 (UK)": "^FTSE",
-        "DAX (Germany)": "^GDAXI",
-        "Euro Stoxx 50": "^STOXX50E",
-        "Nikkei 225": "^N225",
-        
-        # --- RATES & VOLATILITY ---
-        "10Y Yield": "^TNX", 
-        "2Y Yield": "^IRX",
-        "Dollar Index": "DX-Y.NYB",
-        "VIX (Fear)": "^VIX",
-        
-        # --- CRYPTO & RISK ---
-        "Bitcoin": "BTC-USD", 
-        "Ethereum": "ETH-USD",
-        "Mining (PICK)": "PICK",
-        "Rare Earths": "REMX",
-
-        # --- ENERGY ---
-        "WTI Crude": "CL=F",
-        "Brent Crude": "BZ=F",
-        "Natural Gas": "NG=F",
-        "Uranium": "URA",
-        
-        # --- PRECIOUS METALS ---
-        "Gold": "GC=F",
-        "Silver": "SI=F",
-        "Platinum": "PL=F",
-        "Palladium": "PA=F",
-        
-        # --- INDUSTRIAL & AG ---
-        "Copper": "HG=F",
-        "Corn": "ZC=F",
-        "Wheat": "ZW=F",
-        "Soybeans": "ZS=F"
+    """Fetches 40 global macro indicators grouped by sector."""
+    
+    groups = {
+        "🇺🇸 US Equities": {
+            "S&P 500": "SPY", "Nasdaq 100": "QQQ", "Dow Jones": "^DJI", "Russell 2000": "^RUT"
+        },
+        "🌍 Global Indices": {
+            "FTSE 100": "^FTSE", "DAX": "^GDAXI", "Nikkei 225": "^N225", "Hang Seng": "^HSI"
+        },
+        "🏦 Rates & Bonds": {
+            "10Y Yield": "^TNX", "2Y Yield": "^IRX", "30Y Yield": "^TYX", "T-Bond (TLT)": "TLT"
+        },
+        "💱 Forex & Volatility": {
+            "DXY Index": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "USD/JPY": "JPY=X", "VIX (Fear)": "^VIX"
+        },
+        "⚠️ Risk Assets": {
+            "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Semis (SMH)": "SMH", "Junk Bonds": "HYG"
+        },
+        "⚡ Energy": {
+            "WTI Crude": "CL=F", "Brent Crude": "BZ=F", "Natural Gas": "NG=F", "Uranium": "URA"
+        },
+        "🥇 Precious Metals": {
+            "Gold": "GC=F", "Silver": "SI=F", "Platinum": "PL=F", "Palladium": "PA=F"
+        },
+        "🏗️ Industrial & Ag": {
+            "Copper": "HG=F", "Rare Earths": "REMX", "Corn": "ZC=F", "Wheat": "ZW=F"
+        },
+        "🇬🇧 UK Desk": {
+            "GBP/USD": "GBPUSD=X", "GBP/JPY": "GBPJPY=X", "EUR/GBP": "EURGBP=X", "UK Gilts": "IGLT.L"
+        },
+        "📈 Growth & Real Assets": {
+            "Emerging Mkts": "EEM", "China (FXI)": "FXI", "Real Estate": "VNQ", "Soybeans": "ZS=F"
+        }
     }
+
+    all_tickers = {}
+    for g in groups.values():
+        all_tickers.update(g)
     
-    prices = {k: 0.0 for k in tickers.keys()}
-    changes = {k: 0.0 for k in tickers.keys()}
+    prices = {k: 0.0 for k in all_tickers.keys()}
+    changes = {k: 0.0 for k in all_tickers.keys()}
     
-    for name, sym in tickers.items():
+    for name, sym in all_tickers.items():
         try:
             df = yf.download(sym, period="5d", interval="1d", progress=False)
             if not df.empty and len(df) >= 2:
@@ -166,7 +229,7 @@ def get_macro_data():
         except Exception:
             continue
             
-    return prices, changes
+    return groups, prices, changes
 
 # ==========================================
 # 3. MATH LIBRARY & ALGORITHMS
@@ -238,6 +301,38 @@ def calc_indicators(df):
 
     return df
 
+def run_monte_carlo(df, days=30, simulations=1000):
+    """🔮 Monte Carlo Simulation."""
+    last_price = df['Close'].iloc[-1]
+    returns = df['Close'].pct_change().dropna()
+    mu = returns.mean()
+    sigma = returns.std()
+    
+    daily_returns_sim = np.random.normal(mu, sigma, (days, simulations))
+    price_paths = np.zeros((days, simulations))
+    price_paths[0] = last_price
+    
+    for t in range(1, days):
+        price_paths[t] = price_paths[t-1] * (1 + daily_returns_sim[t])
+        
+    return price_paths
+
+def calc_volume_profile(df, bins=50):
+    """📊 Institutional Volume Profile (VPVR)."""
+    price_min = df['Low'].min()
+    price_max = df['High'].max()
+    price_bins = np.linspace(price_min, price_max, bins)
+    
+    df['Mid'] = (df['Close'] + df['Open']) / 2
+    df['Bin'] = pd.cut(df['Mid'], bins=price_bins, labels=price_bins[:-1], include_lowest=True)
+    
+    vp = df.groupby('Bin')['Volume'].sum().reset_index()
+    vp['Price'] = vp['Bin'].astype(float)
+    poc_idx = vp['Volume'].idxmax()
+    poc_price = vp.loc[poc_idx, 'Price']
+    
+    return vp, poc_price
+
 def get_sr_channels(df, pivot_period=10, loopback=290, max_width_pct=5, min_strength=1):
     """Python implementation of 'Support Resistance Channels' logic."""
     if len(df) < loopback: loopback = len(df)
@@ -292,44 +387,22 @@ def get_sr_channels(df, pivot_period=10, loopback=290, max_width_pct=5, min_stre
     return final_zones
 
 def calculate_smc(df, swing_length=5):
-    """
-    🏦 LuxAlgo Smart Money Concepts (Python Port)
-    Calculates Structure (BOS/CHoCH), Order Blocks (OB), and Fair Value Gaps (FVG).
-    """
-    smc_data = {
-        'structures': [], 
-        'order_blocks': [], 
-        'fvgs': [] 
-    }
+    """🏦 LuxAlgo Smart Money Concepts."""
+    smc_data = {'structures': [], 'order_blocks': [], 'fvgs': []}
     
-    # 1. FAIR VALUE GAPS (FVG)
     for i in range(2, len(df)):
-        # Bullish FVG
         if df['Low'].iloc[i] > df['High'].iloc[i-2]:
-            smc_data['fvgs'].append({
-                'x0': df.index[i-2], 'x1': df.index[i],
-                'y0': df['High'].iloc[i-2], 'y1': df['Low'].iloc[i],
-                'color': 'rgba(0, 255, 104, 0.3)' # Green
-            })
-        # Bearish FVG
+            smc_data['fvgs'].append({'x0': df.index[i-2], 'x1': df.index[i], 'y0': df['High'].iloc[i-2], 'y1': df['Low'].iloc[i], 'color': 'rgba(0, 255, 104, 0.3)'})
         if df['High'].iloc[i] < df['Low'].iloc[i-2]:
-            smc_data['fvgs'].append({
-                'x0': df.index[i-2], 'x1': df.index[i],
-                'y0': df['Low'].iloc[i-2], 'y1': df['High'].iloc[i],
-                'color': 'rgba(255, 0, 8, 0.3)' # Red
-            })
+            smc_data['fvgs'].append({'x0': df.index[i-2], 'x1': df.index[i], 'y0': df['Low'].iloc[i-2], 'y1': df['High'].iloc[i], 'color': 'rgba(255, 0, 8, 0.3)'})
             
-    # 2. MARKET STRUCTURE & ORDER BLOCKS
     df['Pivot_High'] = df['High'].rolling(window=swing_length*2+1, center=True).max() == df['High']
     df['Pivot_Low'] = df['Low'].rolling(window=swing_length*2+1, center=True).min() == df['Low']
     
-    last_high = None
-    last_low = None
-    trend = 0 # 1=Bull, -1=Bear
+    last_high = None; last_low = None; trend = 0
     
     for i in range(swing_length, len(df)):
-        curr_idx = df.index[i]
-        curr_close = df['Close'].iloc[i]
+        curr_idx = df.index[i]; curr_close = df['Close'].iloc[i]
         
         if df['Pivot_High'].iloc[i-swing_length]:
             last_high = {'price': df['High'].iloc[i-swing_length], 'idx': df.index[i-swing_length], 'i': i-swing_length}
@@ -337,333 +410,169 @@ def calculate_smc(df, swing_length=5):
             last_low = {'price': df['Low'].iloc[i-swing_length], 'idx': df.index[i-swing_length], 'i': i-swing_length}
             
         if last_high and curr_close > last_high['price']:
-            if trend != 1:
-                label = "CHoCH"
-                trend = 1
-            else:
-                label = "BOS"
-            
-            smc_data['structures'].append({
-                'x0': last_high['idx'], 'x1': curr_idx,
-                'y': last_high['price'], 'color': 'green', 'label': label
-            })
-            
+            label = "CHoCH" if trend != 1 else "BOS"; trend = 1
+            smc_data['structures'].append({'x0': last_high['idx'], 'x1': curr_idx, 'y': last_high['price'], 'color': 'green', 'label': label})
             if last_low:
                 subset = df.iloc[last_low['i']:i]
                 if not subset.empty:
-                    ob_idx = subset['Low'].idxmin()
-                    ob_row = df.loc[ob_idx]
-                    smc_data['order_blocks'].append({
-                        'x0': ob_idx, 'x1': df.index[-1],
-                        'y0': ob_row['Low'], 'y1': ob_row['High'],
-                        'color': 'rgba(33, 87, 243, 0.4)' # Blue
-                    })
+                    ob_idx = subset['Low'].idxmin(); ob_row = df.loc[ob_idx]
+                    smc_data['order_blocks'].append({'x0': ob_idx, 'x1': df.index[-1], 'y0': ob_row['Low'], 'y1': ob_row['High'], 'color': 'rgba(33, 87, 243, 0.4)'})
             last_high = None
 
         elif last_low and curr_close < last_low['price']:
-            if trend != -1:
-                label = "CHoCH"
-                trend = -1
-            else:
-                label = "BOS"
-                
-            smc_data['structures'].append({
-                'x0': last_low['idx'], 'x1': curr_idx,
-                'y': last_low['price'], 'color': 'red', 'label': label
-            })
-            
+            label = "CHoCH" if trend != -1 else "BOS"; trend = -1
+            smc_data['structures'].append({'x0': last_low['idx'], 'x1': curr_idx, 'y': last_low['price'], 'color': 'red', 'label': label})
             if last_high:
                 subset = df.iloc[last_high['i']:i]
                 if not subset.empty:
-                    ob_idx = subset['High'].idxmax()
-                    ob_row = df.loc[ob_idx]
-                    smc_data['order_blocks'].append({
-                        'x0': ob_idx, 'x1': df.index[-1],
-                        'y0': ob_row['Low'], 'y1': ob_row['High'],
-                        'color': 'rgba(255, 0, 0, 0.4)' # Red
-                    })
+                    ob_idx = subset['High'].idxmax(); ob_row = df.loc[ob_idx]
+                    smc_data['order_blocks'].append({'x0': ob_idx, 'x1': df.index[-1], 'y0': ob_row['Low'], 'y1': ob_row['High'], 'color': 'rgba(255, 0, 0, 0.4)'})
             last_low = None
 
     return smc_data
 
-def calc_fear_greed_v4(df):
-    """DarkPool's Fear & Greed v4 Port"""
-    delta = df['Close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    df['FG_RSI'] = 100 - (100 / (1 + rs))
+def calc_correlations(ticker, lookback_days=180):
+    """🧩 Cross-Asset Correlation Matrix."""
+    macro_tickers = {
+        "S&P 500": "SPY", "Bitcoin": "BTC-USD", "10Y Yield": "^TNX", 
+        "Dollar (DXY)": "DX-Y.NYB", "Gold": "GC=F", "Oil": "CL=F"
+    }
     
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    signal = macd.ewm(span=9, adjust=False).mean()
-    hist = macd - signal
-    df['FG_MACD'] = (50 + (hist * 10)).clip(0, 100)
+    # Download data for main ticker
+    df_main = yf.download(ticker, period="1y", interval="1d", progress=False)['Close']
     
-    sma20 = df['Close'].rolling(20).mean()
-    std20 = df['Close'].rolling(20).std()
-    upper = sma20 + (std20 * 2)
-    lower = sma20 - (std20 * 2)
-    df['FG_BB'] = ((df['Close'] - lower) / (upper - lower) * 100).clip(0, 100)
+    # Download macro basket
+    df_macro = yf.download(list(macro_tickers.values()), period="1y", interval="1d", progress=False)['Close']
     
-    sma50 = df['Close'].rolling(50).mean()
-    sma200 = df['Close'].rolling(200).mean()
+    # Combine
+    combined = df_macro.copy()
+    combined[ticker] = df_main
     
-    conditions = [
-        (df['Close'] > sma50) & (sma50 > sma200),
-        (df['Close'] > sma50),
-        (df['Close'] < sma50) & (sma50 < sma200)
-    ]
-    choices = [75, 60, 25]
-    df['FG_MA'] = np.select(conditions, choices, default=40)
+    # Calculate Correlation
+    corr_matrix = combined.iloc[-lookback_days:].corr()
     
-    df['FG_Raw'] = (df['FG_RSI'] * 0.30) + (df['FG_MACD'] * 0.25) + (df['FG_BB'] * 0.25) + (df['FG_MA'] * 0.20)
-    df['FG_Index'] = df['FG_Raw'].rolling(5).mean()
+    # Filter to show only correlations WITH the target ticker
+    target_corr = corr_matrix[ticker].drop(ticker).sort_values(ascending=False)
     
-    vol_ma = df['Volume'].rolling(20).mean()
-    high_vol = df['Volume'] > (vol_ma * 2.5)
-    high_rsi = df['FG_RSI'] > 70
-    momentum = df['Close'] > df['Close'].shift(3) * 1.02
-    above_bb = df['Close'] > (upper * 1.0)
+    # Map tickers back to names
+    inv_map = {v: k for k, v in macro_tickers.items()}
+    target_corr.index = [inv_map.get(x, x) for x in target_corr.index]
     
-    df['IS_FOMO'] = high_vol & high_rsi & momentum & above_bb
-    
-    daily_drop = df['Close'].pct_change() * 100
-    sharp_drop = daily_drop < -3.0
-    panic_vol = df['Volume'] > (vol_ma * 3.0)
-    low_rsi = df['FG_RSI'] < 30
-    
-    df['IS_PANIC'] = sharp_drop & panic_vol & (low_rsi | (daily_drop < -5.0))
-    
-    return df
+    return target_corr
 
-@st.cache_data(ttl=3600)
-def get_seasonality_stats(ticker):
-    """Calculates Monthly Seasonality and Probability Stats."""
+def calc_mtf_trend(ticker):
+    """📡 Multi-Timeframe Trend Radar."""
+    timeframes = {"1H": "1h", "4H": "1h", "Daily": "1d", "Weekly": "1wk"} # 4H approximated
+    trends = {}
+    
+    for tf_name, tf_code in timeframes.items():
+        try:
+            period = "1mo" if tf_name == "1H" else "6mo" if tf_name == "4H" else "2y"
+            df = yf.download(ticker, period=period, interval=tf_code, progress=False)
+            
+            if df.empty: continue
+            
+            # 4H Approximation (Resample 1H)
+            if tf_name == "4H":
+                df = df.resample('4H').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+            
+            # Calc EMA 20 & 50
+            df['EMA20'] = df['Close'].ewm(span=20).mean()
+            df['EMA50'] = df['Close'].ewm(span=50).mean()
+            df['RSI'] = 100 - (100 / (1 + df['Close'].diff().where(df['Close'].diff() > 0, 0).rolling(14).mean() / -df['Close'].diff().where(df['Close'].diff() < 0, 0).rolling(14).mean()))
+            
+            last = df.iloc[-1]
+            trend = "BULLISH" if last['Close'] > last['EMA20'] and last['EMA20'] > last['EMA50'] else "BEARISH" if last['Close'] < last['EMA20'] and last['EMA20'] < last['EMA50'] else "NEUTRAL"
+            
+            trends[tf_name] = {
+                "Trend": trend,
+                "RSI": f"{last['RSI']:.1f}",
+                "EMA Spread": f"{(last['EMA20'] - last['EMA50']):.2f}"
+            }
+        except:
+            trends[tf_name] = {"Trend": "N/A", "RSI": "N/A", "EMA Spread": "N/A"}
+            
+    return pd.DataFrame(trends).T
+
+def calc_intraday_dna(ticker):
+    """⏱️ Intraday Seasonality (Hour of Day)."""
     try:
-        df = yf.download(ticker, period="20y", interval="1mo", progress=False)
-        if df.empty or len(df) < 12: return None
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        if 'Close' not in df.columns:
-             if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
-             else: return None
-
-        df = df.dropna()
-        df['Return'] = df['Close'].pct_change() * 100
-        df['Year'] = df.index.year
-        df['Month'] = df.index.month
-        
-        heatmap_data = df.pivot_table(index='Year', columns='Month', values='Return')
-        
-        periods = [1, 3, 6, 12]
-        hold_stats = {}
-        for p in periods:
-            rolling_ret = df['Close'].pct_change(periods=p) * 100
-            rolling_ret = rolling_ret.dropna()
-            
-            win_count = (rolling_ret > 0).sum()
-            total_count = len(rolling_ret)
-            win_rate = (win_count / total_count * 100) if total_count > 0 else 0
-            avg_ret = rolling_ret.mean()
-            
-            hold_stats[p] = {"Win Rate": win_rate, "Avg Return": avg_ret}
-            
-        month_stats = df.groupby('Month')['Return'].agg(['mean', lambda x: (x > 0).mean() * 100, 'count'])
-        month_stats.columns = ['Avg Return', 'Win Rate', 'Count']
-        
-        return heatmap_data, hold_stats, month_stats
-        
-    except Exception as e:
-        return None
-
-def calc_day_of_week_dna(ticker, lookback, calc_mode):
-    """DarkPool's Day of Week Seasonality DNA Port"""
-    try:
-        df = yf.download(ticker, period="5y", interval="1d", progress=False)
+        # Need 60 days of 1h data (max for yfinance)
+        df = yf.download(ticker, period="60d", interval="1h", progress=False)
         if df.empty: return None
         
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        df = df.iloc[-lookback:].copy()
+        # Calculate hourly returns
+        df['Return'] = df['Close'].pct_change() * 100
+        df['Hour'] = df.index.hour
         
-        if calc_mode == "Close to Close (Total)":
-            df['Day_Return'] = df['Close'].pct_change() * 100
-        else: # Open to Close (Intraday)
-            df['Day_Return'] = ((df['Close'] - df['Open']) / df['Open']) * 100
-            
-        df = df.dropna()
-        df['Day_Name'] = df.index.day_name()
+        # Group by Hour
+        hourly_stats = df.groupby('Hour')['Return'].agg(['mean', 'sum', 'count', lambda x: (x > 0).mean() * 100])
+        hourly_stats.columns = ['Avg Return', 'Total Return', 'Count', 'Win Rate']
         
-        pivot_ret = df.pivot(columns='Day_Name', values='Day_Return').fillna(0)
-        cum_ret = pivot_ret.cumsum()
-        
-        stats = df.groupby('Day_Name')['Day_Return'].agg(['count', 'sum', 'mean', lambda x: (x > 0).mean() * 100])
-        stats.columns = ['Count', 'Total Return', 'Avg Return', 'Win Rate']
-        
-        days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        stats = stats.reindex([d for d in days_order if d in stats.index])
-        
-        return cum_ret, stats
-        
-    except Exception as e:
-        return None
-
-# ==========================================
-# 4. AI ANALYST
-# ==========================================
-def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
-    if not st.session_state.api_key: 
-        return "⚠️ Waiting for OpenAI API Key in the sidebar..."
-    
-    last = df.iloc[-1]
-    trend = "BULLISH" if last['Close'] > last['HMA'] else "BEARISH"
-    risk_dollars = balance * (risk_pct / 100)
-    
-    if trend == "BULLISH":
-        stop_level = last['Pivot_Support']
-        direction = "LONG"
-    else:
-        stop_level = last['Pivot_Resist']
-        direction = "SHORT"
-        
-    if pd.isna(stop_level) or abs(last['Close'] - stop_level) < (last['ATR']*0.5):
-        stop_level = last['Close'] - (last['ATR']*2) if direction == "LONG" else last['Close'] + (last['ATR']*2)
-        
-    dist = abs(last['Close'] - stop_level)
-    if dist == 0: dist = last['ATR']
-    shares = risk_dollars / dist 
-    
-    fund_text = "N/A"
-    if fundamentals:
-        fund_text = f"P/E: {fundamentals.get('P/E Ratio', 'N/A')}. Growth: {fundamentals.get('Rev Growth', 0)*100:.1f}%."
-    
-    fg_val = last['FG_Index']
-    fg_state = "EXTREME GREED" if fg_val >= 80 else "GREED" if fg_val >= 60 else "NEUTRAL" if fg_val >= 40 else "FEAR" if fg_val >= 20 else "EXTREME FEAR"
-    psych_alert = ""
-    if last['IS_FOMO']: psych_alert = "WARNING: ALGORITHMIC FOMO DETECTED."
-    if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
-
-    prompt = f"""
-    Act as a Global Macro Strategist. Analyze {ticker} at ${last['Close']:.2f}.
-    --- FUNDAMENTALS ---
-    {fund_text}
-    --- TECHNICALS ---
-    Trend: {trend}. Volatility (ATR): {last['ATR']:.2f}.
-    --- PSYCHOLOGY (DarkPool Index) ---
-    Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
-    {psych_alert}
-    --- RISK PROTOCOL (1% Rule) ---
-    Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
-    Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
-    --- MISSION ---
-    1. Verdict: BUY, SELL, or WAIT.
-    2. Reasoning: Integrate Technicals, Fundamentals, and Market Psychology.
-    3. Trade Plan: Entry, Stop, Target (2.5R), Size.
-    """
-    
-    try:
-        client = OpenAI(api_key=st.session_state.api_key)
-        res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
-        return res.choices[0].message.content
-    except Exception as e:
-        return f"⚠️ AI Error: {e}"
+        return hourly_stats
+    except: return None
 
 # ==========================================
 # 5. UI DASHBOARD LAYOUT
 # ==========================================
 st.sidebar.header("🎛️ Terminal Controls")
 
-# --- INPUT MODE SELECTION ---
-input_mode = st.sidebar.radio(
-    "Input Mode:", 
-    ["Curated Lists", "Manual Search (Global)"],
-    index=1,
-    help="Choose 'Curated Lists' to select from preset menus, or 'Manual Search' to type any ticker symbol yourself."
-)
+input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"], index=1)
 
 if input_mode == "Curated Lists":
-    assets = {
-        "Indices": ["SPY", "QQQ", "IWM", "^VIX"],
-        "Crypto": ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD"],
-        "Tech": ["NVDA", "TSLA", "AAPL", "MSFT"],
-        "Macro": ["^TNX", "DX-Y.NYB", "TLT"],
-        "LSE/Commodities": ["SSLN.L", "SGLN.L", "SHEL.L", "BP.L"] 
-    }
-    cat = st.sidebar.selectbox(
-        "Asset Class", 
-        list(assets.keys()),
-        help="Select a category of assets to filter the ticker list."
-    )
-    ticker = st.sidebar.selectbox(
-        "Ticker", 
-        assets[cat],
-        help="Choose a specific asset from the selected category."
-    )
+    assets = {"Indices": ["SPY", "QQQ"], "Crypto": ["BTC-USD", "ETH-USD"], "Tech": ["NVDA", "TSLA"], "Macro": ["^TNX", "DX-Y.NYB"]}
+    cat = st.sidebar.selectbox("Asset Class", list(assets.keys()))
+    ticker = st.sidebar.selectbox("Ticker", assets[cat])
 else:
-    # --- SEARCH BOX FEATURE ---
     st.sidebar.info("Type any ticker (e.g. SSLN.L, BTC-USD)")
-    ticker = st.sidebar.text_input(
-        "Search Ticker Symbol", 
-        value="SSLN.L",
-        help="Type any valid Yahoo Finance ticker here. Works for Stocks, Crypto, Indices, and Forex."
-    ).upper()
+    ticker = st.sidebar.text_input("Search Ticker Symbol", value="SSLN.L").upper()
 
-interval = st.sidebar.selectbox(
-    "Interval", 
-    ["15m", "1h", "4h", "1d", "1wk"], 
-    index=3,
-    help="Select the timeframe for the chart bars (e.g., 1 Day, 1 Hour)."
-)
+interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=3)
 st.sidebar.markdown("---")
 
-balance = st.sidebar.number_input(
-    "Capital ($)", 
-    1000, 1000000, 10000,
-    help="Enter your total trading capital for position sizing calculations."
-)
-risk_pct = st.sidebar.slider(
-    "Risk %", 
-    0.5, 3.0, 1.0,
-    help="Adjust the percentage of capital you are willing to risk on this trade."
-)
+balance = st.sidebar.number_input("Capital ($)", 1000, 1000000, 10000)
+risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, 1.0)
 
-# --- GLOBAL MACRO HEADER (DYNAMIC GRID) ---
-m_price, m_chg = get_macro_data()
+# --- GLOBAL MACRO HEADER ---
+macro_groups, m_price, m_chg = get_macro_data()
+
 if m_price:
-    # Convert dictionary to lists for iteration
-    items = list(m_price.keys())
-    
-    # Create rows of 4 columns
-    for i in range(0, len(items), 4):
-        cols = st.columns(4)
-        for j in range(4):
-            if i + j < len(items):
-                name = items[i+j]
-                val = m_price[name]
-                pct = m_chg[name]
-                
-                # Format logic
-                if "Yield" in name or "Index" in name or "VIX" in name:
-                    fmt_val = f"{val:.2f}"
-                else:
-                    fmt_val = f"{val:,.2f}"
-                    
-                cols[j].metric(name, fmt_val, f"{pct:.2f}%")
-                
+    group_names = list(macro_groups.keys())
+    for i in range(0, len(group_names), 2): 
+        cols = st.columns(2)
+        g1 = group_names[i]
+        with cols[0].container(border=True):
+            st.markdown(f"#### {g1}")
+            sc = st.columns(4) 
+            for x, (n, s) in enumerate(macro_groups[g1].items()):
+                fmt = "{:.3f}" if any(c in n for c in ["Yield","GBP","EUR","JPY"]) else "{:,.2f}"
+                sc[x].metric(n.split('(')[0], fmt.format(m_price.get(n,0)), f"{m_chg.get(n,0):.2f}%")
+        
+        if i + 1 < len(group_names):
+            g2 = group_names[i+1]
+            with cols[1].container(border=True):
+                st.markdown(f"#### {g2}")
+                sc = st.columns(4)
+                for x, (n, s) in enumerate(macro_groups[g2].items()):
+                    fmt = "{:.3f}" if any(c in n for c in ["Yield","GBP","EUR","JPY"]) else "{:,.2f}"
+                    sc[x].metric(n.split('(')[0], fmt.format(m_price.get(n,0)), f"{m_chg.get(n,0):.2f}%")
     st.markdown("---")
 
 # --- MAIN ANALYSIS TABS ---
-# UPGRADE: Added "Smart Money Concepts" Tab
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Technical Deep Dive", "🌍 Sector & Fundamentals", "📅 Monthly Seasonality", "📆 Day of Week DNA", "📟 DarkPool Dashboard", "🏦 Smart Money Concepts"])
+# UPGRADE: 9 TABS NOW
+tab1, tab2, tab3, tab4, tab9, tab5, tab6, tab7, tab8 = st.tabs([
+    "📊 Technical Deep Dive", 
+    "🌍 Sector & Fundamentals", 
+    "📅 Monthly Seasonality", 
+    "📆 Day of Week DNA", 
+    "🧩 Correlation & MTF", # NEW TAB
+    "📟 DarkPool Dashboard", 
+    "🏦 Smart Money Concepts",
+    "🔮 Quantitative Forecasting",
+    "📊 Volume Profile"
+])
 
-if st.button(f"Analyze {ticker}", help="Click to run the data pipeline and AI analysis for the selected ticker."):
+if st.button(f"Analyze {ticker}", help="Run Analysis"):
     st.session_state['run_analysis'] = True
 
 if st.session_state.get('run_analysis'):
@@ -680,210 +589,137 @@ if st.session_state.get('run_analysis'):
             with tab1:
                 st.subheader(f"🎯 Sniper Scope: {ticker}")
                 col_chart, col_gauge = st.columns([0.75, 0.25])
-                
                 with col_chart:
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
                     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
                     fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
-                    
-                    last_close = df['Close'].iloc[-1]
-                    for zone in sr_zones:
-                        if last_close > zone['max']: col = "rgba(0, 255, 0, 0.15)"
-                        elif last_close < zone['min']: col = "rgba(255, 0, 0, 0.15)"
-                        else: col = "rgba(128, 128, 128, 0.15)"
-                        fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1], xref="x", yref="y", y0=zone['min'], y1=zone['max'], fillcolor=col, line=dict(width=0), row=1, col=1)
-                    
-                    fomo_dates = df[df['IS_FOMO']].index
-                    panic_dates = df[df['IS_PANIC']].index
-                    fig.add_trace(go.Scatter(x=fomo_dates, y=df.loc[fomo_dates, 'High']*1.02, mode='markers', marker=dict(symbol='triangle-up', size=10, color='purple'), name="FOMO Algo"), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=panic_dates, y=df.loc[panic_dates, 'Low']*0.98, mode='markers', marker=dict(symbol='triangle-down', size=10, color='yellow'), name="Panic Algo"), row=1, col=1)
-
-                    colors = ['#00ff00' if v > 0 else '#ff0000' for v in df['MFI']]
-                    fig.add_trace(go.Bar(x=df.index, y=df['MFI'], marker_color=colors, name="Smart Money"), row=2, col=1)
+                    for z in sr_zones:
+                        col = "rgba(0, 255, 0, 0.15)" if df['Close'].iloc[-1] > z['max'] else "rgba(255, 0, 0, 0.15)"
+                        fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1], xref="x", yref="y", y0=z['min'], y1=z['max'], fillcolor=col, line=dict(width=0), row=1, col=1)
                     fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig, use_container_width=True)
-                
                 with col_gauge:
-                    curr_fg = df['FG_Index'].iloc[-1]
-                    if np.isnan(curr_fg): curr_fg = 50
-                    fig_gauge = go.Figure(go.Indicator(
-                        mode = "gauge+number",
-                        value = curr_fg,
-                        title = {'text': "Fear & Greed Index"},
-                        gauge = {
-                            'axis': {'range': [0, 100]},
-                            'bar': {'color': "white", 'thickness': 0.2},
-                            'steps': [{'range': [0, 20], 'color': "#FF0000"}, {'range': [20, 40], 'color': "#FFA500"}, {'range': [40, 60], 'color': "#808080"}, {'range': [60, 80], 'color': "#90EE90"}, {'range': [80, 100], 'color': "#00FF00"}]
-                        }
-                    ))
+                    fg_val = df['FG_Index'].iloc[-1]
+                    fig_gauge = go.Figure(go.Indicator(mode="gauge+number", value=fg_val, title={'text': "Fear & Greed"}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "white"}, 'steps': [{'range': [0, 20], 'color': "#FF0000"}, {'range': [80, 100], 'color': "#00FF00"}]}))
                     fig_gauge.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
                     st.plotly_chart(fig_gauge, use_container_width=True)
-                    st.markdown("#### Psychology Stats")
-                    st.metric("RSI Contribution", f"{df['FG_RSI'].iloc[-1]:.1f}/100")
-                    st.metric("MACD Momentum", f"{df['FG_MACD'].iloc[-1]:.1f}/100")
-                    if df['IS_FOMO'].iloc[-1]: st.error("🚀 FOMO DETECTED")
-                    if df['IS_PANIC'].iloc[-1]: st.warning("💥 PANIC DETECTED")
+                    st.metric("RSI", f"{df['FG_RSI'].iloc[-1]:.1f}")
+                    st.metric("MACD", f"{df['FG_MACD'].iloc[-1]:.1f}")
 
                 st.markdown("### 🤖 Strategy Briefing")
-                verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
-                st.info(verdict)
+                st.info(ask_ai_analyst(df, ticker, fund, balance, risk_pct))
 
-            # --- TAB 2: SECTOR & FUNDAMENTALS ---
+            # --- TAB 2: FUNDAMENTALS ---
             with tab2:
-                st.subheader(f"🏢 Fundamental Health")
                 if fund:
                     c1, c2, c3 = st.columns(3)
                     c1.metric("P/E Ratio", f"{fund.get('P/E Ratio', 'N/A')}")
                     c2.metric("Rev Growth", f"{fund.get('Rev Growth', 0)*100:.1f}%")
                     c3.metric("Debt/Equity", f"{fund.get('Debt/Equity', 'N/A')}")
-                    st.write(f"**Summary:** {fund.get('Summary', 'No Data')[:300]}...")
-                else:
-                    st.warning("Fundamentals not available for this asset.")
-                st.markdown("---")
+                    st.write(f"**Summary:** {fund.get('Summary', 'No Data')}")
                 st.subheader("🔥 Global Market Heatmap")
                 s_data = get_global_performance()
                 if s_data is not None:
-                    fig_sector = go.Figure()
-                    colors = ['#00ff00' if v >= 0 else '#ff0000' for v in s_data.values]
-                    fig_sector.add_trace(go.Bar(x=s_data.values, y=s_data.index, orientation='h', marker_color=colors, text=[f"{v:.2f}%" for v in s_data.values], textposition='auto'))
-                    fig_sector.update_layout(height=400, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0), xaxis_title="5-Day Performance (%)")
+                    fig_sector = go.Figure(go.Bar(x=s_data.values, y=s_data.index, orientation='h', marker_color=['#00ff00' if v >= 0 else '#ff0000' for v in s_data.values]))
+                    fig_sector.update_layout(height=400, template="plotly_dark")
                     st.plotly_chart(fig_sector, use_container_width=True)
 
-            # --- TAB 3: MONTHLY SEASONALITY ---
+            # --- TAB 3: SEASONALITY ---
             with tab3:
-                st.subheader(f"📅 Monthly Seasonality: {ticker}")
-                seas_res = get_seasonality_stats(ticker)
-                if seas_res:
-                    hm_data, hold_stats, month_stats = seas_res
-                    hm_data = hm_data.reindex(columns=range(1, 13))
-                    fig_hm = px.imshow(hm_data, labels=dict(x="Month", y="Year", color="Return %"), x=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], color_continuous_scale='RdYlGn', text_auto='.1f')
-                    fig_hm.update_layout(template="plotly_dark", height=500, xaxis_side="top")
+                seas = get_seasonality_stats(ticker)
+                if seas:
+                    hm, hold, month = seas
+                    fig_hm = px.imshow(hm, color_continuous_scale='RdYlGn', text_auto='.1f')
+                    fig_hm.update_layout(template="plotly_dark", height=500)
                     st.plotly_chart(fig_hm, use_container_width=True)
-                    st.markdown("---")
-                    c_prob1, c_prob2 = st.columns(2)
-                    with c_prob1:
-                        st.markdown("#### 🎲 Holding Period Probabilities")
-                        hold_df = pd.DataFrame(hold_stats).T
-                        hold_df.columns = ["Win Rate %", "Avg Return %"]
-                        st.dataframe(hold_df.style.format("{:.1f}%").background_gradient(subset=["Win Rate %"], cmap="RdYlGn", vmin=30, vmax=70))
-                    with c_prob2:
-                        st.markdown("#### 🔮 Forecast (Historical Odds)")
-                        import datetime
-                        curr_m = datetime.datetime.now().month
-                        next_m = (curr_m % 12) + 1
-                        m_names = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
-                        try:
-                            curr_data = month_stats.loc[curr_m]
-                            next_data = month_stats.loc[next_m]
-                            col1, col2 = st.columns(2)
-                            col1.metric(f"Current ({m_names[curr_m]})", f"{curr_data['Win Rate']:.1f}% Win", f"{curr_data['Avg Return']:.2f}% Avg")
-                            col2.metric(f"Next ({m_names[next_m]})", f"{next_data['Win Rate']:.1f}% Win", f"{next_data['Avg Return']:.2f}% Avg")
-                        except: st.warning("Insufficient history for monthly forecast.")
-                else: st.warning("Insufficient data to calculate seasonality stats.")
+                    c1, c2 = st.columns(2)
+                    c1.dataframe(pd.DataFrame(hold).T.style.format("{:.1f}%").background_gradient(cmap="RdYlGn"))
+                    curr_m = datetime.datetime.now().month
+                    c2.metric(f"Current Month Win Rate", f"{month.loc[curr_m, 'Win Rate']:.1f}%")
 
-            # --- TAB 4: DAY OF WEEK DNA ---
+            # --- TAB 4: DNA & HOURLY ---
             with tab4:
-                st.subheader("📆 Day of Week DNA Analysis")
-                c_opts1, c_opts2 = st.columns(2)
-                with c_opts1:
-                    dna_lookback = st.slider("DNA Lookback (Days)", 50, 2000, 250)
-                with c_opts2:
-                    dna_mode = st.selectbox("Calculation Mode", ["Close to Close (Total)", "Open to Close (Intraday)"])
+                st.subheader("📆 Day & Hour DNA")
+                c1, c2 = st.columns(2)
                 
-                dna_res = calc_day_of_week_dna(ticker, dna_lookback, dna_mode)
-                
+                # Day of Week
+                dna_res = calc_day_of_week_dna(ticker, 250, "Close to Close (Total)")
                 if dna_res:
-                    cum_dna, stats_dna = dna_res
-                    st.markdown(f"**Cumulative Performance by Weekday (Last {dna_lookback} Days)**")
-                    fig_dna = go.Figure()
-                    day_colors = {"Monday": "red", "Tuesday": "orange", "Wednesday": "yellow", "Thursday": "cyan", "Friday": "lime", "Saturday": "magenta", "Sunday": "gray"}
-                    for col in cum_dna.columns:
-                        if col in day_colors:
-                            fig_dna.add_trace(go.Scatter(x=cum_dna.index, y=cum_dna[col], mode='lines', name=col, line=dict(color=day_colors[col], width=2)))
-                    fig_dna.add_hline(y=0, line_dash="dot", line_color="gray")
-                    fig_dna.update_layout(template="plotly_dark", height=500, xaxis_title="Date", yaxis_title="Cumulative Return (%)")
-                    st.plotly_chart(fig_dna, use_container_width=True)
-                    st.markdown("**Weekday Statistics**")
-                    st.dataframe(stats_dna.style.format({"Total Return": "{:.1f}%", "Avg Return": "{:.2f}%", "Win Rate": "{:.1f}%", "Count": "{:.0f}"}).background_gradient(subset=["Win Rate"], cmap="RdYlGn", vmin=40, vmax=60), use_container_width=True)
-                else:
-                    st.warning("Insufficient daily data for DNA analysis.")
+                    cum, stats = dna_res
+                    with c1:
+                        st.markdown("**Day of Week Performance**")
+                        fig_dna = go.Figure()
+                        for c in cum.columns: fig_dna.add_trace(go.Scatter(x=cum.index, y=cum[c], name=c))
+                        fig_dna.update_layout(template="plotly_dark", height=400)
+                        st.plotly_chart(fig_dna, use_container_width=True)
+                        st.dataframe(stats.style.background_gradient(subset=['Win Rate'], cmap="RdYlGn"))
+                
+                # Hourly DNA
+                hourly_res = calc_intraday_dna(ticker)
+                if hourly_res is not None:
+                    with c2:
+                        st.markdown("**Intraday (Hourly) Performance**")
+                        fig_hr = px.bar(hourly_res, x=hourly_res.index, y='Avg Return', color='Win Rate', color_continuous_scale='RdYlGn')
+                        fig_hr.update_layout(template="plotly_dark", height=400)
+                        st.plotly_chart(fig_hr, use_container_width=True)
+                        st.dataframe(hourly_res.style.format("{:.2f}"))
 
-            # --- TAB 5: DARKPOOL DASHBOARD V2 ---
-            with tab5:
-                st.subheader("📟 DarkPool Dashboard v2")
-                last = df.iloc[-1]
-                mom_score = last['Mom_Score']
-                signal = "STRONG BUY" if mom_score > 50 else "BUY" if mom_score > 20 else "SELL" if mom_score < -50 else "STRONG SELL" if mom_score < -20 else "HOLD"
+            # --- TAB 9: CORRELATION & MTF (NEW) ---
+            with tab9:
+                st.subheader("🧩 Cross-Asset Intelligence")
+                c1, c2 = st.columns([0.4, 0.6])
                 
-                dash_data = {
-                    "Metric": ["Momentum Score", "Signal", "RSI (14)", "Money Flow (MFI)", "Trend (EMA)", "Volume vs MA", "Volatility (Range)"],
-                    "Value": [f"{mom_score:.0f}", signal, f"{last['RSI']:.2f}", f"{last['MFI']:.2f}", "BULLISH" if last['EMA_Fast'] > last['EMA_Slow'] else "BEARISH", f"{(last['Volume'] / last['Volume'].mean() * 100) - 100:.1f}%", f"{((last['High']-last['Low'])/last['Low']*100):.2f}%"]
-                }
-                st.dataframe(pd.DataFrame(dash_data), height=300, use_container_width=True)
-                st.markdown("#### 🔬 Detailed Indicators")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("ADX Strength", f"{last['ADX']:.2f}")
-                c2.metric("Stoch K/D", f"{last['Stoch_K']:.0f} / {last['Stoch_D']:.0f}")
-                c3.metric("MACD", f"{last['MACD']:.3f}")
-                c4.metric("OBV Trend", "UP" if last['OBV'] > df['OBV'].iloc[-2] else "DOWN")
-                delta_color = 'green' if last['Close'] > last['Open'] else 'red'
-                st.markdown(f"**Volume Delta:** <span style='color:{delta_color}'>{'BUY PRESSURE' if delta_color=='green' else 'SELL PRESSURE'}</span>", unsafe_allow_html=True)
-
-            # --- TAB 6: SMART MONEY CONCEPTS ---
-            with tab6:
-                st.subheader("🏦 LuxAlgo Smart Money Concepts (SMC)")
-                
-                # Input controls for SMC
-                c_smc1, c_smc2 = st.columns(2)
-                with c_smc1:
-                    smc_swing_len = st.slider("SMC Swing Length", 3, 20, 5)
-                
-                # Calculate SMC
-                smc_res = calculate_smc(df, smc_swing_len)
-                
-                fig_smc = go.Figure()
-                
-                # 1. Candlestick Chart
-                fig_smc.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"))
-                
-                # 2. Draw Order Blocks (Rectangles)
-                for ob in smc_res['order_blocks']:
-                    fig_smc.add_shape(type="rect",
-                        x0=ob['x0'], x1=ob['x1'], y0=ob['y0'], y1=ob['y1'],
-                        fillcolor=ob['color'], line=dict(width=0), opacity=0.5
-                    )
+                with c1:
+                    st.markdown("**📡 Multi-Timeframe Radar**")
+                    mtf_df = calc_mtf_trend(ticker)
                     
-                # 3. Draw Fair Value Gaps (Rectangles)
-                for fvg in smc_res['fvgs']:
-                     fig_smc.add_shape(type="rect",
-                        x0=fvg['x0'], x1=fvg['x1'], y0=fvg['y0'], y1=fvg['y1'],
-                        fillcolor=fvg['color'], line=dict(width=0), opacity=0.5
-                    )
-                
-                # 4. Draw Structure Breaks (Lines & Annotations)
-                for struct in smc_res['structures']:
-                    # Dotted Line
-                    fig_smc.add_shape(type="line",
-                        x0=struct['x0'], x1=struct['x1'], y0=struct['y'], y1=struct['y'],
-                        line=dict(color=struct['color'], width=1, dash="dot")
-                    )
-                    # Label
-                    fig_smc.add_annotation(
-                        x=struct['x1'], y=struct['y'], text=struct['label'],
-                        showarrow=False, yshift=10 if struct['color']=='green' else -10,
-                        font=dict(color=struct['color'], size=10)
-                    )
+                    def color_trend(val):
+                        color = '#00ff00' if val == 'BULLISH' else '#ff0000' if val == 'BEARISH' else 'white'
+                        return f'color: {color}; font-weight: bold'
+                    
+                    st.dataframe(mtf_df.style.map(color_trend, subset=['Trend']), use_container_width=True)
+                    
+                with c2:
+                    st.markdown("**🔗 Macro Correlation Matrix (180 Days)**")
+                    corr_data = calc_correlations(ticker)
+                    fig_corr = px.bar(x=corr_data.values, y=corr_data.index, orientation='h', color=corr_data.values, color_continuous_scale='RdBu')
+                    fig_corr.update_layout(template="plotly_dark", height=400, xaxis_title="Correlation Coefficient")
+                    st.plotly_chart(fig_corr, use_container_width=True)
 
-                fig_smc.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False, title=f"SMC Analysis: {ticker}")
+            # --- TAB 5: DASHBOARD ---
+            with tab5:
+                mom_score = df['Mom_Score'].iloc[-1]
+                sig = "BUY" if mom_score > 20 else "SELL" if mom_score < -20 else "HOLD"
+                dash_data = {"Metric": ["Momentum", "Signal", "RSI", "Trend"], "Value": [f"{mom_score:.0f}", sig, f"{df['RSI'].iloc[-1]:.1f}", "BULL" if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else "BEAR"]}
+                st.dataframe(pd.DataFrame(dash_data), use_container_width=True)
+
+            # --- TAB 6: SMC ---
+            with tab6:
+                smc = calculate_smc(df)
+                fig_smc = go.Figure(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']))
+                for ob in smc['order_blocks']: fig_smc.add_shape(type="rect", x0=ob['x0'], x1=ob['x1'], y0=ob['y0'], y1=ob['y1'], fillcolor=ob['color'], opacity=0.5, line_width=0)
+                for fvg in smc['fvgs']: fig_smc.add_shape(type="rect", x0=fvg['x0'], x1=fvg['x1'], y0=fvg['y0'], y1=fvg['y1'], fillcolor=fvg['color'], opacity=0.5, line_width=0)
+                fig_smc.update_layout(height=600, template="plotly_dark", title="SMC Analysis")
                 st.plotly_chart(fig_smc, use_container_width=True)
-                
-                st.markdown("""
-                **Legend:**
-                * **BOS (Break of Structure):** Trend continuation signal.
-                * **CHoCH (Change of Character):** Potential trend reversal signal.
-                * **Blue/Red Boxes:** Order Blocks (Institutional Supply/Demand).
-                * **Green/Red Rectangles:** Fair Value Gaps (Imbalances).
-                """)
+
+            # --- TAB 7: QUANT ---
+            with tab7:
+                mc = run_monte_carlo(df)
+                fig_mc = go.Figure()
+                for i in range(50): fig_mc.add_trace(go.Scatter(y=mc[:,i], mode='lines', line=dict(color='rgba(255,255,255,0.05)'), showlegend=False))
+                fig_mc.add_trace(go.Scatter(y=np.mean(mc, axis=1), mode='lines', name='Mean', line=dict(color='orange')))
+                fig_mc.update_layout(height=500, template="plotly_dark", title="Monte Carlo Forecast (30 Days)")
+                st.plotly_chart(fig_mc, use_container_width=True)
+
+            # --- TAB 8: VOLUME PROFILE ---
+            with tab8:
+                vp, poc = calc_volume_profile(df)
+                fig_vp = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.7, 0.3])
+                fig_vp.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close']), row=1, col=1)
+                fig_vp.add_trace(go.Bar(x=vp['Volume'], y=vp['Price'], orientation='h', marker_color='rgba(0,200,255,0.3)'), row=1, col=2)
+                fig_vp.add_hline(y=poc, line_color="yellow")
+                fig_vp.update_layout(height=600, template="plotly_dark", title="Volume Profile (VPVR)")
+                st.plotly_chart(fig_vp, use_container_width=True)
 
         else:
-            st.error("Data connection failed. Try another ticker.")
+            st.error("Connection failed.")
