@@ -50,15 +50,21 @@ def get_fundamentals(ticker):
     except: return None
 
 @st.cache_data(ttl=300)
-def get_sector_data():
-    """Fetches performance of key US Sectors."""
-    sectors = {
-        "Tech": "XLK", "Energy": "XLE", "Financials": "XLF", 
-        "Healthcare": "XLV", "Consumer": "XLY"
+def get_global_performance():
+    """Fetches performance of a Global Multi-Asset Basket."""
+    # UPGRADE: Expanded list to include Crypto, Commodities, and Bonds
+    assets = {
+        "Tech (XLK)": "XLK", 
+        "Energy (XLE)": "XLE", 
+        "Financials (XLF)": "XLF", 
+        "Bitcoin (BTC)": "BTC-USD", 
+        "Gold (GLD)": "GLD",
+        "Oil (USO)": "USO",
+        "Treasuries (TLT)": "TLT"
     }
     try:
         results = {}
-        for name, ticker in sectors.items():
+        for name, ticker in assets.items():
             df = yf.download(ticker, period="5d", interval="1d", progress=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
@@ -71,7 +77,7 @@ def get_sector_data():
                 change = ((price - prev) / prev) * 100
                 results[name] = change
         
-        return pd.Series(results).sort_values(ascending=False)
+        return pd.Series(results).sort_values(ascending=True) # Sorted for the chart
     except: return None
 
 def safe_download(ticker, period, interval):
@@ -202,7 +208,6 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
 st.sidebar.header("🎛️ Terminal Controls")
 
 # --- INPUT MODE SELECTION ---
-# Added Search Box Feature functionality by setting index=1 as default
 input_mode = st.sidebar.radio(
     "Input Mode:", 
     ["Curated Lists", "Manual Search (Global)"],
@@ -313,10 +318,31 @@ if st.session_state.get('run_analysis'):
                     st.warning("Fundamentals not available for this asset.")
                 
                 st.markdown("---")
-                st.subheader("🏆 Sector Performance")
-                s_data = get_sector_data()
+                # UPGRADE: Replaced Dataframe with Plotly Heatmap
+                st.subheader("🔥 Global Market Heatmap")
+                s_data = get_global_performance()
                 if s_data is not None:
-                    s_df = s_data.to_frame(name="Change").style.format("{:.2f}%").background_gradient(cmap="RdYlGn", vmin=-2, vmax=2)
-                    st.dataframe(s_df, height=400)
+                    # Create a horizontal bar chart
+                    fig_sector = go.Figure()
+                    
+                    # Color logic: Green for positive, Red for negative
+                    colors = ['#00ff00' if v >= 0 else '#ff0000' for v in s_data.values]
+                    
+                    fig_sector.add_trace(go.Bar(
+                        x=s_data.values,
+                        y=s_data.index,
+                        orientation='h',
+                        marker_color=colors,
+                        text=[f"{v:.2f}%" for v in s_data.values],
+                        textposition='auto'
+                    ))
+                    
+                    fig_sector.update_layout(
+                        height=400, 
+                        template="plotly_dark", 
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        xaxis_title="5-Day Performance (%)"
+                    )
+                    st.plotly_chart(fig_sector, use_container_width=True)
         else:
             st.error("Data connection failed. Try another ticker.")
