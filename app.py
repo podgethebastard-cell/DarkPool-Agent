@@ -654,10 +654,9 @@ except Exception as e:
 return None
 
 # ==========================================
-# 4. AI ANALYST (MODIFIED FOR TIMEFRAME AWARENESS)
+# 4. AI ANALYST
 # ==========================================
-# --- FIX: ADDED 'timeframe' PARAMETER ---
-def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
+def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
 if not st.session_state.api_key: 
 return "⚠️ Waiting for OpenAI API Key in the sidebar..."
 
@@ -689,26 +688,20 @@ psych_alert = ""
 if last['IS_FOMO']: psych_alert = "WARNING: ALGORITHMIC FOMO DETECTED."
 if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
 
-# --- FIX: UPDATED PROMPT WITH TIMEFRAME CONTEXT ---
 prompt = f"""
-Act as a Global Macro Strategist. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
-
+Act as a Global Macro Strategist. Analyze {ticker} at ${last['Close']:.2f}.
 --- FUNDAMENTALS ---
 {fund_text}
-
---- TECHNICALS ({timeframe}) ---
+--- TECHNICALS ---
 Trend: {trend}. Volatility (ATR): {last['ATR']:.2f}.
-
 --- PSYCHOLOGY (DarkPool Index) ---
 Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
 {psych_alert}
-
 --- RISK PROTOCOL (1% Rule) ---
 Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
 Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
-
 --- MISSION ---
-1. Verdict: BUY, SELL, or WAIT (Based on {timeframe} chart).
+1. Verdict: BUY, SELL, or WAIT.
 2. Reasoning: Integrate Technicals, Fundamentals, and Market Psychology.
 3. Trade Plan: Entry, Stop, Target (2.5R), Size.
 """
@@ -865,8 +858,7 @@ st.metric("RSI", f"{df['FG_RSI'].iloc[-1]:.1f}")
 st.metric("MACD", f"{df['FG_MACD'].iloc[-1]:.1f}")
 
 st.markdown("### 🤖 Strategy Briefing")
-# --- FIX: PASS TIMEFRAME INTERVAL TO AI ANALYST ---
-ai_verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct, interval)
+ai_verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
 st.info(ai_verdict)
 
 # --- TAB 2: FUNDAMENTALS ---
