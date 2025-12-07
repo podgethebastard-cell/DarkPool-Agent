@@ -102,7 +102,7 @@ if "TELEGRAM_CHAT_ID" in st.secrets: st.session_state.tg_chat = st.secrets["TELE
 tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password")
 tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat)
 
-# --- TOP 100 ASSETS (FULL DICTIONARY) ---
+# --- TOP 100 ASSETS ---
 crypto_assets = {
     # 👑 THE KINGS
     "Bitcoin (BTC)": "BTC-USD", "Ethereum (ETH)": "ETH-USD", "Solana (SOL)": "SOL-USD",
@@ -186,8 +186,32 @@ def calculate_linreg_mom(series, length=20):
     slope = series.rolling(length).apply(lambda y: linregress(x, y)[0], raw=True)
     return slope
 
-def calculate_engine(df):
-    """Core Calculation Pipeline: 12 Indicators"""
+# --- INSTITUTIONAL DATA FETCHING (1D & 1W) ---
+@st.cache_data(ttl=600)
+def get_institutional_trend(ticker):
+    """
+    Fetches Daily and Weekly data specifically for the 14th Indicator.
+    Returns the latest 50 EMA for Daily and Weekly.
+    """
+    try:
+        # Download 1 Year of Daily Data
+        df_d = yf.download(ticker, period="2y", interval="1d", progress=False)
+        if isinstance(df_d.columns, pd.MultiIndex): df_d.columns = df_d.columns.get_level_values(0)
+        
+        # Download 2 Years of Weekly Data
+        df_w = yf.download(ticker, period="2y", interval="1wk", progress=False)
+        if isinstance(df_w.columns, pd.MultiIndex): df_w.columns = df_w.columns.get_level_values(0)
+        
+        # Calculate 50 EMAs
+        ema_d = df_d['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        ema_w = df_w['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        
+        return ema_d, ema_w
+    except:
+        return 0, 0
+
+def calculate_engine(df, ticker):
+    """Core Calculation Pipeline: 14 Indicators"""
     
     # 1. APEX TREND MASTER
     apex_len = 55
@@ -282,8 +306,30 @@ def calculate_engine(df):
     df['Stoch_K'] = stoch_rsi.rolling(3).mean() * 100
     df['Stoch_D'] = df['Stoch_K'].rolling(3).mean()
     
-    # 12. ATR (Already calc for ADX/Apex) - Added for visibility
+    # 12. ATR (Already calc for ADX/Apex)
     
+    # 13. DARKPOOL MOVING AVERAGES (5-Layer System)
+    df['DP_MA10'] = df['Close'].ewm(span=10).mean()
+    df['DP_MA20'] = df['Close'].ewm(span=20).mean()
+    df['DP_MA50'] = df['Close'].ewm(span=50).mean()
+    df['DP_MA100'] = df['Close'].ewm(span=100).mean()
+    df['DP_MA200'] = df['Close'].ewm(span=200).mean()
+    
+    df['DP_Score'] = (
+        np.where(df['Close'] > df['DP_MA10'], 1, 0) + 
+        np.where(df['Close'] > df['DP_MA20'], 1, 0) + 
+        np.where(df['Close'] > df['DP_MA50'], 1, 0) + 
+        np.where(df['Close'] > df['DP_MA100'], 1, 0) + 
+        np.where(df['Close'] > df['DP_MA200'], 1, 0)
+    )
+
+    # 14. INSTITUTIONAL TREND (1D & 1W EMA Cloud)
+    # We fetch this once and apply it to the whole column for the AI to read
+    ema_d, ema_w = get_institutional_trend(ticker)
+    df['Inst_EMA_D'] = ema_d
+    df['Inst_EMA_W'] = ema_w
+    df['Inst_Trend'] = np.where(ema_d > ema_w, 1, -1) # 1 = Bullish, -1 = Bearish
+
     return df
 
 def calculate_strategies(df):
@@ -301,12 +347,9 @@ def calculate_strategies(df):
     # 3. Bollinger Directed
     sma20 = df['Close'].rolling(20).mean()
     std20 = df['Close'].rolling(20).std()
-    # Close < Lower (Dip Buy attempt) or Close > Upper (Breakout/Overbought)
-    # Simple crossover logic:
     df['Sig_BB'] = np.where(df['Close'] < (sma20 - 2*std20), 1, np.where(df['Close'] > (sma20 + 2*std20), -1, 0))
 
     # 4. RSI Strategy (30/70)
-    # Re-calc standard RSI for strategy logic
     rsi = 100 - (100 / (1 + (pd.Series(np.where(df['Close'].diff() > 0, df['Close'].diff(), 0)).rolling(14).mean() / pd.Series(np.where(df['Close'].diff() < 0, -df['Close'].diff(), 0)).rolling(14).mean())))
     df['Sig_RSI'] = np.where(rsi < 30, 1, np.where(rsi > 70, -1, 0))
     
@@ -340,10 +383,24 @@ components.html(
 df = get_data(ticker, interval)
 
 if df is not None and not df.empty:
-    df = calculate_engine(df)
+    df = calculate_engine(df, ticker)
     df = calculate_strategies(df)
     last = df.iloc[-1]
     
+    # --- PRE-CALCULATE LEVELS FOR BROADCAST & AI ---
+    curr_price = last['Close']
+    atr_val = last['ATR']
+    trend_dir = "LONG" if last['Apex_Trend'] == 1 else "SHORT" if last['Apex_Trend'] == -1 else "NEUTRAL"
+    
+    if trend_dir == "LONG":
+        stop_loss = curr_price - (2 * atr_val)
+        take_profit = curr_price + (3 * atr_val)
+        entry_price = curr_price
+    else:
+        stop_loss = curr_price + (2 * atr_val)
+        take_profit = curr_price - (3 * atr_val)
+        entry_price = curr_price
+
     # --- 2. SIGNAL HUD ---
     st.markdown("### 🧬 Market DNA")
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -362,10 +419,10 @@ if df is not None and not df.empty:
     mom_txt = "POSITIVE" if mom_cond == 1 else "NEGATIVE"
     c2.markdown(card("Momentum", mom_txt, mom_cond), unsafe_allow_html=True)
     
-    # ADX Strength
-    adx_val = last['ADX']
-    adx_cond = 1 if adx_val > 25 else 0
-    c3.markdown(card("Trend Strength", f"{adx_val:.1f}", adx_cond), unsafe_allow_html=True)
+    # Institutional Trend (Indicator 14)
+    inst_cond = last['Inst_Trend']
+    inst_txt = "MACRO BULL" if inst_cond == 1 else "MACRO BEAR"
+    c3.markdown(card("Inst. Trend (1D/1W)", inst_txt, inst_cond), unsafe_allow_html=True)
     
     # Money Flow
     mfi_val = last['MFI']
@@ -380,7 +437,7 @@ if df is not None and not df.empty:
 
     # --- 3. TABS ---
     st.markdown("<br>", unsafe_allow_html=True)
-    tab_apex, tab_macd, tab_cloud, tab_osc, tab_ai, tab_cast = st.tabs(["🌊 Apex Master", "📊 Flows & Squeeze", "☁️ Ichimoku", "📈 Oscillators", "🤖 AI Analyst", "📡 Broadcast"])
+    tab_apex, tab_dpma, tab_macd, tab_cloud, tab_osc, tab_ai, tab_cast = st.tabs(["🌊 Apex Master", "💀 DarkPool Trends", "📊 Flows & Squeeze", "☁️ Ichimoku", "📈 Oscillators", "🤖 AI Analyst", "📡 Broadcast"])
 
     with tab_apex:
         fig = go.Figure()
@@ -393,14 +450,23 @@ if df is not None and not df.empty:
         fig.update_layout(height=600, template="plotly_dark", title=f"Apex Trend & Liquidity ({interval})", xaxis_rangeslider_visible=False, paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
         st.plotly_chart(fig, use_container_width=True)
 
+    with tab_dpma:
+        # DarkPool MAs (#13)
+        fig_dp = go.Figure()
+        fig_dp.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"))
+        fig_dp.add_trace(go.Scatter(x=df.index, y=df['DP_MA10'], line=dict(color='#00E5FF', width=1), name="EMA 10 (Fast)"))
+        fig_dp.add_trace(go.Scatter(x=df.index, y=df['DP_MA20'], line=dict(color='#2979FF', width=1), name="EMA 20"))
+        fig_dp.add_trace(go.Scatter(x=df.index, y=df['DP_MA50'], line=dict(color='#00E676', width=2), name="EMA 50 (Trend)"))
+        fig_dp.add_trace(go.Scatter(x=df.index, y=df['DP_MA100'], line=dict(color='#FF9100', width=2), name="EMA 100"))
+        fig_dp.add_trace(go.Scatter(x=df.index, y=df['DP_MA200'], line=dict(color='#FF1744', width=2), name="EMA 200 (Inst)"))
+        fig_dp.update_layout(height=600, template="plotly_dark", title=f"DarkPool Institutional MAs ({interval})", xaxis_rangeslider_visible=False, paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
+        st.plotly_chart(fig_dp, use_container_width=True)
+
     with tab_macd:
         fig_macd = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05)
-        # Squeeze
         colors_sqz = ['#00E676' if v > 0 else '#FF1744' for v in df['Sqz_Mom']]
         fig_macd.add_trace(go.Bar(x=df.index, y=df['Sqz_Mom'], marker_color=colors_sqz, name="Squeeze Mom"), row=1, col=1)
-        # MACD
         fig_macd.add_trace(go.Bar(x=df.index, y=df['Hist'], marker_color='cyan', name="MACD Hist"), row=2, col=1)
-        # Volume Delta
         vd_col = ['#00E676' if v > 0 else '#FF1744' for v in df['Vol_Delta']]
         fig_macd.add_trace(go.Bar(x=df.index, y=df['Vol_Delta'], marker_color=vd_col, name="Vol Delta"), row=3, col=1)
         fig_macd.update_layout(height=600, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
@@ -433,21 +499,17 @@ if df is not None and not df.empty:
                 with st.spinner("Calculating Precise Levels..."):
                     client = OpenAI(api_key=api_key)
                     
-                    # Pre-Calculate Key Levels for AI
+                    # Pre-Calculate Levels
                     curr_price = last['Close']
                     atr_val = last['ATR']
                     swing_low = last['Pivot_Low'] if not pd.isna(last['Pivot_Low']) else curr_price - (2*atr_val)
                     swing_high = last['Pivot_High'] if not pd.isna(last['Pivot_High']) else curr_price + (2*atr_val)
                     
-                    # Determine Stop Logic (ATR Based)
                     stop_long = curr_price - (2 * atr_val)
                     stop_short = curr_price + (2 * atr_val)
-                    
-                    # Targets (2R)
                     target_long = curr_price + (4 * atr_val)
                     target_short = curr_price - (4 * atr_val)
                     
-                    # Apex Cloud Levels
                     cloud_top = last['Apex_Upper']
                     cloud_bot = last['Apex_Lower']
 
@@ -458,8 +520,10 @@ if df is not None and not df.empty:
                     --- TECHNICAL DATA ---
                     1. ATR (Volatility): ${atr_val:.2f}
                     2. Apex Trend: {apex_txt} (Cloud Top: ${cloud_top:.2f}, Bot: ${cloud_bot:.2f})
-                    3. Liquidity: Supply @ ${swing_high:.2f}, Demand @ ${swing_low:.2f}
-                    4. Momentum: {mom_txt}
+                    3. DarkPool MAs: {last['DP_Score']:.0f}/5
+                    4. Institutional Trend (1D/1W): {inst_txt}
+                    5. Liquidity: Supply @ ${swing_high:.2f}, Demand @ ${swing_low:.2f}
+                    6. Momentum: {mom_txt}
                     
                     --- STRATEGY SIGNALS ---
                     - ADX Breakout: {'YES' if last['Sig_ADX'] != 0 else 'NO'}
@@ -471,12 +535,29 @@ if df is not None and not df.empty:
                     - SHORT SETUP: Stop > ${stop_short:.2f}, Target < ${target_short:.2f}
                     
                     --- MISSION ---
-                    Synthesize a TRADE PLAN.
-                    1. VERDICT: LONG / SHORT / WAIT.
-                    2. ENTRY ZONE: Specific price range.
-                    3. STOP LOSS: Hard price level (Based on ATR or Pivot).
-                    4. TAKE PROFIT: Conservative & Aggressive Targets (Prices).
-                    5. TRAILING STOP: Define a dynamic rule (e.g., "Close below Apex Cloud at ${cloud_bot:.2f}").
+                    Synthesize a TRADE PLAN in strictly formatted MARKDOWN.
+                    Do not print messy raw numbers. Round to 2 decimal places.
+                    
+                    OUTPUT FORMAT:
+                    ### 📋 Trade Plan: Alpha Report
+                    
+                    **1. VERDICT:** LONG / SHORT / WAIT (Confidence Level)
+                    * **Rationale:** (1 sentence confluence summary)
+                    
+                    **2. ENTRY ZONE**
+                    * **Price:** ${entry_price:.2f} (Current Market Price)
+                    * **Rationale:** (Technical basis)
+                    
+                    **3. STOP LOSS**
+                    * **Hard Stop:** ${stop_loss:.2f}
+                    * **Rationale:** (e.g. Below Apex Cloud)
+                    
+                    **4. TAKE PROFIT**
+                    * **Target:** ${take_profit:.2f}
+                    * **Ratio:** 1:1.5 Risk/Reward
+                    
+                    **5. TRAILING STOP**
+                    * **Dynamic Rule:** (e.g. Close below ${cloud_bot:.2f})
                     """
                     res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}])
                     st.info(res.choices[0].message.content)
@@ -484,24 +565,28 @@ if df is not None and not df.empty:
     with tab_cast:
         st.subheader("📡 Broadcast Center")
         
+        # UPGRADED TELEGRAM MESSAGE FORMAT
         sig_emoji = "🟢" if apex_cond == 1 else "🔴" if apex_cond == -1 else "⚪"
+        direction = "LONG" if apex_cond == 1 else "SHORT" if apex_cond == -1 else "NEUTRAL"
+        
         broadcast_msg = f"""
 🔥 TITAN SIGNAL: {ticker} ({interval})
-Price: ${last['Close']:.2f}
+{sig_emoji} DIRECTION: {direction}
 
-{sig_emoji} TREND: {apex_txt}
-📊 MOMENTUM: {mom_txt}
-🌊 MONEY FLOW: {mfi_txt}
+🚪 ENTRY: ${entry_price:,.2f}
+🛑 STOP LOSS: ${stop_loss:,.2f}
+🎯 TARGET: ${take_profit:,.2f}
 
-🎯 STRATEGY CONFLUENCE:
-- ADX Breakout: {"YES" if last['Sig_ADX'] != 0 else "NO"}
-- Bollinger: {bb_txt}
-- Squeeze: {"⚠️ ON" if last['Squeeze_On'] else "OFF"}
+Technical Confluence:
+🌊 Trend: {apex_txt}
+📊 Momentum: {mom_txt}
+💰 Money Flow: {mfi_txt}
+💀 Institutional Trend: {inst_txt}
 
 #DarkPool #Titan #Crypto
         """
         
-        msg_preview = st.text_area("Message Preview", value=broadcast_msg, height=200)
+        msg_preview = st.text_area("Message Preview", value=broadcast_msg, height=250)
         
         c_tg, c_x = st.columns(2)
         
