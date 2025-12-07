@@ -1014,15 +1014,16 @@ if st.session_state.get('run_analysis'):
                             clean_msg = msg.replace("###", "")
                             
                             # Chunking Loop - Fixed for Markdown Safety
-                            max_length = 3000 # Reduced from 4096 to be safe
+                            # Reducing limit to 2000 chars to be ultra-safe
+                            max_length = 2000 
                             
                             if len(clean_msg) <= max_length:
-                                data_msg = {"chat_id": tg_chat, "text": clean_msg} # No parse_mode to avoid errors
+                                data_msg = {"chat_id": tg_chat, "text": clean_msg} # REMOVED parse_mode to avoid cutoff errors
                                 requests.post(url_msg, data=data_msg)
                             else:
                                 for i in range(0, len(clean_msg), max_length):
                                     chunk = clean_msg[i:i+max_length]
-                                    data_msg = {"chat_id": tg_chat, "text": f"(Part {i//max_length + 1}) {chunk}"} # No parse_mode
+                                    data_msg = {"chat_id": tg_chat, "text": f"(Part {i//max_length + 1}) {chunk}"} # REMOVED parse_mode
                                     requests.post(url_msg, data=data_msg)
 
                             st.success("✅ Sent to Telegram (Split into multiple parts to prevent cutoff)!")
