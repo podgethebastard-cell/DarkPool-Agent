@@ -430,6 +430,14 @@ if df is not None and not df.empty:
         stop_loss = curr_price + (2 * atr_val)
         take_profit = curr_price - (3 * atr_val)
         entry_price = curr_price
+        
+    # Variables for AI Context (Fix NameError)
+    stop_long = curr_price - (2 * atr_val)
+    stop_short = curr_price + (2 * atr_val)
+    target_long = curr_price + (3 * atr_val)
+    target_short = curr_price - (3 * atr_val)
+    cloud_top = last['Apex_Upper']
+    cloud_bot = last['Apex_Lower']
 
     # --- 2. SIGNAL HUD ---
     st.markdown("### 🧬 Market DNA")
@@ -529,15 +537,13 @@ if df is not None and not df.empty:
                 with st.spinner("Calculating Precise Levels..."):
                     client = OpenAI(api_key=api_key)
                     
-                    # Levels are pre-calculated above (lines 438-450)
-                    
                     prompt = f"""
                     Act as a Senior Crypto Quantitative Trader. 
                     Analyze {ticker} ({interval}) at Price ${curr_price:.2f}.
                     
                     --- TECHNICAL DATA ---
                     1. ATR (Volatility): ${atr_val:.2f}
-                    2. Apex Trend: {apex_txt} (Cloud Top: ${last['Apex_Upper']:.2f}, Bot: ${last['Apex_Lower']:.2f})
+                    2. Apex Trend: {apex_txt} (Cloud Top: ${cloud_top:.2f}, Bot: ${cloud_bot:.2f})
                     3. DarkPool MAs: {last['DP_Score']:.0f}/5 (Institutional Trend)
                     4. Institutional Trend (1D/1W): {inst_txt}
                     5. Liquidity: Supply @ ${last['Pivot_High']:.2f}, Demand @ ${last['Pivot_Low']:.2f}
@@ -549,8 +555,8 @@ if df is not None and not df.empty:
                     - RSI: {last['Sig_RSI']}
                     
                     --- CALCULATED LEVELS (Use these if valid) ---
-                    - LONG SETUP: Stop < ${stop_long:.2f}, Target > ${take_profit:.2f}
-                    - SHORT SETUP: Stop > ${stop_loss:.2f}, Target < ${take_profit:.2f}
+                    - LONG SETUP: Stop < ${stop_long:.2f}, Target > ${target_long:.2f}
+                    - SHORT SETUP: Stop > ${stop_short:.2f}, Target < ${target_short:.2f}
                     
                     --- MISSION ---
                     Synthesize a TRADE PLAN in strictly formatted MARKDOWN.
@@ -563,19 +569,19 @@ if df is not None and not df.empty:
                     * **Rationale:** (1 sentence confluence summary)
                     
                     **2. ENTRY ZONE**
-                    * **Price:** ${entry_price:.2f} (Current Market Price)
+                    * **Price Range:** (e.g. $50,000 - $50,500)
                     * **Rationale:** (Technical basis)
                     
                     **3. STOP LOSS**
-                    * **Hard Stop:** ${stop_loss:.2f}
+                    * **Hard Stop:** (Specific Price)
                     * **Rationale:** (e.g. Below Apex Cloud)
                     
                     **4. TAKE PROFIT**
-                    * **Target:** ${take_profit:.2f}
-                    * **Ratio:** 1:1.5 Risk/Reward
+                    * **Conservative:** (Price)
+                    * **Aggressive:** (Price)
                     
                     **5. TRAILING STOP**
-                    * **Dynamic Rule:** (e.g. Close below ${last['Apex_Lower']:.2f})
+                    * **Dynamic Rule:** (e.g. Close below ${cloud_bot:.2f})
                     """
                     res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}])
                     st.info(res.choices[0].message.content)
