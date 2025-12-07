@@ -695,7 +695,8 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
     
     try:
         client = OpenAI(api_key=st.session_state.api_key)
-        res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}])
+        # --- FIX: Added max_tokens=2500 to prevent AI generation cutoff ---
+        res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}], max_tokens=2500)
         return res.choices[0].message.content
     except Exception as e:
         return f"⚠️ AI Error: {e}"
@@ -1012,15 +1013,16 @@ if st.session_state.get('run_analysis'):
                             # Clean up AI text to look good
                             clean_msg = msg.replace("###", "")
                             
-                            # Chunking Loop
-                            max_length = 4000
+                            # Chunking Loop - Fixed for Markdown Safety
+                            max_length = 3000 # Reduced from 4096 to be safe
+                            
                             if len(clean_msg) <= max_length:
-                                data_msg = {"chat_id": tg_chat, "text": clean_msg}
+                                data_msg = {"chat_id": tg_chat, "text": clean_msg} # No parse_mode to avoid errors
                                 requests.post(url_msg, data=data_msg)
                             else:
                                 for i in range(0, len(clean_msg), max_length):
                                     chunk = clean_msg[i:i+max_length]
-                                    data_msg = {"chat_id": tg_chat, "text": chunk}
+                                    data_msg = {"chat_id": tg_chat, "text": f"(Part {i//max_length + 1}) {chunk}"} # No parse_mode
                                     requests.post(url_msg, data=data_msg)
 
                             st.success("✅ Sent to Telegram (Split into multiple parts to prevent cutoff)!")
