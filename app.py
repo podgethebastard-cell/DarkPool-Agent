@@ -92,7 +92,7 @@ help="Enter your OpenAI API key here to unlock the AI Analyst features."
 )
 
 # ==========================================
-# 2. DATA ENGINE (OPTIMIZED FOR SPEED)
+# 2. DATA ENGINE
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -126,29 +126,19 @@ assets = {
 "Treasuries (TLT)": "TLT"
 }
 try:
-# Optimization: Download all at once
-tickers_list = list(assets.values())
-data = yf.download(tickers_list, period="5d", interval="1d", progress=False, group_by='ticker')
-
 results = {}
 for name, ticker in assets.items():
-try:
-if len(tickers_list) > 1:
-df = data[ticker]
+df = yf.download(ticker, period="5d", interval="1d", progress=False)
+if not df.empty:
+if isinstance(df.columns, pd.MultiIndex):
+price = df.xs('Close', axis=1, level=0).iloc[-1].iloc[0]
+prev = df.xs('Close', axis=1, level=0).iloc[-2].iloc[0]
 else:
-df = data 
+price = df['Close'].iloc[-1]
+prev = df['Close'].iloc[-2]
 
-if not df.empty and len(df) >= 2:
-if 'Close' in df.columns: price_col = 'Close'
-elif 'Adj Close' in df.columns: price_col = 'Adj Close'
-else: continue
-
-price = df[price_col].iloc[-1]
-prev = df[price_col].iloc[-2]
 change = ((price - prev) / prev) * 100
 results[name] = change
-except:
-continue
 
 return pd.Series(results).sort_values(ascending=True)
 except: return None
@@ -178,7 +168,7 @@ except: return None
 
 @st.cache_data(ttl=300)
 def get_macro_data():
-"""Fetches 40 global macro indicators grouped by sector using BATCH DOWNLOAD (FAST)."""
+"""Fetches 40 global macro indicators grouped by sector."""
 groups = {
 "🇺🇸 US Equities": {
 "S&P 500": "SPY", "Nasdaq 100": "QQQ", "Dow Jones": "^DJI", "Russell 2000": "^RUT"
@@ -212,44 +202,30 @@ groups = {
 }
 }
 
-all_tickers_list = []
-ticker_to_name_map = {}
-for g_name, g_dict in groups.items():
-for t_name, t_sym in g_dict.items():
-all_tickers_list.append(t_sym)
-ticker_to_name_map[t_sym] = t_name
+all_tickers = {}
+for g in groups.values():
+all_tickers.update(g)
 
+prices = {k: 0.0 for k in all_tickers.keys()}
+changes = {k: 0.0 for k in all_tickers.keys()}
+
+for name, sym in all_tickers.items():
 try:
-data_batch = yf.download(all_tickers_list, period="5d", interval="1d", group_by='ticker', progress=False)
-prices = {}
-changes = {}
+df = yf.download(sym, period="5d", interval="1d", progress=False)
+if not df.empty and len(df) >= 2:
+if isinstance(df.columns, pd.MultiIndex):
+df.columns = df.columns.get_level_values(0)
 
-for sym in all_tickers_list:
-try:
-if len(all_tickers_list) > 1:
-df = data_batch[sym]
-else:
-df = data_batch
-
-if df is None or df.empty: continue
-df = df.dropna(how='all')
-
-if len(df) >= 2:
-col = 'Close' if 'Close' in df.columns else 'Adj Close'
-curr = df[col].iloc[-1]
-prev = df[col].iloc[-2]
+curr = df['Close'].iloc[-1]
+prev = df['Close'].iloc[-2]
 chg = ((curr - prev) / prev) * 100
 
-name = ticker_to_name_map.get(sym, sym)
 prices[name] = curr
 changes[name] = chg
 except Exception:
 continue
 
 return groups, prices, changes
-
-except Exception as e:
-return groups, {}, {}
 
 # ==========================================
 # 3. MATH LIBRARY & ALGORITHMS
@@ -542,10 +518,11 @@ trends = {}
 
 for tf_name, tf_code in timeframes.items():
 try:
+# FIX: Adjusted periods to match yfinance limitations
 if tf_name == "1H":
-period = "1y" 
+period = "1y" # Max safe for 1h
 elif tf_name == "4H":
-period = "1y" 
+period = "1y" # Changed from 2y to 1y to be safe
 else:
 period = "2y"
 
@@ -679,6 +656,7 @@ return None
 # ==========================================
 # 4. AI ANALYST (MODIFIED FOR TIMEFRAME AWARENESS)
 # ==========================================
+# --- FIX: ADDED 'timeframe' PARAMETER ---
 def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
 if not st.session_state.api_key: 
 return "⚠️ Waiting for OpenAI API Key in the sidebar..."
@@ -711,6 +689,7 @@ psych_alert = ""
 if last['IS_FOMO']: psych_alert = "WARNING: ALGORITHMIC FOMO DETECTED."
 if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
 
+# --- FIX: UPDATED PROMPT WITH TIMEFRAME CONTEXT ---
 prompt = f"""
 Act as a Global Macro Strategist. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
 
@@ -736,6 +715,7 @@ Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
 
 try:
 client = OpenAI(api_key=st.session_state.api_key)
+# --- FIX: Added max_tokens=2500 to prevent AI generation cutoff ---
 res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}], max_tokens=2500)
 return res.choices[0].message.content
 except Exception as e:
@@ -1055,8 +1035,7 @@ st.markdown("#### 🚀 Broadcast Signal")
 
 # Signal Message Draft
 # FIX: REMOVED THE SLICE [:50] FROM ai_verdict BELOW vvv
-# FIX: Added ({interval}) to the message title for clarity
-signal_text = f"🔥 {ticker} ({interval}) Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #Titan"
+signal_text = f"🔥 {ticker} Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #Titan"
 
 msg = st.text_area("Message Preview", value=signal_text, height=150)
 
