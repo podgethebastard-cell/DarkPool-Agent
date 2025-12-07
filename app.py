@@ -92,7 +92,7 @@ else:
         )
 
 # ==========================================
-# 2. DATA ENGINE (FUNCTIONS DEFINED FIRST)
+# 2. DATA ENGINE
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -146,7 +146,13 @@ def get_global_performance():
 def safe_download(ticker, period, interval):
     """Robust price downloader."""
     try:
-        df = yf.download(ticker, period=period, interval=interval, progress=False)
+        # 4h workaround: Download 1h data then resample later
+        if interval == "4h":
+            dl_interval = "1h"
+        else:
+            dl_interval = interval
+
+        df = yf.download(ticker, period=period, interval=dl_interval, progress=False)
         
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -512,7 +518,14 @@ def calc_mtf_trend(ticker):
     
     for tf_name, tf_code in timeframes.items():
         try:
-            period = "1mo" if tf_name == "1H" else "6mo" if tf_name == "4H" else "2y"
+            # FIX: Adjusted periods to match yfinance limitations
+            if tf_name == "1H":
+                period = "1y" # Max safe for 1h
+            elif tf_name == "4H":
+                period = "1y" # Changed from 2y to 1y to be safe
+            else:
+                period = "2y"
+                
             df = yf.download(ticker, period=period, interval=tf_code, progress=False)
             
             if isinstance(df.columns, pd.MultiIndex):
@@ -799,8 +812,24 @@ if st.button(f"Analyze {ticker}", help="Run Analysis"):
 
 if st.session_state.get('run_analysis'):
     with st.spinner(f"Analyzing {ticker}..."):
-        df = safe_download(ticker, "2y", interval)
         
+        # --- FIX: DYNAMIC TIMEFRAME ADJUSTMENT FOR 1H/4H DATA ---
+        if interval in ["1m", "2m", "5m", "15m", "30m"]:
+            fetch_period = "59d" # Max for 15m is 60d
+        elif interval in ["1h", "4h"]: # Updated for 4H support
+            fetch_period = "1y" # Max for 1h is 730d, but 1y is safer
+        else:
+            fetch_period = "2y" # Standard for Daily+
+            
+        df = safe_download(ticker, fetch_period, interval)
+        
+        # --- FIX: RESAMPLE 4H DATA (Since Yahoo doesn't support it natively) ---
+        if interval == "4h" and df is not None:
+            # Resample 1h data to 4h
+            agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
+            if 'Adj Close' in df.columns: agg_dict['Adj Close'] = 'last'
+            df = df.resample('4h').agg(agg_dict).dropna()
+
         if df is not None:
             df = calc_indicators(df)
             df = calc_fear_greed_v4(df)
@@ -952,6 +981,16 @@ if st.session_state.get('run_analysis'):
             with tab10:
                 st.subheader("📡 Social Command Center")
                 
+                # FIX: Map User Timeframe to TradingView Widget Code
+                tv_interval_map = {
+                    "15m": "15",
+                    "1h": "60",
+                    "4h": "240",
+                    "1d": "D",
+                    "1wk": "W"
+                }
+                tv_int = tv_interval_map.get(interval, "D")
+                
                 # TradingView Widget (Embed) - FIX: Added hide_side_toolbar: false
                 tv_ticker = ticker.replace("-", "") if "BTC" in ticker else ticker 
                 
@@ -965,7 +1004,7 @@ if st.session_state.get('run_analysis'):
                   "width": "100%",
                   "height": 500,
                   "symbol": "{tv_ticker}",
-                  "interval": "D",
+                  "interval": "{tv_int}",
                   "timezone": "Etc/UTC",
                   "theme": "dark",
                   "style": "1",
