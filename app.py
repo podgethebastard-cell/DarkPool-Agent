@@ -74,7 +74,7 @@ st.markdown("""
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v4.0 Broadcast Edition*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v5.0 Titan Edition*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -92,7 +92,7 @@ else:
         )
 
 # ==========================================
-# 2. DATA ENGINE (PURE MATH & DATA)
+# 2. DATA ENGINE (FUNCTIONS DEFINED FIRST)
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -506,7 +506,7 @@ def calc_correlations(ticker, lookback_days=180):
     return target_corr
 
 def calc_mtf_trend(ticker):
-    """📡 Multi-Timeframe Trend Radar."""
+    """📡 Multi-Timeframe Trend Radar (Fixed for Multi-Index)."""
     timeframes = {"1H": "1h", "4H": "1h", "Daily": "1d", "Weekly": "1wk"}
     trends = {}
     
@@ -518,7 +518,7 @@ def calc_mtf_trend(ticker):
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
                 
-            if df.empty: 
+            if df.empty or len(df) < 50: 
                 trends[tf_name] = {"Trend": "N/A", "RSI": "N/A", "EMA Spread": "N/A"}
                 continue
             
@@ -707,8 +707,18 @@ st.sidebar.header("🎛️ Terminal Controls")
 
 # --- BROADCAST CENTER (NEW SIDEBAR) ---
 st.sidebar.subheader("📢 Social Broadcaster")
-tg_token = st.sidebar.text_input("Telegram Bot Token", type="password")
-tg_chat = st.sidebar.text_input("Telegram Chat ID")
+
+# 1. Initialize Session State
+if 'tg_token' not in st.session_state: st.session_state.tg_token = ""
+if 'tg_chat' not in st.session_state: st.session_state.tg_chat = ""
+
+# 2. Check Secrets
+if "TELEGRAM_TOKEN" in st.secrets: st.session_state.tg_token = st.secrets["TELEGRAM_TOKEN"]
+if "TELEGRAM_CHAT_ID" in st.secrets: st.session_state.tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
+
+# 3. Create Inputs (Auto-filled if secrets exist)
+tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password")
+tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat)
 
 input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"], index=1)
 
