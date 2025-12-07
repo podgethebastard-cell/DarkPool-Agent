@@ -857,30 +857,27 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
 
     prompt = f"""
-    Act as a Global Macro Strategist & Quantitative Trader. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
+    Act as a Senior Market Analyst. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
 
-    --- FUNDAMENTALS ---
-    {fund_text}
-
-    --- TECHNICALS ({timeframe}) ---
-    Trend: {trend}. Volatility (ATR): {last['ATR']:.2f}.
-    GOD MODE CONFLUENCE SCORE: {gm_score} (Verdict: {gm_verdict}).
-    Apex Trend: {'Bull' if last['Apex_Trend'] == 1 else 'Bear'}.
-    Squeeze Momentum: {'Rising' if last['Sqz_Mom'] > 0 else 'Falling'}.
-    Money Flow: {last['MF_Matrix']:.2f}.
-
-    --- PSYCHOLOGY (DarkPool Index) ---
-    Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
+    --- DATA FEED ---
+    Technicals: Trend is {trend}. Volatility (ATR) is {last['ATR']:.2f}.
+    God Mode Score: {gm_score} ({gm_verdict}).
+    Momentum: {'Rising' if last['Sqz_Mom'] > 0 else 'Falling'}.
+    Sentiment: {fg_state} ({fg_val:.1f}/100).
     {psych_alert}
-
-    --- RISK PROTOCOL (1% Rule) ---
-    Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
-    Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
+    Fundamentals: {fund_text}
 
     --- MISSION ---
-    1. Verdict: BUY, SELL, or WAIT (Based on {timeframe} chart).
-    2. Reasoning: Integrate Technicals (specifically the God Mode Confluence), Fundamentals, and Market Psychology.
-    3. Trade Plan: Entry, Stop, Target (2.5R), Size.
+    Provide a concise, high-level overview of what is happening with this asset.
+    1. Analyze the current market structure (Trend vs Chop).
+    2. Explain the correlation between the technicals and sentiment.
+    3. Provide a general outlook on potential direction.
+
+    IMPORTANT:
+    - Do NOT provide specific Entry prices, Exit prices, or Stop Loss numbers.
+    - Do NOT give specific financial advice.
+    - Keep it to a market situation overview only.
+    - **USE EMOJIS liberally to make the report engaging and visually appealing (e.g., 🚀, 📉, 🐂, 🐻, 🧠, ⚠️).**
     """
 
     try:
@@ -1245,7 +1242,7 @@ if st.session_state.get('run_analysis'):
                 # Updated for God Mode Signals
                 last_r = df.iloc[-1]
                 gm_emoji = "🟢" if last_r['GM_Score'] > 0 else "🔴"
-                signal_text = f"🔥 {ticker} ({interval}) GOD MODE\n\nPrice: ${last_r['Close']:.2f}\n{gm_emoji} Score: {last_r['GM_Score']:.0f}/5\n\nApex: {'BULL' if last_r['Apex_Trend']==1 else 'BEAR'}\nVector: {'BULL' if last_r['DarkVector_Trend']==1 else 'BEAR'}\nSqueeze: {'ON' if last_r['Squeeze_On'] else 'OFF'}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #GodMode"
+                signal_text = f"🔥 {ticker} ({interval}) GOD MODE\n\nPrice: ${last_r['Close']:.2f}\n{gm_emoji} Score: {last_r['GM_Score']:.0f}/5\n\nApex: {'🐂 BULL' if last_r['Apex_Trend']==1 else '🐻 BEAR'}\nVector: {'↗️ BULL' if last_r['DarkVector_Trend']==1 else '↘️ BEAR'}\nSqueeze: {'💥 ON' if last_r['Squeeze_On'] else '💤 OFF'}\n\n🤖 AI Outlook: {ai_verdict}\n\n#Trading #DarkPool #GodMode"
 
                 msg = st.text_area("Message Preview", value=signal_text, height=150)
 
