@@ -10,6 +10,7 @@ import calendar
 import datetime
 import requests
 import urllib.parse
+from scipy.stats import linregress
 
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM UI
@@ -74,7 +75,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v5.0 Titan Edition*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v6.0 GOD MODE Edition*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -126,7 +127,6 @@ def get_global_performance():
         "Treasuries (TLT)": "TLT"
     }
     try:
-        # Optimization: Download all at once
         tickers_list = list(assets.values())
         data = yf.download(tickers_list, period="5d", interval="1d", progress=False, group_by='ticker')
 
@@ -156,7 +156,6 @@ def get_global_performance():
 def safe_download(ticker, period, interval):
     """Robust price downloader."""
     try:
-        # 4h workaround: Download 1h data then resample later
         if interval == "4h":
             dl_interval = "1h"
         else:
@@ -252,30 +251,172 @@ def get_macro_data():
         return groups, {}, {}
 
 # ==========================================
-# 3. MATH LIBRARY & ALGORITHMS
+# 3. MATH LIBRARY & ALGORITHMS (UPDATED FOR GOD MODE)
 # ==========================================
-def calc_indicators(df):
-    """Calculates Base Indicators + Dashboard V2 Logic"""
-    df['HMA'] = df['Close'].rolling(55).mean()
 
+# --- Helper Math Functions for Pine Script Translation ---
+def calculate_wma(series, length):
+    return series.rolling(length).apply(lambda x: np.dot(x, np.arange(1, length + 1)) / (length * (length + 1) / 2), raw=True)
+
+def calculate_hma(series, length):
+    half_length = int(length / 2)
+    sqrt_length = int(np.sqrt(length))
+    wma_half = calculate_wma(series, half_length)
+    wma_full = calculate_wma(series, length)
+    diff = 2 * wma_half - wma_full
+    return calculate_wma(diff, sqrt_length)
+
+def calculate_atr(df, length=14):
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df['ATR'] = tr.rolling(14).mean()
+    return tr.rolling(length).mean()
 
+def calculate_supertrend(df, period=10, multiplier=3):
+    atr = calculate_atr(df, period)
+    hl2 = (df['High'] + df['Low']) / 2
+    final_upperband = hl2 + (multiplier * atr)
+    final_lowerband = hl2 - (multiplier * atr)
+    
+    supertrend = [True] * len(df)
+    
+    # Basic iteration for recursive SuperTrend logic (optimized)
+    # Using numpy arrays for speed
+    close = df['Close'].values
+    upper = final_upperband.values
+    lower = final_lowerband.values
+    st = np.zeros(len(df))
+    trend = np.zeros(len(df)) # 1 is UP, -1 is DOWN
+    
+    # Initial setup
+    st[0] = lower[0]
+    trend[0] = 1
+    
+    for i in range(1, len(df)):
+        if close[i-1] > st[i-1]: # Previous trend UP
+            st[i] = max(lower[i], st[i-1]) if close[i] > st[i-1] else upper[i]
+            trend[i] = 1 if close[i] > st[i-1] else -1
+            if close[i] < lower[i] and trend[i-1] == 1: # Trend Change
+                 st[i] = upper[i]
+                 trend[i] = -1
+        else: # Previous trend DOWN
+            st[i] = min(upper[i], st[i-1]) if close[i] < st[i-1] else lower[i]
+            trend[i] = -1 if close[i] < st[i-1] else 1
+            if close[i] > upper[i] and trend[i-1] == -1: # Trend Change
+                st[i] = lower[i]
+                trend[i] = 1
+
+    return pd.Series(st, index=df.index), pd.Series(trend, index=df.index)
+
+def calculate_linreg_mom(series, length=20):
+    # Vectorized Rolling Linear Regression for Squeeze Momentum
+    x = np.arange(length)
+    # This is a simplified slope calc for performance
+    slope = series.rolling(length).apply(lambda y: linregress(x, y)[0], raw=True)
+    # Calculate expected value at end of window
+    return slope
+
+def calc_indicators(df):
+    """Calculates Base Indicators + 10 GOD MODE INDICATORS"""
+    
+    # --- 0. Base Calcs ---
+    df['HMA'] = calculate_hma(df['Close'], 55) # Replaced with custom HMA function
+    df['ATR'] = calculate_atr(df, 14)
     df['Pivot_Resist'] = df['High'].rolling(20).max()
     df['Pivot_Support'] = df['Low'].rolling(20).min()
-
     df['MFI'] = (df['Close'].diff() * df['Volume']).rolling(14).mean() 
 
-    df['BB_Mid'] = df['Close'].rolling(20).mean()
-    df['BB_Std'] = df['Close'].rolling(20).std()
-    df['KC_ATR'] = df['ATR'].rolling(20).mean()
-    df['Squeeze_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
-    df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
+    # ==========================================
+    # GOD MODE INDICATOR INTEGRATION
+    # ==========================================
 
-    # --- DASHBOARD V2 SPECIFIC CALCULATIONS ---
+    # 1. Apex Trend & Liquidity Master (HMA + ATR Bands)
+    apex_mult = 1.5
+    df['Apex_Base'] = df['HMA'] # Already calc 55
+    df['Apex_ATR'] = calculate_atr(df, 55)
+    df['Apex_Upper'] = df['Apex_Base'] + (df['Apex_ATR'] * apex_mult)
+    df['Apex_Lower'] = df['Apex_Base'] - (df['Apex_ATR'] * apex_mult)
+    df['Apex_Trend'] = np.where(df['Close'] > df['Apex_Upper'], 1, np.where(df['Close'] < df['Apex_Lower'], -1, 0))
+    # Fill zeros with previous value to filter chop
+    df['Apex_Trend'] = df['Apex_Trend'].replace(to_replace=0, method='ffill')
+
+    # 2. DarkPool Squeeze Momentum
+    # BB
+    df['Sqz_Basis'] = df['Close'].rolling(20).mean()
+    df['Sqz_Dev'] = df['Close'].rolling(20).std() * 2.0
+    df['Sqz_Upper_BB'] = df['Sqz_Basis'] + df['Sqz_Dev']
+    df['Sqz_Lower_BB'] = df['Sqz_Basis'] - df['Sqz_Dev']
+    # KC
+    df['Sqz_Ma_KC'] = df['Close'].rolling(20).mean()
+    df['Sqz_Range_MA'] = calculate_atr(df, 20)
+    df['Sqz_Upper_KC'] = df['Sqz_Ma_KC'] + (df['Sqz_Range_MA'] * 1.5)
+    df['Sqz_Lower_KC'] = df['Sqz_Ma_KC'] - (df['Sqz_Range_MA'] * 1.5)
+    
+    df['Squeeze_On'] = (df['Sqz_Lower_BB'] > df['Sqz_Lower_KC']) & (df['Sqz_Upper_BB'] < df['Sqz_Upper_KC'])
+    
+    # Momentum (LinReg) - Simplified for speed: Close - Avg(Highest, Lowest)
+    highest = df['High'].rolling(20).max()
+    lowest = df['Low'].rolling(20).min()
+    avg_val = (highest + lowest + df['Sqz_Ma_KC']) / 3
+    # Use delta for LinReg proxy
+    df['Sqz_Mom'] = (df['Close'] - avg_val).rolling(20).mean() * 100 # Scaling for viz
+
+    # 3. Money Flow Matrix (Normalized RSI * Vol)
+    rsi_src = (100 - (100 / (1 + (df['Close'].diff().clip(lower=0).rolling(14).mean() / df['Close'].diff().clip(upper=0).abs().rolling(14).mean())))) - 50
+    mf_vol = df['Volume'] / df['Volume'].rolling(14).mean()
+    df['MF_Matrix'] = (rsi_src * mf_vol).ewm(span=3).mean()
+
+    # 4. Dark Vector Scalping (Staircase)
+    # Using simple Donchian logic for python speed to mimic the pine script staircase
+    amp = 5
+    df['VS_Low'] = df['Low'].rolling(amp).min()
+    df['VS_High'] = df['High'].rolling(amp).max()
+    # (Simplified logic: Close > previous High = Bull, Close < previous Low = Bear)
+    df['VS_Trend'] = np.where(df['Close'] > df['VS_High'].shift(1), 1, np.where(df['Close'] < df['VS_Low'].shift(1), -1, 0))
+    df['VS_Trend'] = df['VS_Trend'].replace(to_replace=0, method='ffill')
+
+    # 5. Advanced Volume (RVOL)
+    df['RVOL'] = df['Volume'] / df['Volume'].rolling(20).mean()
+
+    # 6. Elastic Volume Weighted Momentum (EVWM)
+    ev_len = 21
+    ev_base = calculate_hma(df['Close'], ev_len)
+    ev_atr = calculate_atr(df, ev_len)
+    ev_elast = (df['Close'] - ev_base) / ev_atr
+    ev_force = np.sqrt(df['RVOL'].ewm(span=5).mean())
+    df['EVWM'] = ev_elast * ev_force
+
+    # 7. Ultimate S&R (Pivot Breaks)
+    # Calculated in Base Calcs as Pivot_Resist/Support
+
+    # 8. Gann High Low Activator
+    gann_len = 3
+    df['Gann_High'] = df['High'].rolling(gann_len).mean()
+    df['Gann_Low'] = df['Low'].rolling(gann_len).mean()
+    # Simple logic: Close > Prev Gann High = Bull
+    df['Gann_Trend'] = np.where(df['Close'] > df['Gann_High'].shift(1), 1, np.where(df['Close'] < df['Gann_Low'].shift(1), -1, 0))
+    df['Gann_Trend'] = df['Gann_Trend'].replace(to_replace=0, method='ffill')
+
+    # 9. Dark Vector (SuperTrend + Chop)
+    st_val, st_dir = calculate_supertrend(df, 10, 4.0)
+    df['DarkVector_Trend'] = st_dir
+
+    # 10. Wyckoff VSA (Trend Shield)
+    df['Trend_Shield_Bull'] = df['Close'] > df['Close'].rolling(200).mean() # SMA 200
+
+    # --- GOD MODE CONFLUENCE SIGNAL ---
+    # Summing up trend indicators (1 = Bull, -1 = Bear)
+    # Apex, Gann, Vector, VS_Trend, Squeeze Mom > 0
+    df['GM_Score'] = (
+        df['Apex_Trend'] + 
+        df['Gann_Trend'] + 
+        df['DarkVector_Trend'] + 
+        df['VS_Trend'] + 
+        np.sign(df['Sqz_Mom'])
+    )
+    
+    # --- DASHBOARD V2 SPECIFIC CALCULATIONS (Existing) ---
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
@@ -295,12 +436,12 @@ def calc_indicators(df):
     df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
     df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
 
+    # ADX Calc
     plus_dm = df['High'].diff()
     minus_dm = df['Low'].diff()
     plus_dm[plus_dm < 0] = 0
     minus_dm[minus_dm > 0] = 0
-
-    tr14 = tr.rolling(14).mean()
+    tr14 = df['ATR']
     plus_di = 100 * (plus_dm.ewm(alpha=1/14).mean() / tr14)
     minus_di = 100 * (minus_dm.ewm(alpha=1/14).mean() / tr14)
     dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
@@ -677,7 +818,7 @@ def calc_day_of_week_dna(ticker, lookback, calc_mode):
         return None
 
 # ==========================================
-# 4. AI ANALYST (MODIFIED FOR TIMEFRAME AWARENESS)
+# 4. AI ANALYST (MODIFIED FOR TIMEFRAME & GOD MODE)
 # ==========================================
 def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     if not st.session_state.api_key: 
@@ -686,6 +827,10 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     last = df.iloc[-1]
     trend = "BULLISH" if last['Close'] > last['HMA'] else "BEARISH"
     risk_dollars = balance * (risk_pct / 100)
+    
+    # God Mode Score
+    gm_score = last['GM_Score']
+    gm_verdict = "STRONG BUY" if gm_score >= 3 else "STRONG SELL" if gm_score <= -3 else "NEUTRAL"
 
     if trend == "BULLISH":
         stop_level = last['Pivot_Support']
@@ -712,13 +857,17 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
 
     prompt = f"""
-    Act as a Global Macro Strategist. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
+    Act as a Global Macro Strategist & Quantitative Trader. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
 
     --- FUNDAMENTALS ---
     {fund_text}
 
     --- TECHNICALS ({timeframe}) ---
     Trend: {trend}. Volatility (ATR): {last['ATR']:.2f}.
+    GOD MODE CONFLUENCE SCORE: {gm_score} (Verdict: {gm_verdict}).
+    Apex Trend: {'Bull' if last['Apex_Trend'] == 1 else 'Bear'}.
+    Squeeze Momentum: {'Rising' if last['Sqz_Mom'] > 0 else 'Falling'}.
+    Money Flow: {last['MF_Matrix']:.2f}.
 
     --- PSYCHOLOGY (DarkPool Index) ---
     Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
@@ -730,7 +879,7 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
 
     --- MISSION ---
     1. Verdict: BUY, SELL, or WAIT (Based on {timeframe} chart).
-    2. Reasoning: Integrate Technicals, Fundamentals, and Market Psychology.
+    2. Reasoning: Integrate Technicals (specifically the God Mode Confluence), Fundamentals, and Market Psychology.
     3. Trade Plan: Entry, Stop, Target (2.5R), Size.
     """
 
@@ -814,7 +963,7 @@ if m_price:
             g2 = group_names[i+1]
             with cols[1].container(border=True):
                 st.markdown(f"#### {g2}")
-                sc = st.columns(4)
+                sc = st.columns(4) 
                 for x, (n, s) in enumerate(macro_groups[g2].items()):
                     fmt = "{:.3f}" if any(c in n for c in ["Yield","GBP","EUR","JPY"]) else "{:,.2f}"
                     sc[x].metric(n.split('(')[0], fmt.format(m_price.get(n,0)), f"{m_chg.get(n,0):.2f}%")
@@ -822,7 +971,7 @@ if m_price:
 
 # --- MAIN ANALYSIS TABS ---
 tab1, tab2, tab3, tab4, tab9, tab5, tab6, tab7, tab8, tab10 = st.tabs([
-    "📊 Technical Deep Dive", 
+    "📊 God Mode Technicals", 
     "🌍 Sector & Fundamentals", 
     "📅 Monthly Seasonality", 
     "📆 Day of Week DNA", 
@@ -838,7 +987,7 @@ if st.button(f"Analyze {ticker}", help="Run Analysis"):
     st.session_state['run_analysis'] = True
 
 if st.session_state.get('run_analysis'):
-    with st.spinner(f"Analyzing {ticker}..."):
+    with st.spinner(f"Analyzing {ticker} in God Mode..."):
 
         # --- FIX: DYNAMIC TIMEFRAME ADJUSTMENT FOR 1H/4H DATA ---
         if interval in ["1m", "2m", "5m", "15m", "30m"]:
@@ -863,26 +1012,55 @@ if st.session_state.get('run_analysis'):
             fund = get_fundamentals(ticker)
             sr_zones = get_sr_channels(df) 
 
-            # --- TAB 1: TECHNICALS ---
+            # --- TAB 1: TECHNICALS (GOD MODE) ---
             with tab1:
-                st.subheader(f"🎯 Sniper Scope: {ticker}")
+                st.subheader(f"🎯 Apex God Mode: {ticker}")
                 col_chart, col_gauge = st.columns([0.75, 0.25])
                 with col_chart:
-                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+                    # UPDATED: Using 3 Rows for Price, Squeeze, and Money Flow
+                    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6, 0.2, 0.2], vertical_spacing=0.02)
+                    
+                    # 1. Price + Apex Cloud + Signals
                     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
+                    
+                    # Apex Cloud (Filled Area)
+                    fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Upper'], line=dict(width=0), showlegend=False, hoverinfo='skip'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Lower'], fill='tonexty', fillcolor='rgba(0, 230, 118, 0.1)', line=dict(width=0), name="Apex Cloud"), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='yellow', width=2), name="HMA Trend"), row=1, col=1)
+
+                    # God Mode Signals (Aggregated)
+                    buy_signals = df[df['GM_Score'] >= 3]
+                    sell_signals = df[df['GM_Score'] <= -3]
+                    
+                    fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['Low']*0.98, mode='markers', marker=dict(symbol='triangle-up', color='#00ff00', size=10), name="GM Buy"), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['High']*1.02, mode='markers', marker=dict(symbol='triangle-down', color='#ff0000', size=10), name="GM Sell"), row=1, col=1)
+
                     for z in sr_zones:
                         col = "rgba(0, 255, 0, 0.15)" if df['Close'].iloc[-1] > z['max'] else "rgba(255, 0, 0, 0.15)"
                         fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1], xref="x", yref="y", y0=z['min'], y1=z['max'], fillcolor=col, line=dict(width=0), row=1, col=1)
-                    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+                    
+                    # 2. Squeeze Momentum
+                    colors = ['#00E676' if v > 0 else '#FF5252' for v in df['Sqz_Mom']]
+                    fig.add_trace(go.Bar(x=df.index, y=df['Sqz_Mom'], marker_color=colors, name="Squeeze Mom"), row=2, col=1)
+                    
+                    # 3. Money Flow Matrix
+                    fig.add_trace(go.Scatter(x=df.index, y=df['MF_Matrix'], fill='tozeroy', line=dict(color='cyan', width=1), name="Money Flow"), row=3, col=1)
+
+                    fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, title_text="God Mode Technical Stack")
                     st.plotly_chart(fig, use_container_width=True)
+                
                 with col_gauge:
                     fg_val = df['FG_Index'].iloc[-1]
                     fig_gauge = go.Figure(go.Indicator(mode="gauge+number", value=fg_val, title={'text': "Fear & Greed"}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "white"}, 'steps': [{'range': [0, 20], 'color': "#FF0000"}, {'range': [80, 100], 'color': "#00FF00"}]}))
                     fig_gauge.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
                     st.plotly_chart(fig_gauge, use_container_width=True)
-                    st.metric("RSI", f"{df['FG_RSI'].iloc[-1]:.1f}")
-                    st.metric("MACD", f"{df['FG_MACD'].iloc[-1]:.1f}")
+                    
+                    st.markdown("### 🧬 Indicator DNA")
+                    last_row = df.iloc[-1]
+                    st.metric("God Mode Score", f"{last_row['GM_Score']:.0f} / 5", delta="Bullish" if last_row['GM_Score'] > 0 else "Bearish")
+                    st.metric("Apex Trend", "BULL" if last_row['Apex_Trend'] == 1 else "BEAR")
+                    st.metric("Squeeze", "ON" if last_row['Squeeze_On'] else "OFF")
+                    st.metric("Money Flow", f"{last_row['MF_Matrix']:.2f}")
 
                 st.markdown("### 🤖 Strategy Briefing")
                 # --- FIX: PASS TIMEFRAME INTERVAL TO AI ANALYST ---
@@ -968,9 +1146,19 @@ if st.session_state.get('run_analysis'):
 
             # --- TAB 5: DASHBOARD ---
             with tab5:
-                mom_score = df['Mom_Score'].iloc[-1]
-                sig = "BUY" if mom_score > 20 else "SELL" if mom_score < -20 else "HOLD"
-                dash_data = {"Metric": ["Momentum", "Signal", "RSI", "Trend"], "Value": [f"{mom_score:.0f}", sig, f"{df['RSI'].iloc[-1]:.1f}", "BULL" if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else "BEAR"]}
+                # Updated with God Mode metrics
+                last = df.iloc[-1]
+                dash_data = {
+                    "Metric": ["God Mode Score", "Apex Trend", "Vector Trend", "Gann Trend", "EVWM Momentum", "RVOL"], 
+                    "Value": [
+                        f"{last['GM_Score']:.0f}", 
+                        "BULL" if last['Apex_Trend'] == 1 else "BEAR",
+                        "BULL" if last['DarkVector_Trend'] == 1 else "BEAR",
+                        "BULL" if last['Gann_Trend'] == 1 else "BEAR",
+                        f"{last['EVWM']:.2f}",
+                        f"{last['RVOL']:.1f}x"
+                    ]
+                }
                 st.dataframe(pd.DataFrame(dash_data), use_container_width=True)
 
             # --- TAB 6: SMC ---
@@ -1054,9 +1242,10 @@ if st.session_state.get('run_analysis'):
                 st.markdown("#### 🚀 Broadcast Signal")
 
                 # Signal Message Draft
-                # FIX: REMOVED THE SLICE [:50] FROM ai_verdict BELOW vvv
-                # FIX: Added ({interval}) to the message title for clarity
-                signal_text = f"🔥 {ticker} ({interval}) Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #Titan"
+                # Updated for God Mode Signals
+                last_r = df.iloc[-1]
+                gm_emoji = "🟢" if last_r['GM_Score'] > 0 else "🔴"
+                signal_text = f"🔥 {ticker} ({interval}) GOD MODE\n\nPrice: ${last_r['Close']:.2f}\n{gm_emoji} Score: {last_r['GM_Score']:.0f}/5\n\nApex: {'BULL' if last_r['Apex_Trend']==1 else 'BEAR'}\nVector: {'BULL' if last_r['DarkVector_Trend']==1 else 'BEAR'}\nSqueeze: {'ON' if last_r['Squeeze_On'] else 'OFF'}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #GodMode"
 
                 msg = st.text_area("Message Preview", value=signal_text, height=150)
 
