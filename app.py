@@ -654,9 +654,10 @@ def calc_day_of_week_dna(ticker, lookback, calc_mode):
         return None
 
 # ==========================================
-# 4. AI ANALYST
+# 4. AI ANALYST (MODIFIED FOR TIMEFRAME AWARENESS)
 # ==========================================
-def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
+# --- FIX: ADDED 'timeframe' PARAMETER ---
+def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     if not st.session_state.api_key: 
         return "⚠️ Waiting for OpenAI API Key in the sidebar..."
     
@@ -688,20 +689,26 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct):
     if last['IS_FOMO']: psych_alert = "WARNING: ALGORITHMIC FOMO DETECTED."
     if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
 
+    # --- FIX: UPDATED PROMPT WITH TIMEFRAME CONTEXT ---
     prompt = f"""
-    Act as a Global Macro Strategist. Analyze {ticker} at ${last['Close']:.2f}.
+    Act as a Global Macro Strategist. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
+    
     --- FUNDAMENTALS ---
     {fund_text}
-    --- TECHNICALS ---
+    
+    --- TECHNICALS ({timeframe}) ---
     Trend: {trend}. Volatility (ATR): {last['ATR']:.2f}.
+    
     --- PSYCHOLOGY (DarkPool Index) ---
     Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
     {psych_alert}
+    
     --- RISK PROTOCOL (1% Rule) ---
     Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
     Stop Loss: ${stop_level:.2f}. Position Size: {shares:.4f} units.
+    
     --- MISSION ---
-    1. Verdict: BUY, SELL, or WAIT.
+    1. Verdict: BUY, SELL, or WAIT (Based on {timeframe} chart).
     2. Reasoning: Integrate Technicals, Fundamentals, and Market Psychology.
     3. Trade Plan: Entry, Stop, Target (2.5R), Size.
     """
@@ -858,7 +865,8 @@ if st.session_state.get('run_analysis'):
                     st.metric("MACD", f"{df['FG_MACD'].iloc[-1]:.1f}")
 
                 st.markdown("### 🤖 Strategy Briefing")
-                ai_verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct)
+                # --- FIX: PASS TIMEFRAME INTERVAL TO AI ANALYST ---
+                ai_verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct, interval)
                 st.info(ai_verdict)
 
             # --- TAB 2: FUNDAMENTALS ---
