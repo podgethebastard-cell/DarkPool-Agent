@@ -861,6 +861,8 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
 
     --- DATA FEED ---
     Technicals: Trend is {trend}. Volatility (ATR) is {last['ATR']:.2f}.
+    RSI: {last['RSI']:.1f}.
+    Volume (RVOL): {last['RVOL']:.1f}x.
     Titan Score: {gm_score} ({gm_verdict}).
     Momentum: {'Rising' if last['Sqz_Mom'] > 0 else 'Falling'}.
     Sentiment: {fg_state} ({fg_val:.1f}/100).
@@ -1241,8 +1243,17 @@ if st.session_state.get('run_analysis'):
                 # Signal Message Draft
                 # Updated for God Mode Signals
                 last_r = df.iloc[-1]
+                
+                # Macro Context for Signal
+                spy_chg = m_chg.get("S&P 500", 0)
+                btc_chg = m_chg.get("Bitcoin", 0)
+                dxy_chg = m_chg.get("DXY Index", 0)
+                gold_chg = m_chg.get("Gold", 0)
+
+                macro_text = f"🌍 SPY: {spy_chg:+.2f}% | BTC: {btc_chg:+.2f}%\n💵 DXY: {dxy_chg:+.2f}% | 🟡 Gold: {gold_chg:+.2f}%"
+
                 gm_emoji = "🟢" if last_r['GM_Score'] > 0 else "🔴"
-                signal_text = f"🔥 {ticker} ({interval}) TITAN\n\nPrice: ${last_r['Close']:.2f}\n{gm_emoji} Titan Score: {last_r['GM_Score']:.0f}/5\n\nApex: {'🐂 BULL' if last_r['Apex_Trend']==1 else '🐻 BEAR'}\nVector: {'↗️ BULL' if last_r['DarkVector_Trend']==1 else '↘️ BEAR'}\nSqueeze: {'💥 ON' if last_r['Squeeze_On'] else '💤 OFF'}\n\n🤖 AI Outlook: {ai_verdict}\n\n#Trading #DarkPool #Titan"
+                signal_text = f"🔥 {ticker} ({interval}) TITAN\n\nPrice: ${last_r['Close']:.2f}\n{gm_emoji} Titan Score: {last_r['GM_Score']:.0f}/5\n\nApex: {'🐂 BULL' if last_r['Apex_Trend']==1 else '🐻 BEAR'}\nVector: {'↗️ BULL' if last_r['DarkVector_Trend']==1 else '↘️ BEAR'}\nSqueeze: {'💥 ON' if last_r['Squeeze_On'] else '💤 OFF'}\n\n📊 RSI: {last_r['RSI']:.1f}\n🔋 Vol: {last_r['RVOL']:.1f}x\n\n{macro_text}\n\n🤖 AI Outlook: {ai_verdict}\n\n#Trading #DarkPool #Titan"
 
                 msg = st.text_area("Message Preview", value=signal_text, height=150)
 
