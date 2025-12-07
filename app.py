@@ -929,14 +929,13 @@ if st.session_state.get('run_analysis'):
                 fig_vp.update_layout(height=600, template="plotly_dark", title="Volume Profile (VPVR)")
                 st.plotly_chart(fig_vp, use_container_width=True)
 
-            # --- TAB 10: BROADCAST ---
+            # --- TAB 10: BROADCAST (THIS IS THE ONLY MODIFIED SECTION) ---
             with tab10:
                 st.subheader("📡 Social Command Center")
                 
-                # TradingView Widget (Embed)
-                tv_ticker = ticker.replace("-", "") if "BTC" in ticker else ticker # Simple fix for crypto symbols
+                # TradingView Widget (Embed) - FIX: Added hide_side_toolbar: false
+                tv_ticker = ticker.replace("-", "") if "BTC" in ticker else ticker 
                 
-                # Dynamic HTML for TradingView Widget
                 tv_widget_html = f"""
                 <div class="tradingview-widget-container">
                   <div id="tradingview_widget"></div>
@@ -954,6 +953,7 @@ if st.session_state.get('run_analysis'):
                   "locale": "en",
                   "toolbar_bg": "#f1f3f6",
                   "enable_publishing": false,
+                  "hide_side_toolbar": false,
                   "allow_symbol_change": true,
                   "container_id": "tradingview_widget"
                   }}
@@ -962,6 +962,7 @@ if st.session_state.get('run_analysis'):
                 </div>
                 """
                 st.components.v1.html(tv_widget_html, height=500)
+                st.caption("Drawing Tools are enabled on the left sidebar.")
                 
                 st.markdown("---")
                 st.markdown("#### 🚀 Broadcast Signal")
@@ -971,24 +972,40 @@ if st.session_state.get('run_analysis'):
                 
                 msg = st.text_area("Message Preview", value=signal_text, height=150)
                 
+                # FIX: Added File Uploader for Screenshots
+                uploaded_file = st.file_uploader("Upload Chart Screenshot (Optional but Recommended)", type=['png', 'jpg', 'jpeg'])
+                
                 col_b1, col_b2 = st.columns(2)
                 
-                if col_b1.button("Send to Telegram"):
+                # FIX: Telegram Split Message Logic
+                if col_b1.button("Send to Telegram 🚀"):
                     if tg_token and tg_chat:
                         try:
-                            url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-                            data = {"chat_id": tg_chat, "text": msg}
-                            requests.post(url, data=data)
-                            st.success("✅ Sent to Telegram!")
+                            # 1. Send Photo if uploaded
+                            if uploaded_file:
+                                files = {'photo': uploaded_file.getvalue()}
+                                url_photo = f"https://api.telegram.org/bot{tg_token}/sendPhoto"
+                                data_photo = {'chat_id': tg_chat, 'caption': f"🔥 Analysis: {ticker}", 'parse_mode': 'Markdown'}
+                                requests.post(url_photo, data=data_photo, files=files)
+                            
+                            # 2. Send Full Text (Split to avoid cutoff)
+                            url_msg = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+                            
+                            # Clean up AI text to look good
+                            clean_msg = msg.replace("###", "")
+                            data_msg = {"chat_id": tg_chat, "text": clean_msg}
+                            
+                            requests.post(url_msg, data=data_msg)
+                            st.success("✅ Sent to Telegram (Image + Text Split)!")
+                            
                         except Exception as e:
                             st.error(f"Failed: {e}")
                     else:
                         st.warning("⚠️ Enter Telegram Keys in Sidebar.")
                 
                 if col_b2.button("Post to X (Twitter)"):
-                    # Open Twitter Intent
                     encoded_msg = urllib.parse.quote(msg)
-                    st.link_button("🐦 Tweet This", f"https://twitter.com/intent/tweet?text={encoded_msg}")
+                    st.link_button("🐦 Launch Tweet", f"https://twitter.com/intent/tweet?text={encoded_msg}")
 
         else:
             st.error("Data connection failed. Try another ticker.")
