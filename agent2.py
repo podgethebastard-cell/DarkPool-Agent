@@ -102,7 +102,7 @@ if "TELEGRAM_CHAT_ID" in st.secrets: st.session_state.tg_chat = st.secrets["TELE
 tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password")
 tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat)
 
-# --- TOP 100 ASSETS ---
+# --- TOP 100 ASSETS (FULL DICTIONARY) ---
 crypto_assets = {
     # 👑 THE KINGS
     "Bitcoin (BTC)": "BTC-USD", "Ethereum (ETH)": "ETH-USD", "Solana (SOL)": "SOL-USD",
@@ -350,6 +350,7 @@ def calculate_strategies(df):
     df['Sig_BB'] = np.where(df['Close'] < (sma20 - 2*std20), 1, np.where(df['Close'] > (sma20 + 2*std20), -1, 0))
 
     # 4. RSI Strategy (30/70)
+    # Re-calc standard RSI for strategy logic
     rsi = 100 - (100 / (1 + (pd.Series(np.where(df['Close'].diff() > 0, df['Close'].diff(), 0)).rolling(14).mean() / pd.Series(np.where(df['Close'].diff() < 0, -df['Close'].diff(), 0)).rolling(14).mean())))
     df['Sig_RSI'] = np.where(rsi < 30, 1, np.where(rsi > 70, -1, 0))
     
@@ -520,7 +521,7 @@ if df is not None and not df.empty:
                     --- TECHNICAL DATA ---
                     1. ATR (Volatility): ${atr_val:.2f}
                     2. Apex Trend: {apex_txt} (Cloud Top: ${cloud_top:.2f}, Bot: ${cloud_bot:.2f})
-                    3. DarkPool MAs: {last['DP_Score']:.0f}/5
+                    3. DarkPool MAs: {last['DP_Score']:.0f}/5 (Institutional Trend)
                     4. Institutional Trend (1D/1W): {inst_txt}
                     5. Liquidity: Supply @ ${swing_high:.2f}, Demand @ ${swing_low:.2f}
                     6. Momentum: {mom_txt}
@@ -545,16 +546,16 @@ if df is not None and not df.empty:
                     * **Rationale:** (1 sentence confluence summary)
                     
                     **2. ENTRY ZONE**
-                    * **Price:** ${entry_price:.2f} (Current Market Price)
+                    * **Price Range:** (e.g. $50,000 - $50,500)
                     * **Rationale:** (Technical basis)
                     
                     **3. STOP LOSS**
-                    * **Hard Stop:** ${stop_loss:.2f}
+                    * **Hard Stop:** (Specific Price)
                     * **Rationale:** (e.g. Below Apex Cloud)
                     
                     **4. TAKE PROFIT**
-                    * **Target:** ${take_profit:.2f}
-                    * **Ratio:** 1:1.5 Risk/Reward
+                    * **Conservative:** (Price)
+                    * **Aggressive:** (Price)
                     
                     **5. TRAILING STOP**
                     * **Dynamic Rule:** (e.g. Close below ${cloud_bot:.2f})
