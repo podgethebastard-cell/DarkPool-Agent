@@ -4,7 +4,5 @@ yfinance
 plotly
 pandas
 numpy
-matplotlib
 requests
 scipy
-pip
