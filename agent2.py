@@ -152,8 +152,22 @@ crypto_assets = {
     "Bittensor (TAO)": "TAO22974-USD", "Worldcoin (WLD)": "WLD-USD", "Helium (HNT)": "HNT-USD"
 }
 
-ticker_name = st.sidebar.selectbox("Target Asset", list(crypto_assets.keys()))
-ticker = crypto_assets[ticker_name]
+# --- SEARCH FEATURE ---
+search_mode = st.sidebar.radio("Asset Selection", ["Top 100 List", "Search Custom"], horizontal=True)
+
+if search_mode == "Top 100 List":
+    ticker_name = st.sidebar.selectbox("Target Asset", list(crypto_assets.keys()))
+    ticker = crypto_assets[ticker_name]
+else:
+    custom_symbol = st.sidebar.text_input("Enter Symbol (e.g. PEPE, WIF)", value="BTC").upper().strip()
+    # Auto-append -USD for crypto common names if no hyphen is present
+    if "-" not in custom_symbol and "=" not in custom_symbol:
+        ticker = f"{custom_symbol}-USD"
+        ticker_name = f"{custom_symbol} (Custom)"
+    else:
+        ticker = custom_symbol
+        ticker_name = f"{custom_symbol} (Custom)"
+
 interval = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=1)
 
 # ==========================================
@@ -298,12 +312,20 @@ def calculate_engine(df, ticker):
     df['Signal'] = df['MACD'].ewm(span=9).mean()
     df['Hist'] = (df['MACD'] - df['Signal']) * (df['Volume'] / df['Volume'].rolling(20).mean())
 
-    # 11. STOCHASTIC RSI
-    rsi = 100 - (100 / (1 + (pd.Series(np.where(df['Close'].diff() > 0, df['Close'].diff(), 0)).rolling(14).mean() / pd.Series(np.where(df['Close'].diff() < 0, -df['Close'].diff(), 0)).rolling(14).mean())))
-    min_rsi = rsi.rolling(14).min()
-    max_rsi = rsi.rolling(14).max()
-    stoch_rsi = (rsi - min_rsi) / (max_rsi - min_rsi)
-    df['Stoch_K'] = stoch_rsi.rolling(3).mean() * 100
+    # 11. STOCHASTIC RSI (FIXED)
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # Stoch Logic
+    min_rsi = df['RSI'].rolling(14).min()
+    max_rsi = df['RSI'].rolling(14).max()
+    stoch = (df['RSI'] - min_rsi) / (max_rsi - min_rsi)
+    df['Stoch_K'] = stoch.rolling(3).mean() * 100
     df['Stoch_D'] = df['Stoch_K'].rolling(3).mean()
     
     # 12. ATR (Already calc for ADX/Apex)
@@ -350,9 +372,8 @@ def calculate_strategies(df):
     df['Sig_BB'] = np.where(df['Close'] < (sma20 - 2*std20), 1, np.where(df['Close'] > (sma20 + 2*std20), -1, 0))
 
     # 4. RSI Strategy (30/70)
-    # Re-calc standard RSI for strategy logic
-    rsi = 100 - (100 / (1 + (pd.Series(np.where(df['Close'].diff() > 0, df['Close'].diff(), 0)).rolling(14).mean() / pd.Series(np.where(df['Close'].diff() < 0, -df['Close'].diff(), 0)).rolling(14).mean())))
-    df['Sig_RSI'] = np.where(rsi < 30, 1, np.where(rsi > 70, -1, 0))
+    # Uses the fixed RSI from calculate_engine
+    df['Sig_RSI'] = np.where(df['RSI'] < 30, 1, np.where(df['RSI'] > 70, -1, 0))
     
     return df
 
@@ -375,7 +396,15 @@ st.markdown(f'<div class="titan-header">⚡ TITAN TERMINAL: {ticker_name}</div>'
 
 # 1. TRADINGVIEW WIDGET
 tv_int_map = {"15m": "15", "1h": "60", "4h": "240", "1d": "D"}
-tv_sym = f"BINANCE:{ticker.replace('-USD', 'USDT')}"
+# Handle custom symbols for TV
+if "BINANCE" not in ticker and "=" not in ticker:
+    # Attempt to format standard crypto
+    tv_ticker_clean = ticker.replace("-USD", "USDT")
+    tv_sym = f"BINANCE:{tv_ticker_clean}"
+else:
+    # Use as is for things like ^GSPC or GC=F (might default to TV generic)
+    tv_sym = ticker.replace("-USD", "")
+
 components.html(
     f"""<div class="tradingview-widget-container"><div id="tradingview_widget"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%","height": 450,"symbol": "{tv_sym}","interval": "{tv_int_map[interval]}","timezone": "Etc/UTC","theme": "dark","style": "1","locale": "en","toolbar_bg": "#f1f3f6","enable_publishing": false,"hide_side_toolbar": false,"allow_symbol_change": true,"container_id": "tradingview_widget"}});</script></div>""",
     height=460,
@@ -500,30 +529,18 @@ if df is not None and not df.empty:
                 with st.spinner("Calculating Precise Levels..."):
                     client = OpenAI(api_key=api_key)
                     
-                    # Pre-Calculate Levels
-                    curr_price = last['Close']
-                    atr_val = last['ATR']
-                    swing_low = last['Pivot_Low'] if not pd.isna(last['Pivot_Low']) else curr_price - (2*atr_val)
-                    swing_high = last['Pivot_High'] if not pd.isna(last['Pivot_High']) else curr_price + (2*atr_val)
+                    # Levels are pre-calculated above (lines 438-450)
                     
-                    stop_long = curr_price - (2 * atr_val)
-                    stop_short = curr_price + (2 * atr_val)
-                    target_long = curr_price + (4 * atr_val)
-                    target_short = curr_price - (4 * atr_val)
-                    
-                    cloud_top = last['Apex_Upper']
-                    cloud_bot = last['Apex_Lower']
-
                     prompt = f"""
                     Act as a Senior Crypto Quantitative Trader. 
                     Analyze {ticker} ({interval}) at Price ${curr_price:.2f}.
                     
                     --- TECHNICAL DATA ---
                     1. ATR (Volatility): ${atr_val:.2f}
-                    2. Apex Trend: {apex_txt} (Cloud Top: ${cloud_top:.2f}, Bot: ${cloud_bot:.2f})
+                    2. Apex Trend: {apex_txt} (Cloud Top: ${last['Apex_Upper']:.2f}, Bot: ${last['Apex_Lower']:.2f})
                     3. DarkPool MAs: {last['DP_Score']:.0f}/5 (Institutional Trend)
                     4. Institutional Trend (1D/1W): {inst_txt}
-                    5. Liquidity: Supply @ ${swing_high:.2f}, Demand @ ${swing_low:.2f}
+                    5. Liquidity: Supply @ ${last['Pivot_High']:.2f}, Demand @ ${last['Pivot_Low']:.2f}
                     6. Momentum: {mom_txt}
                     
                     --- STRATEGY SIGNALS ---
@@ -532,8 +549,8 @@ if df is not None and not df.empty:
                     - RSI: {last['Sig_RSI']}
                     
                     --- CALCULATED LEVELS (Use these if valid) ---
-                    - LONG SETUP: Stop < ${stop_long:.2f}, Target > ${target_long:.2f}
-                    - SHORT SETUP: Stop > ${stop_short:.2f}, Target < ${target_short:.2f}
+                    - LONG SETUP: Stop < ${stop_long:.2f}, Target > ${take_profit:.2f}
+                    - SHORT SETUP: Stop > ${stop_loss:.2f}, Target < ${take_profit:.2f}
                     
                     --- MISSION ---
                     Synthesize a TRADE PLAN in strictly formatted MARKDOWN.
@@ -546,19 +563,19 @@ if df is not None and not df.empty:
                     * **Rationale:** (1 sentence confluence summary)
                     
                     **2. ENTRY ZONE**
-                    * **Price Range:** (e.g. $50,000 - $50,500)
+                    * **Price:** ${entry_price:.2f} (Current Market Price)
                     * **Rationale:** (Technical basis)
                     
                     **3. STOP LOSS**
-                    * **Hard Stop:** (Specific Price)
+                    * **Hard Stop:** ${stop_loss:.2f}
                     * **Rationale:** (e.g. Below Apex Cloud)
                     
                     **4. TAKE PROFIT**
-                    * **Conservative:** (Price)
-                    * **Aggressive:** (Price)
+                    * **Target:** ${take_profit:.2f}
+                    * **Ratio:** 1:1.5 Risk/Reward
                     
                     **5. TRAILING STOP**
-                    * **Dynamic Rule:** (e.g. Close below ${cloud_bot:.2f})
+                    * **Dynamic Rule:** (e.g. Close below ${last['Apex_Lower']:.2f})
                     """
                     res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}])
                     st.info(res.choices[0].message.content)
