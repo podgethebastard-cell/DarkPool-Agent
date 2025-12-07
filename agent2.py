@@ -598,7 +598,6 @@ if df is not None and not df.empty:
         broadcast_msg = f"""
 🔥 TITAN SIGNAL: {ticker} ({interval})
 {sig_emoji} DIRECTION: {direction}
-
 🚪 ENTRY: ${entry_price:,.2f}
 🛑 STOP LOSS: ${stop_loss:,.2f}
 🎯 TARGET: ${take_profit:,.2f}
@@ -606,7 +605,6 @@ if df is not None and not df.empty:
 📊 Momentum: {mom_txt}
 💰 Money Flow: {mfi_txt}
 💀 Institutional Trend: {inst_txt}
-
 ⚠️ *Not financial advice. DYOR.*
 #DarkPool #Titan #Crypto
         """
