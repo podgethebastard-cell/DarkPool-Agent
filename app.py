@@ -987,7 +987,8 @@ if st.session_state.get('run_analysis'):
                 st.markdown("#### 🚀 Broadcast Signal")
                 
                 # Signal Message Draft
-                signal_text = f"🔥 {ticker} Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict[:50]}...\n\n#Trading #DarkPool #Titan"
+                # FIX: REMOVED THE SLICE [:50] FROM ai_verdict BELOW vvv
+                signal_text = f"🔥 {ticker} Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #Titan"
                 
                 msg = st.text_area("Message Preview", value=signal_text, height=150)
                 
