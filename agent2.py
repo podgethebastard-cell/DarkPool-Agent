@@ -369,6 +369,8 @@ def calculate_strategies(df):
     # 3. Bollinger Directed
     sma20 = df['Close'].rolling(20).mean()
     std20 = df['Close'].rolling(20).std()
+    # Close < Lower (Dip Buy attempt) or Close > Upper (Breakout/Overbought)
+    # Simple crossover logic:
     df['Sig_BB'] = np.where(df['Close'] < (sma20 - 2*std20), 1, np.where(df['Close'] > (sma20 + 2*std20), -1, 0))
 
     # 4. RSI Strategy (30/70)
@@ -606,6 +608,8 @@ Technical Confluence:
 📊 Momentum: {mom_txt}
 💰 Money Flow: {mfi_txt}
 💀 Institutional Trend: {inst_txt}
+
+⚠️ *Not financial advice. DYOR.*
 
 #DarkPool #Titan #Crypto
         """
