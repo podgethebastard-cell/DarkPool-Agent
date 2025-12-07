@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -431,7 +430,7 @@ if df is not None and not df.empty:
             if not api_key:
                 st.error("Missing OpenAI API Key")
             else:
-                with st.spinner("Analyzing Apex Structures..."):
+                with st.spinner("Analyzing Signals..."):
                     client = OpenAI(api_key=api_key)
                     
                     # Prepare data for AI
@@ -448,6 +447,9 @@ if df is not None and not df.empty:
                     - Squeeze: {'ON' if last['Squeeze_On'] else 'OFF'} (Mom: {last['Sqz_Mom']:.2f})
                     - Ichimoku: Price {'Above' if last['Close'] > last['SpanA'] else 'Below'} Cloud
                     - MFI: {mfi_val:.1f}
+                    - ATR: {last['ATR']:.2f} (Use for Stop Loss)
+                    - Last Pivot Low (Support): {last['Pivot_Low']:.2f}
+                    - Last Pivot High (Resist): {last['Pivot_High']:.2f}
                     """
                     
                     prompt = f"""
@@ -461,8 +463,16 @@ if df is not None and not df.empty:
                     
                     MISSION:
                     Synthesize these conflicting or confirming signals into a clear trade decision.
-                    If Apex Trend and Momentum agree, confidence is high.
-                    VERDICT: LONG / SHORT / WAIT.
+                    Use ATR and Pivot Levels to calculate precise ENTRY, STOP LOSS, and TAKE PROFIT targets.
+                    
+                    OUTPUT FORMAT:
+                    1. VERDICT: LONG / SHORT / WAIT (Confidence Level)
+                    2. ANALYSIS: Brief confluence summary.
+                    3. TRADE SETUP:
+                       - ENTRY ZONE: Specific price range.
+                       - STOP LOSS: Specific price (Hard invalidation).
+                       - TAKE PROFIT: Specific price targets (Conservative & Aggressive).
+                       - TRAILING STOP: Suggest a dynamic stop (e.g., "Close below Apex Cloud" or "2x ATR").
                     """
                     res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}])
                     st.info(res.choices[0].message.content)
