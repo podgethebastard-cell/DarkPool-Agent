@@ -102,7 +102,7 @@ if "TELEGRAM_CHAT_ID" in st.secrets: st.session_state.tg_chat = st.secrets["TELE
 tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password")
 tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat)
 
-# --- TOP 100 ASSETS ---
+# --- TOP 100 ASSETS (FULL DICTIONARY) ---
 crypto_assets = {
     # 👑 THE KINGS
     "Bitcoin (BTC)": "BTC-USD", "Ethereum (ETH)": "ETH-USD", "Solana (SOL)": "SOL-USD",
@@ -430,49 +430,53 @@ if df is not None and not df.empty:
             if not api_key:
                 st.error("Missing OpenAI API Key")
             else:
-                with st.spinner("Analyzing Signals..."):
+                with st.spinner("Calculating Precise Levels..."):
                     client = OpenAI(api_key=api_key)
                     
-                    # Prepare data for AI
-                    strat_summary = f"""
-                    1. Momentum Strategy: {mom_txt} ({mom_cond})
-                    2. ADX Breakout: {'YES' if last['Sig_ADX'] != 0 else 'NO'} (Val: {adx_val:.1f})
-                    3. Bollinger Reversion: {bb_txt} ({bb_cond})
-                    4. RSI Strategy: {'BUY' if last['Sig_RSI']==1 else 'SELL' if last['Sig_RSI']==-1 else 'NEUTRAL'}
-                    """
+                    # Pre-Calculate Key Levels for AI
+                    curr_price = last['Close']
+                    atr_val = last['ATR']
+                    swing_low = last['Pivot_Low'] if not pd.isna(last['Pivot_Low']) else curr_price - (2*atr_val)
+                    swing_high = last['Pivot_High'] if not pd.isna(last['Pivot_High']) else curr_price + (2*atr_val)
                     
-                    indicator_summary = f"""
-                    - Apex Trend: {apex_txt}
-                    - Volume Delta: {last['Vol_Delta']:.0f}
-                    - Squeeze: {'ON' if last['Squeeze_On'] else 'OFF'} (Mom: {last['Sqz_Mom']:.2f})
-                    - Ichimoku: Price {'Above' if last['Close'] > last['SpanA'] else 'Below'} Cloud
-                    - MFI: {mfi_val:.1f}
-                    - ATR: {last['ATR']:.2f} (Use for Stop Loss)
-                    - Last Pivot Low (Support): {last['Pivot_Low']:.2f}
-                    - Last Pivot High (Resist): {last['Pivot_High']:.2f}
-                    """
+                    # Determine Stop Logic (ATR Based)
+                    stop_long = curr_price - (2 * atr_val)
+                    stop_short = curr_price + (2 * atr_val)
                     
+                    # Targets (2R)
+                    target_long = curr_price + (4 * atr_val)
+                    target_short = curr_price - (4 * atr_val)
+                    
+                    # Apex Cloud Levels
+                    cloud_top = last['Apex_Upper']
+                    cloud_bot = last['Apex_Lower']
+
                     prompt = f"""
-                    Analyze {ticker} ({interval}) based on these TECHNICAL SIGNALS:
+                    Act as a Senior Crypto Quantitative Trader. 
+                    Analyze {ticker} ({interval}) at Price ${curr_price:.2f}.
                     
-                    STRATEGIES:
-                    {strat_summary}
+                    --- TECHNICAL DATA ---
+                    1. ATR (Volatility): ${atr_val:.2f}
+                    2. Apex Trend: {apex_txt} (Cloud Top: ${cloud_top:.2f}, Bot: ${cloud_bot:.2f})
+                    3. Liquidity: Supply @ ${swing_high:.2f}, Demand @ ${swing_low:.2f}
+                    4. Momentum: {mom_txt}
                     
-                    INDICATORS:
-                    {indicator_summary}
+                    --- STRATEGY SIGNALS ---
+                    - ADX Breakout: {'YES' if last['Sig_ADX'] != 0 else 'NO'}
+                    - Bollinger: {bb_txt}
+                    - RSI: {last['Sig_RSI']}
                     
-                    MISSION:
-                    Synthesize these conflicting or confirming signals into a clear trade decision.
-                    Use ATR and Pivot Levels to calculate precise ENTRY, STOP LOSS, and TAKE PROFIT targets.
+                    --- CALCULATED LEVELS (Use these if valid) ---
+                    - LONG SETUP: Stop < ${stop_long:.2f}, Target > ${target_long:.2f}
+                    - SHORT SETUP: Stop > ${stop_short:.2f}, Target < ${target_short:.2f}
                     
-                    OUTPUT FORMAT:
-                    1. VERDICT: LONG / SHORT / WAIT (Confidence Level)
-                    2. ANALYSIS: Brief confluence summary.
-                    3. TRADE SETUP:
-                       - ENTRY ZONE: Specific price range.
-                       - STOP LOSS: Specific price (Hard invalidation).
-                       - TAKE PROFIT: Specific price targets (Conservative & Aggressive).
-                       - TRAILING STOP: Suggest a dynamic stop (e.g., "Close below Apex Cloud" or "2x ATR").
+                    --- MISSION ---
+                    Synthesize a TRADE PLAN.
+                    1. VERDICT: LONG / SHORT / WAIT.
+                    2. ENTRY ZONE: Specific price range.
+                    3. STOP LOSS: Hard price level (Based on ATR or Pivot).
+                    4. TAKE PROFIT: Conservative & Aggressive Targets (Prices).
+                    5. TRAILING STOP: Define a dynamic rule (e.g., "Close below Apex Cloud at ${cloud_bot:.2f}").
                     """
                     res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}])
                     st.info(res.choices[0].message.content)
