@@ -69,12 +69,16 @@ st.markdown("""
     div[data-testid="stVerticalBlockBorderWrapper"] {
         border-color: #30363d !important;
     }
+    div[data-baseweb="tooltip"] {
+        background-color: #30363d !important;
+        color: #00ff00 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v5.0 Titan Edition*")
+st.markdown("##### *Institutional-Grade Market Intelligence // v5.2 Titan Edition*")
 st.markdown("---")
 
 # --- API Key Management ---
@@ -126,7 +130,6 @@ def get_global_performance():
         "Treasuries (TLT)": "TLT"
     }
     try:
-        # Optimization: Download all at once
         tickers_list = list(assets.values())
         data = yf.download(tickers_list, period="5d", interval="1d", progress=False, group_by='ticker')
         
@@ -252,81 +255,120 @@ def get_macro_data():
         return groups, {}, {}
 
 # ==========================================
-# 3. MATH LIBRARY & ALGORITHMS
+# 3. MATH LIBRARY & ALGORITHMS (COMPREHENSIVE)
 # ==========================================
 def calc_indicators(df):
-    """Calculates Base Indicators + Dashboard V2 Logic"""
-    df['HMA'] = df['Close'].rolling(55).mean()
+    """Calculates Every Single Indicator for Titan Analysis."""
     
+    # --- 1. APEX TREND (Weighted Hull MA) ---
+    def wma(series, length):
+        weights = np.arange(1, length + 1)
+        return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+
+    period = 55
+    sqrt_length = int(np.sqrt(period))
+    wma1 = wma(df['Close'], int(period/2))
+    wma2 = wma(df['Close'], period)
+    df['HMA'] = wma(2 * wma1 - wma2, sqrt_length)
+    df['Apex_Trend'] = np.where(df['Close'] > df['HMA'], 'BULLISH', 'BEARISH')
+
+    # --- 2. VECTOR CANDLES (Heikin Ashi) ---
+    df['HA_Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+    df['HA_Open'] = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
+    df['Vector_Color'] = np.where(df['HA_Close'] > df['HA_Open'], 'GREEN', 'RED')
+
+    # --- 3. GANN ACTIVATOR ---
+    sma_high = df['High'].rolling(3).mean()
+    sma_low = df['Low'].rolling(3).mean()
+    df['Gann_Line'] = np.where(df['Close'] > df['HMA'], sma_low, sma_high)
+
+    # --- 4. ADVANCED VOLUME (RVOL) ---
+    df['Vol_SMA'] = df['Volume'].rolling(20).mean()
+    df['RVOL'] = df['Volume'] / df['Vol_SMA']
+
+    # --- 5. STANDARD INDICATORS ---
+    # Volatility
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(14).mean()
     
+    # Pivots
     df['Pivot_Resist'] = df['High'].rolling(20).max()
     df['Pivot_Support'] = df['Low'].rolling(20).min()
     
-    df['MFI'] = (df['Close'].diff() * df['Volume']).rolling(14).mean() 
+    # Money Flow Matrix (Titan MFI)
+    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+    money_flow = typical_price * df['Volume']
+    delta_tp = typical_price.diff()
+    pos_flow = np.where(delta_tp > 0, money_flow, 0)
+    neg_flow = np.where(delta_tp < 0, money_flow, 0)
+    pos_mf_sum = pd.Series(pos_flow).rolling(14).sum()
+    neg_mf_sum = pd.Series(neg_flow).rolling(14).sum()
+    mfi_ratio = pos_mf_sum / neg_mf_sum
+    df['MFI'] = 100 - (100 / (1 + mfi_ratio))
     
+    # Bollinger & Keltner (Squeeze)
     df['BB_Mid'] = df['Close'].rolling(20).mean()
     df['BB_Std'] = df['Close'].rolling(20).std()
     df['KC_ATR'] = df['ATR'].rolling(20).mean()
     df['Squeeze_On'] = (df['BB_Mid'] + 2*df['BB_Std']) < (df['BB_Mid'] + 1.5*df['KC_ATR'])
     df['Mom'] = df['Close'] - df['Close'].rolling(20).mean()
 
-    # --- DASHBOARD V2 SPECIFIC CALCULATIONS ---
+    # MACD
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['Hist'] = df['MACD'] - df['Signal']
 
+    # Stochastic
     low_min = df['Low'].rolling(14).min()
     high_max = df['High'].rolling(14).max()
     df['Stoch_K'] = 100 * (df['Close'] - low_min) / (high_max - low_min)
     df['Stoch_D'] = df['Stoch_K'].rolling(3).mean()
 
+    # ROC & EMAs
     df['ROC'] = df['Close'].pct_change(14) * 100
     df['EMA_Fast'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA_Slow'] = df['Close'].ewm(span=21, adjust=False).mean()
     df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
 
+    # OBV & VWAP
     df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
     df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
 
+    # ADX
     plus_dm = df['High'].diff()
     minus_dm = df['Low'].diff()
     plus_dm[plus_dm < 0] = 0
     minus_dm[minus_dm > 0] = 0
-    
     tr14 = tr.rolling(14).mean()
     plus_di = 100 * (plus_dm.ewm(alpha=1/14).mean() / tr14)
     minus_di = 100 * (minus_dm.ewm(alpha=1/14).mean() / tr14)
     dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
     df['ADX'] = dx.rolling(14).mean()
 
+    # RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
+    # Momentum Scoring
     rsi_norm = (df['RSI'] - 50) * 2
     macd_norm = np.where(df['Hist'] > 0, np.minimum(df['Hist'] * 10, 100), np.maximum(df['Hist'] * 10, -100))
     stoch_norm = (df['Stoch_K'] - 50) * 2
     roc_norm = np.where(df['ROC'] > 0, np.minimum(df['ROC'] * 10, 100), np.maximum(df['ROC'] * 10, -100))
-    
     df['Mom_Score'] = np.round((rsi_norm + macd_norm + stoch_norm + roc_norm) / 4)
 
     return df
 
 def calc_fear_greed_v4(df):
-    """
-    🔥 DarkPool's Fear & Greed v4 Port
-    Calculates composite sentiment index, FOMO, and Panic states.
-    """
-    # 1. RSI Component (30% Weight)
+    """🔥 DarkPool's Fear & Greed v4 Port"""
+    # 1. RSI Component
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -335,7 +377,7 @@ def calc_fear_greed_v4(df):
     rs = avg_gain / avg_loss
     df['FG_RSI'] = 100 - (100 / (1 + rs))
     
-    # 2. MACD Component (25% Weight)
+    # 2. MACD Component
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
@@ -343,17 +385,16 @@ def calc_fear_greed_v4(df):
     hist = macd - signal
     df['FG_MACD'] = (50 + (hist * 10)).clip(0, 100)
     
-    # 3. Bollinger Band Component (25% Weight)
+    # 3. BB Component
     sma20 = df['Close'].rolling(20).mean()
     std20 = df['Close'].rolling(20).std()
     upper = sma20 + (std20 * 2)
     lower = sma20 - (std20 * 2)
     df['FG_BB'] = ((df['Close'] - lower) / (upper - lower) * 100).clip(0, 100)
     
-    # 4. Moving Average Trend (20% Weight)
+    # 4. MA Trend
     sma50 = df['Close'].rolling(50).mean()
     sma200 = df['Close'].rolling(200).mean()
-    
     conditions = [
         (df['Close'] > sma50) & (sma50 > sma200),
         (df['Close'] > sma50),
@@ -362,25 +403,22 @@ def calc_fear_greed_v4(df):
     choices = [75, 60, 25]
     df['FG_MA'] = np.select(conditions, choices, default=40)
     
-    # Composite Index
+    # Composite
     df['FG_Raw'] = (df['FG_RSI'] * 0.30) + (df['FG_MACD'] * 0.25) + (df['FG_BB'] * 0.25) + (df['FG_MA'] * 0.20)
     df['FG_Index'] = df['FG_Raw'].rolling(5).mean()
     
-    # --- FOMO LOGIC ---
+    # FOMO & PANIC
     vol_ma = df['Volume'].rolling(20).mean()
     high_vol = df['Volume'] > (vol_ma * 2.5)
     high_rsi = df['FG_RSI'] > 70
     momentum = df['Close'] > df['Close'].shift(3) * 1.02
     above_bb = df['Close'] > (upper * 1.0)
-    
     df['IS_FOMO'] = high_vol & high_rsi & momentum & above_bb
     
-    # --- PANIC LOGIC ---
     daily_drop = df['Close'].pct_change() * 100
     sharp_drop = daily_drop < -3.0
     panic_vol = df['Volume'] > (vol_ma * 3.0)
     low_rsi = df['FG_RSI'] < 30
-    
     df['IS_PANIC'] = sharp_drop & panic_vol & (low_rsi | (daily_drop < -5.0))
     
     return df
@@ -418,7 +456,7 @@ def calc_volume_profile(df, bins=50):
     return vp, poc_price
 
 def get_sr_channels(df, pivot_period=10, loopback=290, max_width_pct=5, min_strength=1):
-    """Python implementation of 'Support Resistance Channels' logic."""
+    """Support Resistance Channels."""
     if len(df) < loopback: loopback = len(df)
     window = df.iloc[-loopback:].copy()
     
@@ -536,24 +574,18 @@ def calc_correlations(ticker, lookback_days=180):
     return target_corr
 
 def calc_mtf_trend(ticker):
-    """📡 Multi-Timeframe Trend Radar (Fixed for Multi-Index)."""
+    """📡 Multi-Timeframe Trend Radar."""
     timeframes = {"1H": "1h", "4H": "1h", "Daily": "1d", "Weekly": "1wk"}
     trends = {}
     
     for tf_name, tf_code in timeframes.items():
         try:
-            if tf_name == "1H":
-                period = "1y" 
-            elif tf_name == "4H":
-                period = "1y" 
-            else:
-                period = "2y"
+            if tf_name == "1H": period = "1y" 
+            elif tf_name == "4H": period = "1y" 
+            else: period = "2y"
                 
             df = yf.download(ticker, period=period, interval=tf_code, progress=False)
-            
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-                
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
             if df.empty or len(df) < 50: 
                 trends[tf_name] = {"Trend": "N/A", "RSI": "N/A", "EMA Spread": "N/A"}
                 continue
@@ -587,9 +619,7 @@ def calc_intraday_dna(ticker):
     """⏱️ Intraday Seasonality (Hour of Day)."""
     try:
         df = yf.download(ticker, period="60d", interval="1h", progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         if df.empty: return None
         
         df['Return'] = df['Close'].pct_change() * 100
@@ -607,10 +637,7 @@ def get_seasonality_stats(ticker):
     try:
         df = yf.download(ticker, period="20y", interval="1mo", progress=False)
         if df.empty or len(df) < 12: return None
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         if 'Close' not in df.columns:
              if 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
              else: return None
@@ -627,37 +654,28 @@ def get_seasonality_stats(ticker):
         for p in periods:
             rolling_ret = df['Close'].pct_change(periods=p) * 100
             rolling_ret = rolling_ret.dropna()
-            
             win_count = (rolling_ret > 0).sum()
             total_count = len(rolling_ret)
             win_rate = (win_count / total_count * 100) if total_count > 0 else 0
             avg_ret = rolling_ret.mean()
-            
             hold_stats[p] = {"Win Rate": win_rate, "Avg Return": avg_ret}
             
         month_stats = df.groupby('Month')['Return'].agg(['mean', lambda x: (x > 0).mean() * 100, 'count'])
         month_stats.columns = ['Avg Return', 'Win Rate', 'Count']
         
         return heatmap_data, hold_stats, month_stats
-        
-    except Exception as e:
-        return None
+    except Exception as e: return None
 
 def calc_day_of_week_dna(ticker, lookback, calc_mode):
     """DarkPool's Day of Week Seasonality DNA Port"""
     try:
         df = yf.download(ticker, period="5y", interval="1d", progress=False)
         if df.empty: return None
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         df = df.iloc[-lookback:].copy()
         
-        if calc_mode == "Close to Close (Total)":
-            df['Day_Return'] = df['Close'].pct_change() * 100
-        else: # Open to Close (Intraday)
-            df['Day_Return'] = ((df['Close'] - df['Open']) / df['Open']) * 100
+        if calc_mode == "Close to Close (Total)": df['Day_Return'] = df['Close'].pct_change() * 100
+        else: df['Day_Return'] = ((df['Close'] - df['Open']) / df['Open']) * 100
             
         df = df.dropna()
         df['Day_Name'] = df.index.day_name()
@@ -672,22 +690,19 @@ def calc_day_of_week_dna(ticker, lookback, calc_mode):
         stats = stats.reindex([d for d in days_order if d in stats.index])
         
         return cum_ret, stats
-        
-    except Exception as e:
-        return None
+    except Exception as e: return None
 
 # ==========================================
-# 4. AI ANALYST (MODIFIED FOR TIMEFRAME AWARENESS)
+# 4. AI ANALYST (UPDATED TO SEE ALL INDICATORS)
 # ==========================================
 def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
-    if not st.session_state.api_key: 
-        return "⚠️ Waiting for OpenAI API Key in the sidebar..."
+    if not st.session_state.api_key: return "⚠️ Waiting for OpenAI API Key in the sidebar..."
     
     last = df.iloc[-1]
-    trend = "BULLISH" if last['Close'] > last['HMA'] else "BEARISH"
+    trend = last['Apex_Trend'] 
     risk_dollars = balance * (risk_pct / 100)
     
-    if trend == "BULLISH":
+    if "BULL" in trend:
         stop_level = last['Pivot_Support']
         direction = "LONG"
     else:
@@ -711,18 +726,34 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     if last['IS_FOMO']: psych_alert = "WARNING: ALGORITHMIC FOMO DETECTED."
     if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
 
+    # --- UPDATED PROMPT: INCLUDES ALL INDICATORS ---
     prompt = f"""
-    Act as a Global Macro Strategist. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
+    Act as a Global Macro Strategist & Quant Fund Manager. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
     
-    --- FUNDAMENTALS ---
-    {fund_text}
+    --- TITAN PROPRIETARY METRICS ---
+    1. Apex Trend (Hull MA): {last['Apex_Trend']}
+    2. Vector Candle Color: {last['Vector_Color']} (Heikin Ashi Momentum)
+    3. Gann Activator Level: ${last['Gann_Line']:.2f}
+    4. RVOL (Relative Volume): {last['RVOL']:.2f} (Target > 1.5 for breakout)
     
-    --- TECHNICALS ({timeframe}) ---
-    Trend: {trend}. Volatility (ATR): {last['ATR']:.2f}.
+    --- STANDARD TECHNICALS ---
+    - RSI: {last['RSI']:.2f}
+    - MFI (Money Flow): {last['MFI']:.2f}
+    - MACD Histogram: {last['Hist']:.4f}
+    - ADX (Trend Strength): {last['ADX']:.2f}
+    - Stochastic K: {last['Stoch_K']:.2f}
+    - Bollinger Squeeze: {"ACTIVE" if last['Squeeze_On'] else "OFF"}
+    - ATR (Volatility): {last['ATR']:.2f}
+    - OBV (On Balance Vol): {last['OBV']:.0f}
     
+    --- KEY LEVELS ---
+    - Pivot Resistance: ${last['Pivot_Resist']:.2f}
+    - Pivot Support: ${last['Pivot_Support']:.2f}
+    - VWAP: ${last['VWAP']:.2f}
+
     --- PSYCHOLOGY (DarkPool Index) ---
-    Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
-    {psych_alert}
+    - Sentiment Score: {fg_val:.1f}/100 ({fg_state}).
+    - Alerts: {psych_alert}
     
     --- RISK PROTOCOL (1% Rule) ---
     Capital: ${balance}. Risk Budget: ${risk_dollars:.2f} ({risk_pct}%).
@@ -730,8 +761,8 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     
     --- MISSION ---
     1. Verdict: BUY, SELL, or WAIT (Based on {timeframe} chart).
-    2. Reasoning: Integrate Technicals, Fundamentals, and Market Psychology.
-    3. Trade Plan: Entry, Stop, Target (2.5R), Size.
+    2. Reasoning: Synthesize Apex Trend, Vector Candle, RVOL, and MFI.
+    3. Trade Plan: Exact Entry, Stop, Target (2.5R), Size.
     """
     
     try:
@@ -758,10 +789,10 @@ if "TELEGRAM_TOKEN" in st.secrets: st.session_state.tg_token = st.secrets["TELEG
 if "TELEGRAM_CHAT_ID" in st.secrets: st.session_state.tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
 
 # 3. Create Inputs (Auto-filled if secrets exist)
-tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password")
-tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat)
+tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password", help="Get this from @BotFather on Telegram.")
+tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat, help="Your numeric user or group ID.")
 
-input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"], index=1)
+input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"], index=1, help="Select input method.")
 
 # --- MODIFIED ASSETS DICTIONARY (EXPANDED) ---
 if input_mode == "Curated Lists":
@@ -782,18 +813,17 @@ if input_mode == "Curated Lists":
             "CL=F", "NG=F", "^VIX", "TLT"
         ]
     }
-    cat = st.sidebar.selectbox("Asset Class", list(assets.keys()))
-    ticker = st.sidebar.selectbox("Ticker", assets[cat])
+    cat = st.sidebar.selectbox("Asset Class", list(assets.keys()), help="Select asset category.")
+    ticker = st.sidebar.selectbox("Ticker", assets[cat], help="Select specific asset.")
 else:
     st.sidebar.info("Type any ticker (e.g. SSLN.L, BTC-USD)")
-    # --- FIX: Changed default from "SSLN.L" to "BTC-USD" ---
-    ticker = st.sidebar.text_input("Search Ticker Symbol", value="BTC-USD").upper()
+    ticker = st.sidebar.text_input("Search Ticker Symbol", value="BTC-USD", help="Enter ticker symbol.").upper()
 
-interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=3)
+interval = st.sidebar.selectbox("Interval", ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk"], index=6, help="Select timeframe.")
 st.sidebar.markdown("---")
 
-balance = st.sidebar.number_input("Capital ($)", 1000, 1000000, 10000)
-risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, 1.0)
+balance = st.sidebar.number_input("Capital ($)", 1000, 1000000, 10000, help="Trading capital.")
+risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, 1.0, help="Risk per trade.")
 
 # --- GLOBAL MACRO HEADER ---
 macro_groups, m_price, m_chg = get_macro_data()
@@ -840,19 +870,16 @@ if st.button(f"Analyze {ticker}", help="Run Analysis"):
 if st.session_state.get('run_analysis'):
     with st.spinner(f"Analyzing {ticker}..."):
         
-        # --- FIX: DYNAMIC TIMEFRAME ADJUSTMENT FOR 1H/4H DATA ---
-        if interval in ["1m", "2m", "5m", "15m", "30m"]:
-            fetch_period = "59d" # Max for 15m is 60d
-        elif interval in ["1h", "4h"]: # Updated for 4H support
-            fetch_period = "1y" # Max for 1h is 730d, but 1y is safer
-        else:
-            fetch_period = "2y" # Standard for Daily+
+        # --- FIX: DYNAMIC TIMEFRAME ADJUSTMENT ---
+        if interval in ["1m", "2m", "5m"]: fetch_period = "5d" 
+        elif interval in ["15m", "30m"]: fetch_period = "50d" 
+        elif interval in ["1h", "4h"]: fetch_period = "1y" 
+        else: fetch_period = "2y" 
             
         df = safe_download(ticker, fetch_period, interval)
         
-        # --- FIX: RESAMPLE 4H DATA (Since Yahoo doesn't support it natively) ---
+        # --- FIX: RESAMPLE 4H DATA ---
         if interval == "4h" and df is not None:
-            # Resample 1h data to 4h
             agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
             if 'Adj Close' in df.columns: agg_dict['Adj Close'] = 'last'
             df = df.resample('4h').agg(agg_dict).dropna()
@@ -863,6 +890,8 @@ if st.session_state.get('run_analysis'):
             fund = get_fundamentals(ticker)
             sr_zones = get_sr_channels(df) 
             
+            last = df.iloc[-1]
+
             # --- TAB 1: TECHNICALS ---
             with tab1:
                 st.subheader(f"🎯 Sniper Scope: {ticker}")
@@ -870,10 +899,16 @@ if st.session_state.get('run_analysis'):
                 with col_chart:
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
                     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend"), row=1, col=1)
+                    
+                    # USE TITAN HMA (APEX TREND)
+                    fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='orange', width=2), name="Apex Trend (HMA)"), row=1, col=1)
+                    # ADD GANN LINES
+                    fig.add_trace(go.Scatter(x=df.index, y=df['Gann_Line'], line=dict(color='cyan', width=1, dash='dot'), name="Gann Activator"), row=1, col=1)
+
                     for z in sr_zones:
                         col = "rgba(0, 255, 0, 0.15)" if df['Close'].iloc[-1] > z['max'] else "rgba(255, 0, 0, 0.15)"
                         fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1], xref="x", yref="y", y0=z['min'], y1=z['max'], fillcolor=col, line=dict(width=0), row=1, col=1)
+                    
                     fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig, use_container_width=True)
                 with col_gauge:
@@ -882,10 +917,9 @@ if st.session_state.get('run_analysis'):
                     fig_gauge.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
                     st.plotly_chart(fig_gauge, use_container_width=True)
                     st.metric("RSI", f"{df['FG_RSI'].iloc[-1]:.1f}")
-                    st.metric("MACD", f"{df['FG_MACD'].iloc[-1]:.1f}")
+                    st.metric("Apex Trend", last['Apex_Trend'])
 
                 st.markdown("### 🤖 Strategy Briefing")
-                # --- FIX: PASS TIMEFRAME INTERVAL TO AI ANALYST ---
                 ai_verdict = ask_ai_analyst(df, ticker, fund, balance, risk_pct, interval)
                 st.info(ai_verdict)
 
@@ -921,7 +955,6 @@ if st.session_state.get('run_analysis'):
             with tab4:
                 st.subheader("📆 Day & Hour DNA")
                 c1, c2 = st.columns(2)
-                
                 # Day of Week
                 dna_res = calc_day_of_week_dna(ticker, 250, "Close to Close (Total)")
                 if dna_res:
@@ -933,7 +966,6 @@ if st.session_state.get('run_analysis'):
                         fig_dna.update_layout(template="plotly_dark", height=400)
                         st.plotly_chart(fig_dna, use_container_width=True)
                         st.dataframe(stats.style.background_gradient(subset=['Win Rate'], cmap="RdYlGn"))
-                
                 # Hourly DNA
                 hourly_res = calc_intraday_dna(ticker)
                 if hourly_res is not None:
@@ -948,17 +980,13 @@ if st.session_state.get('run_analysis'):
             with tab9:
                 st.subheader("🧩 Cross-Asset Intelligence")
                 c1, c2 = st.columns([0.4, 0.6])
-                
                 with c1:
                     st.markdown("**📡 Multi-Timeframe Radar**")
                     mtf_df = calc_mtf_trend(ticker)
-                    
                     def color_trend(val):
                         color = '#00ff00' if val == 'BULLISH' else '#ff0000' if val == 'BEARISH' else 'white'
                         return f'color: {color}; font-weight: bold'
-                    
                     st.dataframe(mtf_df.style.map(color_trend, subset=['Trend']), use_container_width=True)
-                    
                 with c2:
                     st.markdown("**🔗 Macro Correlation Matrix (180 Days)**")
                     corr_data = calc_correlations(ticker)
@@ -968,9 +996,17 @@ if st.session_state.get('run_analysis'):
 
             # --- TAB 5: DASHBOARD ---
             with tab5:
-                mom_score = df['Mom_Score'].iloc[-1]
-                sig = "BUY" if mom_score > 20 else "SELL" if mom_score < -20 else "HOLD"
-                dash_data = {"Metric": ["Momentum", "Signal", "RSI", "Trend"], "Value": [f"{mom_score:.0f}", sig, f"{df['RSI'].iloc[-1]:.1f}", "BULL" if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else "BEAR"]}
+                # UPDATED DASHBOARD WITH TITAN METRICS
+                dash_data = {
+                    "Metric": ["Apex Trend", "Vector Candle", "Money Flow (MFI)", "Adv. Volume (RVOL)", "RSI"], 
+                    "Value": [
+                        last['Apex_Trend'], 
+                        last['Vector_Color'], 
+                        f"{last['MFI']:.1f}", 
+                        f"{last['RVOL']:.2f}x", 
+                        f"{last['RSI']:.1f}"
+                    ]
+                }
                 st.dataframe(pd.DataFrame(dash_data), use_container_width=True)
 
             # --- TAB 6: SMC ---
@@ -982,7 +1018,6 @@ if st.session_state.get('run_analysis'):
                 for struct in smc['structures']: 
                     fig_smc.add_shape(type="line", x0=struct['x0'], x1=struct['x1'], y0=struct['y'], y1=struct['y'], line=dict(color=struct['color'], width=1, dash="dot"))
                     fig_smc.add_annotation(x=struct['x1'], y=struct['y'], text=struct['label'], showarrow=False, yshift=10 if struct['color']=='green' else -10, font=dict(color=struct['color'], size=10))
-
                 fig_smc.update_layout(height=600, template="plotly_dark", title="SMC Analysis")
                 st.plotly_chart(fig_smc, use_container_width=True)
 
@@ -1011,15 +1046,10 @@ if st.session_state.get('run_analysis'):
                 
                 # FIX: Map User Timeframe to TradingView Widget Code
                 tv_interval_map = {
-                    "15m": "15",
-                    "1h": "60",
-                    "4h": "240",
-                    "1d": "D",
-                    "1wk": "W"
+                    "1m": "1", "5m": "5", "15m": "15", "30m": "30",
+                    "1h": "60", "4h": "240", "1d": "D", "1wk": "W"
                 }
                 tv_int = tv_interval_map.get(interval, "D")
-                
-                # TradingView Widget (Embed) - FIX: Added hide_side_toolbar: false
                 tv_ticker = ticker.replace("-", "") if "BTC" in ticker else ticker 
                 
                 tv_widget_html = f"""
@@ -1053,50 +1083,47 @@ if st.session_state.get('run_analysis'):
                 st.markdown("---")
                 st.markdown("#### 🚀 Broadcast Signal")
                 
-                # Signal Message Draft
-                # FIX: REMOVED THE SLICE [:50] FROM ai_verdict BELOW vvv
-                # FIX: Added ({interval}) to the message title for clarity
-                signal_text = f"🔥 {ticker} ({interval}) Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #Titan"
+                # --- FIX: FULL COMPREHENSIVE INDICATOR REPORT IN TELEGRAM ---
+                signal_text = f"🔥 {ticker} ({interval}) Titan Analysis\n\n"
+                signal_text += f"💰 Price: ${last['Close']:.2f}\n"
+                signal_text += f"🌊 Apex Trend: {last['Apex_Trend']}\n"
+                signal_text += f"🕯️ Vector Candle: {last['Vector_Color']}\n"
+                signal_text += f"🧱 Gann Level: ${last['Gann_Line']:.2f}\n"
+                signal_text += f"💸 Money Flow (MFI): {last['MFI']:.1f}\n"
+                signal_text += f"📊 RVOL: {last['RVOL']:.2f}x\n"
+                signal_text += f"📉 RSI: {last['RSI']:.1f} | ADX: {last['ADX']:.1f}\n"
+                signal_text += f"🧱 Pivot Supp: ${last['Pivot_Support']:.2f}\n"
+                signal_text += f"😨 Sentiment: {last['FG_Index']:.0f}/100\n\n"
+                signal_text += f"🤖 AI Verdict:\n{ai_verdict}\n\n#DarkPoolTitan #Trading #{ticker}"
                 
-                msg = st.text_area("Message Preview", value=signal_text, height=150)
-                
-                # FIX: Added File Uploader for Screenshots
+                msg = st.text_area("Message Preview", value=signal_text, height=300)
                 uploaded_file = st.file_uploader("Upload Chart Screenshot (Optional but Recommended)", type=['png', 'jpg', 'jpeg'])
                 
                 col_b1, col_b2 = st.columns(2)
                 
-                # FIX: Telegram Infinite Split Message Logic
                 if col_b1.button("Send to Telegram 🚀"):
                     if tg_token and tg_chat:
                         try:
-                            # 1. Send Photo if uploaded
                             if uploaded_file:
                                 files = {'photo': uploaded_file.getvalue()}
                                 url_photo = f"https://api.telegram.org/bot{tg_token}/sendPhoto"
                                 data_photo = {'chat_id': tg_chat, 'caption': f"🔥 Analysis: {ticker}", 'parse_mode': 'Markdown'}
                                 requests.post(url_photo, data=data_photo, files=files)
                             
-                            # 2. Send Full Text (Infinite Loop Splitting to avoid 4096 char limit cutoffs)
                             url_msg = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-                            
-                            # Clean up AI text to look good
                             clean_msg = msg.replace("###", "")
-                            
-                            # Chunking Loop - Fixed for Markdown Safety
-                            # Reducing limit to 2000 chars to be ultra-safe
                             max_length = 2000 
                             
                             if len(clean_msg) <= max_length:
-                                data_msg = {"chat_id": tg_chat, "text": clean_msg} # REMOVED parse_mode to avoid cutoff errors
+                                data_msg = {"chat_id": tg_chat, "text": clean_msg} 
                                 requests.post(url_msg, data=data_msg)
                             else:
                                 for i in range(0, len(clean_msg), max_length):
                                     chunk = clean_msg[i:i+max_length]
-                                    data_msg = {"chat_id": tg_chat, "text": f"(Part {i//max_length + 1}) {chunk}"} # REMOVED parse_mode
+                                    data_msg = {"chat_id": tg_chat, "text": f"(Part {i//max_length + 1}) {chunk}"} 
                                     requests.post(url_msg, data=data_msg)
 
-                            st.success("✅ Sent to Telegram (Split into multiple parts to prevent cutoff)!")
-                            
+                            st.success("✅ Sent to Telegram!")
                         except Exception as e:
                             st.error(f"Failed: {e}")
                     else:
