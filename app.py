@@ -133,20 +133,15 @@ def get_global_performance():
         results = {}
         for name, ticker in assets.items():
             try:
-                # Handle MultiIndex logic from yfinance batch download
                 if len(tickers_list) > 1:
                     df = data[ticker]
                 else:
-                    df = data # Fallback if only 1 asset
+                    df = data 
                 
                 if not df.empty and len(df) >= 2:
-                    # Fix for some tickers having 'Close' or 'Adj Close'
-                    if 'Close' in df.columns:
-                        price_col = 'Close'
-                    elif 'Adj Close' in df.columns:
-                        price_col = 'Adj Close'
-                    else:
-                        continue
+                    if 'Close' in df.columns: price_col = 'Close'
+                    elif 'Adj Close' in df.columns: price_col = 'Adj Close'
+                    else: continue
 
                     price = df[price_col].iloc[-1]
                     prev = df[price_col].iloc[-2]
@@ -217,7 +212,6 @@ def get_macro_data():
         }
     }
 
-    # 1. Flatten all tickers into a single list
     all_tickers_list = []
     ticker_to_name_map = {}
     for g_name, g_dict in groups.items():
@@ -225,40 +219,27 @@ def get_macro_data():
             all_tickers_list.append(t_sym)
             ticker_to_name_map[t_sym] = t_name
 
-    # 2. Batch Download (This makes it 20x faster)
     try:
         data_batch = yf.download(all_tickers_list, period="5d", interval="1d", group_by='ticker', progress=False)
-        
         prices = {}
         changes = {}
 
-        # 3. Process the batch data
         for sym in all_tickers_list:
             try:
-                # Handle single ticker result vs multi ticker result structure
                 if len(all_tickers_list) > 1:
                     df = data_batch[sym]
                 else:
                     df = data_batch
                 
-                # Check for empty or failed download
-                if df is None or df.empty:
-                    continue
-
-                # Clean NaN rows
+                if df is None or df.empty: continue
                 df = df.dropna(how='all')
                 
                 if len(df) >= 2:
-                    # Identify Close column
                     col = 'Close' if 'Close' in df.columns else 'Adj Close'
-                    
                     curr = df[col].iloc[-1]
                     prev = df[col].iloc[-2]
-                    
-                    # Calculate
                     chg = ((curr - prev) / prev) * 100
                     
-                    # Map back to display name
                     name = ticker_to_name_map.get(sym, sym)
                     prices[name] = curr
                     changes[name] = chg
@@ -268,7 +249,6 @@ def get_macro_data():
         return groups, prices, changes
 
     except Exception as e:
-        # Fallback empty return if batch fails
         return groups, {}, {}
 
 # ==========================================
@@ -562,11 +542,10 @@ def calc_mtf_trend(ticker):
     
     for tf_name, tf_code in timeframes.items():
         try:
-            # FIX: Adjusted periods to match yfinance limitations
             if tf_name == "1H":
-                period = "1y" # Max safe for 1h
+                period = "1y" 
             elif tf_name == "4H":
-                period = "1y" # Changed from 2y to 1y to be safe
+                period = "1y" 
             else:
                 period = "2y"
                 
@@ -700,7 +679,6 @@ def calc_day_of_week_dna(ticker, lookback, calc_mode):
 # ==========================================
 # 4. AI ANALYST (MODIFIED FOR TIMEFRAME AWARENESS)
 # ==========================================
-# --- FIX: ADDED 'timeframe' PARAMETER ---
 def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     if not st.session_state.api_key: 
         return "⚠️ Waiting for OpenAI API Key in the sidebar..."
@@ -733,7 +711,6 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     if last['IS_FOMO']: psych_alert = "WARNING: ALGORITHMIC FOMO DETECTED."
     if last['IS_PANIC']: psych_alert = "WARNING: PANIC SELLING DETECTED."
 
-    # --- FIX: UPDATED PROMPT WITH TIMEFRAME CONTEXT ---
     prompt = f"""
     Act as a Global Macro Strategist. Analyze {ticker} on the **{timeframe} timeframe** at price ${last['Close']:.2f}.
     
@@ -759,7 +736,6 @@ def ask_ai_analyst(df, ticker, fundamentals, balance, risk_pct, timeframe):
     
     try:
         client = OpenAI(api_key=st.session_state.api_key)
-        # --- FIX: Added max_tokens=2500 to prevent AI generation cutoff ---
         res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":prompt}], max_tokens=2500)
         return res.choices[0].message.content
     except Exception as e:
@@ -1079,7 +1055,8 @@ if st.session_state.get('run_analysis'):
                 
                 # Signal Message Draft
                 # FIX: REMOVED THE SLICE [:50] FROM ai_verdict BELOW vvv
-                signal_text = f"🔥 {ticker} Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #Titan"
+                # FIX: Added ({interval}) to the message title for clarity
+                signal_text = f"🔥 {ticker} ({interval}) Analysis\n\nPrice: ${df['Close'].iloc[-1]:.2f}\nTrend: {'BULL' if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1] else 'BEAR'}\nRSI: {df['RSI'].iloc[-1]:.1f}\n\n🤖 AI Verdict: {ai_verdict}\n\n#Trading #DarkPool #Titan"
                 
                 msg = st.text_area("Message Preview", value=signal_text, height=150)
                 
