@@ -722,13 +722,31 @@ tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_ch
 
 input_mode = st.sidebar.radio("Input Mode:", ["Curated Lists", "Manual Search (Global)"], index=1)
 
+# --- MODIFIED ASSETS DICTIONARY (EXPANDED) ---
 if input_mode == "Curated Lists":
-    assets = {"Indices": ["SPY", "QQQ"], "Crypto": ["BTC-USD", "ETH-USD"], "Tech": ["NVDA", "TSLA"], "Macro": ["^TNX", "DX-Y.NYB"]}
+    assets = {
+        "Indices": ["SPY", "QQQ", "DIA", "IWM", "VTI"],
+        "Crypto (Top 20)": [
+            "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", 
+            "ADA-USD", "DOGE-USD", "AVAX-USD", "DOT-USD", "TRX-USD", 
+            "LINK-USD", "MATIC-USD", "SHIB-USD", "LTC-USD", "BCH-USD", 
+            "XLM-USD", "ALGO-USD", "ATOM-USD", "UNI-USD", "FIL-USD"
+        ],
+        "Tech Giants (Top 10)": [
+            "NVDA", "TSLA", "AAPL", "MSFT", "GOOGL", 
+            "AMZN", "META", "AMD", "NFLX", "INTC"
+        ],
+        "Macro & Commodities": [
+            "^TNX", "DX-Y.NYB", "GC=F", "SI=F", 
+            "CL=F", "NG=F", "^VIX", "TLT"
+        ]
+    }
     cat = st.sidebar.selectbox("Asset Class", list(assets.keys()))
     ticker = st.sidebar.selectbox("Ticker", assets[cat])
 else:
     st.sidebar.info("Type any ticker (e.g. SSLN.L, BTC-USD)")
-    ticker = st.sidebar.text_input("Search Ticker Symbol", value="SSLN.L").upper()
+    # --- FIX: Changed default from "SSLN.L" to "BTC-USD" ---
+    ticker = st.sidebar.text_input("Search Ticker Symbol", value="BTC-USD").upper()
 
 interval = st.sidebar.selectbox("Interval", ["15m", "1h", "4h", "1d", "1wk"], index=3)
 st.sidebar.markdown("---")
@@ -929,7 +947,7 @@ if st.session_state.get('run_analysis'):
                 fig_vp.update_layout(height=600, template="plotly_dark", title="Volume Profile (VPVR)")
                 st.plotly_chart(fig_vp, use_container_width=True)
 
-            # --- TAB 10: BROADCAST (THIS IS THE ONLY MODIFIED SECTION) ---
+            # --- TAB 10: BROADCAST ---
             with tab10:
                 st.subheader("📡 Social Command Center")
                 
@@ -977,7 +995,7 @@ if st.session_state.get('run_analysis'):
                 
                 col_b1, col_b2 = st.columns(2)
                 
-                # FIX: Telegram Split Message Logic
+                # FIX: Telegram Infinite Split Message Logic
                 if col_b1.button("Send to Telegram 🚀"):
                     if tg_token and tg_chat:
                         try:
@@ -988,15 +1006,24 @@ if st.session_state.get('run_analysis'):
                                 data_photo = {'chat_id': tg_chat, 'caption': f"🔥 Analysis: {ticker}", 'parse_mode': 'Markdown'}
                                 requests.post(url_photo, data=data_photo, files=files)
                             
-                            # 2. Send Full Text (Split to avoid cutoff)
+                            # 2. Send Full Text (Infinite Loop Splitting to avoid 4096 char limit cutoffs)
                             url_msg = f"https://api.telegram.org/bot{tg_token}/sendMessage"
                             
                             # Clean up AI text to look good
                             clean_msg = msg.replace("###", "")
-                            data_msg = {"chat_id": tg_chat, "text": clean_msg}
                             
-                            requests.post(url_msg, data=data_msg)
-                            st.success("✅ Sent to Telegram (Image + Text Split)!")
+                            # Chunking Loop
+                            max_length = 4000
+                            if len(clean_msg) <= max_length:
+                                data_msg = {"chat_id": tg_chat, "text": clean_msg}
+                                requests.post(url_msg, data=data_msg)
+                            else:
+                                for i in range(0, len(clean_msg), max_length):
+                                    chunk = clean_msg[i:i+max_length]
+                                    data_msg = {"chat_id": tg_chat, "text": chunk}
+                                    requests.post(url_msg, data=data_msg)
+
+                            st.success("✅ Sent to Telegram (Split into multiple parts to prevent cutoff)!")
                             
                         except Exception as e:
                             st.error(f"Failed: {e}")
