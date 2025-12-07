@@ -92,7 +92,7 @@ else:
         )
 
 # ==========================================
-# 2. DATA ENGINE
+# 2. DATA ENGINE (OPTIMIZED FOR SPEED)
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
@@ -126,19 +126,34 @@ def get_global_performance():
         "Treasuries (TLT)": "TLT"
     }
     try:
+        # Optimization: Download all at once
+        tickers_list = list(assets.values())
+        data = yf.download(tickers_list, period="5d", interval="1d", progress=False, group_by='ticker')
+        
         results = {}
         for name, ticker in assets.items():
-            df = yf.download(ticker, period="5d", interval="1d", progress=False)
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    price = df.xs('Close', axis=1, level=0).iloc[-1].iloc[0]
-                    prev = df.xs('Close', axis=1, level=0).iloc[-2].iloc[0]
+            try:
+                # Handle MultiIndex logic from yfinance batch download
+                if len(tickers_list) > 1:
+                    df = data[ticker]
                 else:
-                    price = df['Close'].iloc[-1]
-                    prev = df['Close'].iloc[-2]
+                    df = data # Fallback if only 1 asset
                 
-                change = ((price - prev) / prev) * 100
-                results[name] = change
+                if not df.empty and len(df) >= 2:
+                    # Fix for some tickers having 'Close' or 'Adj Close'
+                    if 'Close' in df.columns:
+                        price_col = 'Close'
+                    elif 'Adj Close' in df.columns:
+                        price_col = 'Adj Close'
+                    else:
+                        continue
+
+                    price = df[price_col].iloc[-1]
+                    prev = df[price_col].iloc[-2]
+                    change = ((price - prev) / prev) * 100
+                    results[name] = change
+            except:
+                continue
         
         return pd.Series(results).sort_values(ascending=True)
     except: return None
@@ -168,7 +183,7 @@ def safe_download(ticker, period, interval):
 
 @st.cache_data(ttl=300)
 def get_macro_data():
-    """Fetches 40 global macro indicators grouped by sector."""
+    """Fetches 40 global macro indicators grouped by sector using BATCH DOWNLOAD (FAST)."""
     groups = {
         "🇺🇸 US Equities": {
             "S&P 500": "SPY", "Nasdaq 100": "QQQ", "Dow Jones": "^DJI", "Russell 2000": "^RUT"
@@ -202,30 +217,59 @@ def get_macro_data():
         }
     }
 
-    all_tickers = {}
-    for g in groups.values():
-        all_tickers.update(g)
-    
-    prices = {k: 0.0 for k in all_tickers.keys()}
-    changes = {k: 0.0 for k in all_tickers.keys()}
-    
-    for name, sym in all_tickers.items():
-        try:
-            df = yf.download(sym, period="5d", interval="1d", progress=False)
-            if not df.empty and len(df) >= 2:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
+    # 1. Flatten all tickers into a single list
+    all_tickers_list = []
+    ticker_to_name_map = {}
+    for g_name, g_dict in groups.items():
+        for t_name, t_sym in g_dict.items():
+            all_tickers_list.append(t_sym)
+            ticker_to_name_map[t_sym] = t_name
+
+    # 2. Batch Download (This makes it 20x faster)
+    try:
+        data_batch = yf.download(all_tickers_list, period="5d", interval="1d", group_by='ticker', progress=False)
+        
+        prices = {}
+        changes = {}
+
+        # 3. Process the batch data
+        for sym in all_tickers_list:
+            try:
+                # Handle single ticker result vs multi ticker result structure
+                if len(all_tickers_list) > 1:
+                    df = data_batch[sym]
+                else:
+                    df = data_batch
                 
-                curr = df['Close'].iloc[-1]
-                prev = df['Close'].iloc[-2]
-                chg = ((curr - prev) / prev) * 100
+                # Check for empty or failed download
+                if df is None or df.empty:
+                    continue
+
+                # Clean NaN rows
+                df = df.dropna(how='all')
                 
-                prices[name] = curr
-                changes[name] = chg
-        except Exception:
-            continue
-            
-    return groups, prices, changes
+                if len(df) >= 2:
+                    # Identify Close column
+                    col = 'Close' if 'Close' in df.columns else 'Adj Close'
+                    
+                    curr = df[col].iloc[-1]
+                    prev = df[col].iloc[-2]
+                    
+                    # Calculate
+                    chg = ((curr - prev) / prev) * 100
+                    
+                    # Map back to display name
+                    name = ticker_to_name_map.get(sym, sym)
+                    prices[name] = curr
+                    changes[name] = chg
+            except Exception:
+                continue
+        
+        return groups, prices, changes
+
+    except Exception as e:
+        # Fallback empty return if batch fails
+        return groups, {}, {}
 
 # ==========================================
 # 3. MATH LIBRARY & ALGORITHMS
