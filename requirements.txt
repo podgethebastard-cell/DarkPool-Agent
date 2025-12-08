@@ -3,10 +3,10 @@ openai
 yfinance
 plotly
 pandas
-numpy
 requests
 scipy
 matplotlib
 ccxt
 pytz
 pandas_ta
+numpy<2.0.0
