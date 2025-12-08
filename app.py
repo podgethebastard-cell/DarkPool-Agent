@@ -75,7 +75,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
 
 # --- HEADER ---
 st.markdown('<div class="title-glow">👁️ DarkPool Titan Terminal</div>', unsafe_allow_html=True)
-st.markdown("##### *Institutional-Grade Market Intelligence // v6.0 GOD MODE Edition*")
+st.markdown("##### *Institutional-Grade Market Intelligence*")
 st.markdown("---")
 
 # --- API Key Management ---
