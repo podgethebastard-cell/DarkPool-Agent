@@ -5,9 +5,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
-
-
 from openai import OpenAI
 
 # ==========================================
@@ -225,37 +222,7 @@ def get_ticker_data(symbol):
     return df
 
 # ==========================================
-# 5. MARKET CLOCK
-# ==========================================
-def render_clock():
-    london_tz = pytz.timezone('Europe/London')
-    now_london = datetime.now(london_tz)
-    
-    # LSE Hours: 08:00 - 16:30
-    market_open = time(8, 0, 0)
-    market_close = time(16, 30, 0)
-    current_time = now_london.time()
-    
-    is_weekday = now_london.weekday() < 5
-    is_open = is_weekday and (market_open <= current_time <= market_close)
-    
-    status_color = "green" if is_open else "red"
-    status_text = "MARKET OPEN" if is_open else "MARKET CLOSED"
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.title("LSE Commodities & Miners Analyst")
-    with col2:
-        st.markdown(f"""
-        <div style="text-align: right; padding: 10px; border: 2px solid {status_color}; border-radius: 10px;">
-            <div style="font-size: 14px; color: #888;">London Time</div>
-            <div style="font-size: 20px; font-weight: bold;">{now_london.strftime('%H:%M:%S')}</div>
-            <div style="color: {status_color}; font-weight: bold;">{status_text}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-# ==========================================
-# 6. AI ANALYST
+# 5. AI ANALYST
 # ==========================================
 def generate_ai_report(ticker_name, df, macro_score, macro_state):
     
@@ -297,7 +264,7 @@ def generate_ai_report(ticker_name, df, macro_score, macro_state):
         return f"AI Analysis Error: Please check API Key. {str(e)}"
 
 # ==========================================
-# 7. MAIN APP LAYOUT
+# 6. MAIN APP LAYOUT
 # ==========================================
 
 # Sidebar
@@ -314,9 +281,6 @@ with st.sidebar:
     
     st.markdown("---")
     st.info("Indicators Loaded:\n- Macro Risk Traffic Light\n- Apex Trend Master\n- Money Flow Matrix\n- EVWM Momentum\n- Ultimate S/R")
-
-# Render Clock
-render_clock()
 
 # Macro Section
 macro_score, macro_df = get_macro_data()
