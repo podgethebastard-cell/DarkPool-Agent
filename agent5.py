@@ -27,9 +27,17 @@ st.markdown("""
         transition: transform 0.2s;
     }
     div[data-testid="stMetric"]:hover {
-        border-color: #4CAF50; /* Green highlight on hover */
+        border-color: #4CAF50;
         transform: scale(1.02);
         box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    /* Description Text */
+    .metric-desc {
+        font-size: 0.8rem;
+        color: #888;
+        margin-top: -10px;
+        margin-bottom: 10px;
+        font-style: italic;
     }
     /* Chart Container */
     div[data-testid="stPlotlyChart"] {
@@ -37,13 +45,7 @@ st.markdown("""
         border-radius: 8px;
         margin-bottom: 20px;
     }
-    /* Section Headers */
-    h1, h2, h3 {
-        font-family: 'Helvetica Neue', sans-serif;
-        font-weight: 600;
-        color: #E0E0E0;
-    }
-    /* Radio Button Styling (to replace dropdown) */
+    /* Radio Button Styling */
     .stRadio > label {
         font-weight: bold;
     }
@@ -54,114 +56,159 @@ st.markdown("""
 # 2. DATA MAPPING (The Brain)
 # -----------------------------------------------------------------------------
 
-# A. SINGLE ASSETS (Original Request)
+# Structure: "Label": ("Ticker", "Description")
 TICKERS = {
     "15. MASTER CORE": {
-        "S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "DXY": "DX-Y.NYB",
-        "US 10Y": "^TNX", "US 02Y": "^IRX", "VIX": "^VIX",
-        "WTI Crude": "CL=F", "Gold": "GC=F", "Copper": "HG=F",
-        "HYG (Junk)": "HYG", "TLT (Long Bond)": "TLT",
-        "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD"
+        "S&P 500": ("^GSPC", "US Large Cap Benchmark"),
+        "Nasdaq 100": ("^NDX", "Tech & Growth Core"),
+        "DXY": ("DX-Y.NYB", "Global Liquidity Engine"),
+        "US 10Y": ("^TNX", "Global Asset Pricing Anchor"),
+        "US 02Y": ("^IRX", "Fed Policy Sensitivity"),
+        "VIX": ("^VIX", "Fear & Volatility Index"),
+        "WTI Crude": ("CL=F", "Industrial Energy Demand"),
+        "Gold": ("GC=F", "Real Money / Inflation Hedge"),
+        "Copper": ("HG=F", "Global Growth Proxy (Dr. Copper)"),
+        "HYG (Junk)": ("HYG", "Credit Risk Appetite"),
+        "TLT (Long Bond)": ("TLT", "Duration / Recession Hedge"),
+        "Bitcoin": ("BTC-USD", "Digital Liquidity Sponge"),
+        "Ethereum": ("ETH-USD", "Web3 / Tech Platform Risk")
     },
     "1. Global Equity Indices": {
-        "S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "Dow Jones": "^DJI", "Russell 2000": "^RUT",
-        "DAX (DE)": "^GDAXI", "FTSE (UK)": "^FTSE", "CAC (FR)": "^FCHI", "STOXX50": "^STOXX50E",
-        "Nikkei (JP)": "^N225", "Hang Seng (HK)": "^HSI", "Shanghai": "000001.SS", "KOSPI": "^KS11",
-        "ACWI": "ACWI", "VT (World)": "VT", "EEM (Emerging)": "EEM"
+        "S&P 500": ("^GSPC", "US Risk-On Core"),
+        "Nasdaq 100": ("^NDX", "US Tech/Growth"),
+        "Dow Jones": ("^DJI", "US Industrial/Value"),
+        "Russell 2000": ("^RUT", "US Small Caps / Domestic Econ"),
+        "DAX (DE)": ("^GDAXI", "Europe Industrial Core"),
+        "FTSE (UK)": ("^FTSE", "UK/Global Banks & Energy"),
+        "CAC (FR)": ("^FCHI", "French Luxury/Consumer"),
+        "STOXX50": ("^STOXX50E", "Eurozone Blue Chips"),
+        "Nikkei (JP)": ("^N225", "Japan Exporters / YCC Play"),
+        "Hang Seng (HK)": ("^HSI", "China Tech / Real Estate"),
+        "Shanghai": ("000001.SS", "China Mainland Economy"),
+        "KOSPI": ("^KS11", "Korean Tech / Chips"),
+        "ACWI": ("ACWI", "All Country World Index"),
+        "VT (World)": ("VT", "Total World Stock Market"),
+        "EEM (Emerging)": ("EEM", "Emerging Markets Risk")
     },
     "2. Volatility & Fear": {
-        "VIX": "^VIX", "VXN (Nasdaq)": "^VXN", "VXD (Dow)": "^VXD",
-        "MOVE Proxy (ICE BofA)": "MOVE.MX" 
+        "VIX": ("^VIX", "S&P 500 Implied Volatility"),
+        "VXN (Nasdaq)": ("^VXN", "Tech Sector Volatility"),
+        "VXD (Dow)": ("^VXD", "Industrial Volatility"),
+        "MOVE Proxy (ICE BofA)": ("MOVE.MX", "Bond Market Volatility (Stress)")
     },
     "3. Interest Rates": {
-        "US 10Y": "^TNX", "US 02Y": "^IRX", "US 30Y": "^TYX", "US 05Y": "^FVX",
-        "TLT": "TLT", "IEF": "IEF", "SHY": "SHY", "LQD": "LQD", "HYG": "HYG", "TIP": "TIP"
+        "US 10Y": ("^TNX", "Benchmark Long Rate"),
+        "US 02Y": ("^IRX", "Fed Policy Expectations"),
+        "US 30Y": ("^TYX", "Long Duration / Inflation Exp"),
+        "US 05Y": ("^FVX", "Medium Term Rates"),
+        "TLT": ("TLT", "20Y+ Treasury Bond ETF"),
+        "IEF": ("IEF", "7-10Y Treasury Bond ETF"),
+        "SHY": ("SHY", "1-3Y Short Duration Cash"),
+        "LQD": ("LQD", "Investment Grade Corporate"),
+        "HYG": ("HYG", "High Yield Junk Bonds"),
+        "TIP": ("TIP", "Inflation Protected Securities")
     },
     "4. Currencies": {
-        "DXY": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X",
-        "USD/JPY": "USDJPY=X", "USD/CNY": "USDCNY=X", "AUD/USD": "AUDUSD=X",
-        "USD/CHF": "USDCHF=X", "USD/MXN": "USDMXN=X"
+        "DXY": ("DX-Y.NYB", "US Dollar vs Major Peers"),
+        "EUR/USD": ("EURUSD=X", "Euro Strength"),
+        "GBP/USD": ("GBPUSD=X", "British Pound / Risk"),
+        "USD/JPY": ("USDJPY=X", "Yen Carry Trade Key"),
+        "USD/CNY": ("USDCNY=X", "Yuan / China Export Strength"),
+        "AUD/USD": ("AUDUSD=X", "Commodity Currency Proxy"),
+        "USD/CHF": ("USDCHF=X", "Swiss Franc Safe Haven"),
+        "USD/MXN": ("USDMXN=X", "Emerging Mkt Risk Gauge")
     },
     "7. Commodities": {
-        "WTI": "CL=F", "Brent": "BZ=F", "NatGas": "NG=F",
-        "Gold": "GC=F", "Silver": "SI=F", "Platinum": "PL=F", "Palladium": "PA=F",
-        "Copper": "HG=F", "Wheat": "KE=F", "Corn": "ZC=F", "Soybeans": "ZS=F"
+        "WTI": ("CL=F", "US Crude Oil"),
+        "Brent": ("BZ=F", "Global Sea-Borne Oil"),
+        "NatGas": ("NG=F", "US Heating/Industrial Energy"),
+        "Gold": ("GC=F", "Safe Haven / Monetary Metal"),
+        "Silver": ("SI=F", "Industrial + Monetary Metal"),
+        "Platinum": ("PL=F", "Auto Catalyst / Industrial"),
+        "Palladium": ("PA=F", "Tech / Industrial Metal"),
+        "Copper": ("HG=F", "Construction / Econ Growth"),
+        "Wheat": ("KE=F", "Global Food Supply"),
+        "Corn": ("ZC=F", "Feed / Energy / Food"),
+        "Soybeans": ("ZS=F", "Global Ag Export Demand")
     },
     "8. Real Estate": {
-        "VNQ (US REITs)": "VNQ", "REET (Global)": "REET", "XLRE": "XLRE"
+        "VNQ (US REITs)": ("VNQ", "US Commercial Real Estate"),
+        "REET (Global)": ("REET", "Global Property Market"),
+        "XLRE": ("XLRE", "S&P 500 Real Estate Sector")
     },
     "11. Crypto Macro": {
-        "BTC.D (Proxy)": "BTC-USD", "Total Cap (Proxy)": "BTC-USD", # Placeholders, handled by special logic
-        "BTC": "BTC-USD", "ETH": "ETH-USD"
+        "BTC.D (Proxy)": ("BTC-USD", "Bitcoin Dominance Pct"),
+        "Total Cap (Proxy)": ("BTC-USD", "Total Crypto Market"), 
+        "BTC": ("BTC-USD", "Digital Gold / Liquidity"),
+        "ETH": ("ETH-USD", "Smart Contract Platform")
     }
 }
 
-# B. RATIO DEFINITIONS (The New Institutional Request)
-# Format: "Label": ("Numerator_Ticker", "Denominator_Ticker")
+# Structure: "Label": ("Num_Ticker", "Den_Ticker", "Description")
 RATIO_GROUPS = {
     "✅ CRYPTO RELATIVE STRENGTH": {
-        "BTC / ETH (Risk Appetite)": ("BTC-USD", "ETH-USD"),
-        "BTC / SPX (Adoption)": ("BTC-USD", "^GSPC"),
-        "BTC / NDX (Tech Corr)": ("BTC-USD", "^NDX"),
-        "ETH / SPX": ("ETH-USD", "^GSPC"),
-        "ETH / NDX": ("ETH-USD", "^NDX"),
-        "BTC / DXY (Liquidity)": ("BTC-USD", "DX-Y.NYB"),
-        "BTC / US10Y (Yields)": ("BTC-USD", "^TNX"),
-        "BTC / VIX (Vol)": ("BTC-USD", "^VIX"),
-        "BTC / Gold (Hard Money)": ("BTC-USD", "GC=F")
+        "BTC / ETH (Risk Appetite)": ("BTC-USD", "ETH-USD", "Higher = Risk Off / Bitcoin Safety"),
+        "BTC / SPX (Adoption)": ("BTC-USD", "^GSPC", "Crypto vs TradFi Correlation"),
+        "BTC / NDX (Tech Corr)": ("BTC-USD", "^NDX", "Bitcoin vs Tech Stocks"),
+        "ETH / SPX": ("ETH-USD", "^GSPC", "Ethereum Beta to Stocks"),
+        "ETH / NDX": ("ETH-USD", "^NDX", "Ethereum vs Nasdaq"),
+        "BTC / DXY (Liquidity)": ("BTC-USD", "DX-Y.NYB", "Higher = Liquidity Expansion"),
+        "BTC / US10Y (Yields)": ("BTC-USD", "^TNX", "Crypto Sensitivity to Rates"),
+        "BTC / VIX (Vol)": ("BTC-USD", "^VIX", "Price vs Fear Index"),
+        "BTC / Gold (Hard Money)": ("BTC-USD", "GC=F", "Digital vs Analog Gold")
     },
     "✅ CRYPTO DOMINANCE (Calculated)": {
-        "TOTAL 3 / TOTAL": ("SPECIAL_TOTAL3", "SPECIAL_TOTAL"),
-        "TOTAL 2 / TOTAL": ("SPECIAL_TOTAL2", "SPECIAL_TOTAL"),
-        "BTC.D (BTC/Total)": ("BTC-USD", "SPECIAL_TOTAL"),
-        "ETH.D (ETH/Total)": ("ETH-USD", "SPECIAL_TOTAL"),
-        "USDT.D (Tether/Total)": ("USDT-USD", "SPECIAL_TOTAL")
+        "TOTAL 3 / TOTAL": ("SPECIAL_TOTAL3", "SPECIAL_TOTAL", "Altseason Indicator (No BTC/ETH)"),
+        "TOTAL 2 / TOTAL": ("SPECIAL_TOTAL2", "SPECIAL_TOTAL", "Alts + ETH Strength"),
+        "BTC.D (BTC/Total)": ("BTC-USD", "SPECIAL_TOTAL", "Bitcoin Market Share"),
+        "ETH.D (ETH/Total)": ("ETH-USD", "SPECIAL_TOTAL", "Ethereum Market Share"),
+        "USDT.D (Tether/Total)": ("USDT-USD", "SPECIAL_TOTAL", "Stablecoin Flight to Safety")
     },
     "✅ EQUITY RISK ROTATION": {
-        "SPY / TLT (Risk On/Off)": ("SPY", "TLT"),
-        "QQQ / IEF (Growth/Rates)": ("QQQ", "IEF"),
-        "XLF / XLU (Fin/Util)": ("XLF", "XLU"),
-        "XLY / XLP (Disc/Staples)": ("XLY", "XLP"),
-        "IWM / SPY (Small/Large)": ("IWM", "SPY"),
-        "EEM / SPY (Emerging/US)": ("EEM", "SPY"),
-        "HYG / TLT (Credit/Safe)": ("HYG", "TLT"),
-        "JNK / TLT": ("JNK", "TLT"),
-        "KRE / XLF (Regional/Big)": ("KRE", "XLF"),
-        "SMH / SPY (Semi Lead)": ("SMH", "SPY")
+        "SPY / TLT (Risk On/Off)": ("SPY", "TLT", "Rising = Stocks Outperform Bonds"),
+        "QQQ / IEF (Growth/Rates)": ("QQQ", "IEF", "Tech vs 7-10Y Treasuries"),
+        "XLF / XLU (Fin/Util)": ("XLF", "XLU", "Cyclical vs Defensive"),
+        "XLY / XLP (Disc/Staples)": ("XLY", "XLP", "Consumer Confident vs Defensive"),
+        "IWM / SPY (Small/Large)": ("IWM", "SPY", "Risk Appetite (Small Caps)"),
+        "EEM / SPY (Emerging/US)": ("EEM", "SPY", "Global Growth vs US Exceptionalism"),
+        "HYG / TLT (Credit/Safe)": ("HYG", "TLT", "Junk Bond Demand vs Safety"),
+        "JNK / TLT": ("JNK", "TLT", "Credit Risk Appetite"),
+        "KRE / XLF (Regional/Big)": ("KRE", "XLF", "Bank Stress Indicator"),
+        "SMH / SPY (Semi Lead)": ("SMH", "SPY", "Semi-Conductors Leading Market")
     },
     "✅ BOND & YIELD POWER": {
-        "10Y / 2Y (Curve)": ("^TNX", "^IRX"),
-        "10Y / 3M (Recession)": ("^TNX", "^IRX"), # Using IRX as short rate proxy
-        "TLT / SHY (Duration)": ("TLT", "SHY"),
-        "TLT / SPY (Safety/Risk)": ("TLT", "SPY"),
-        "IEF / SHY": ("IEF", "SHY"),
-        "MOVE / VIX (Stress)": ("MOVE.MX", "^VIX")
+        "10Y / 2Y (Curve)": ("^TNX", "^IRX", "Recession Signal (Inversion)"),
+        "10Y / 3M (Recession)": ("^TNX", "^IRX", "Deep Recession Signal"),
+        "TLT / SHY (Duration)": ("TLT", "SHY", "Long Duration Demand"),
+        "TLT / SPY (Safety/Risk)": ("TLT", "SPY", "Flight to Safety Ratio"),
+        "IEF / SHY": ("IEF", "SHY", "Medium vs Short Duration"),
+        "MOVE / VIX (Stress)": ("MOVE.MX", "^VIX", "Bond Vol vs Equity Vol")
     },
     "✅ DOLLAR & LIQUIDITY": {
-        "DXY / Gold": ("DX-Y.NYB", "GC=F"),
-        "DXY / Oil": ("DX-Y.NYB", "CL=F"),
-        "EURUSD / DXY": ("EURUSD=X", "DX-Y.NYB"),
-        "USDJPY / DXY": ("USDJPY=X", "DX-Y.NYB"),
-        "EEM / DXY": ("EEM", "DX-Y.NYB"),
+        "DXY / Gold": ("DX-Y.NYB", "GC=F", "Fiat Strength vs Hard Money"),
+        "DXY / Oil": ("DX-Y.NYB", "CL=F", "Dollar Purchasing Power (Energy)"),
+        "EURUSD / DXY": ("EURUSD=X", "DX-Y.NYB", "Euro Relative Strength"),
+        "USDJPY / DXY": ("USDJPY=X", "DX-Y.NYB", "Yen Weakness Isolation"),
+        "EEM / DXY": ("EEM", "DX-Y.NYB", "Emerging Market Currency Health"),
     },
     "✅ COMMODITIES & INFLATION": {
-        "Gold / Silver": ("GC=F", "SI=F"),
-        "Copper / Gold": ("HG=F", "GC=F"),
-        "Oil / Gold": ("CL=F", "GC=F"),
-        "Oil / Copper": ("CL=F", "HG=F"),
-        "Brent / WTI": ("BZ=F", "CL=F")
+        "Gold / Silver": ("GC=F", "SI=F", "Mint Ratio (High = Deflation/Fear)"),
+        "Copper / Gold": ("HG=F", "GC=F", "Growth vs Safety (Dr. Copper)"),
+        "Oil / Gold": ("CL=F", "GC=F", "Energy Costs vs Monetary Base"),
+        "Oil / Copper": ("CL=F", "HG=F", "Energy vs Industrial Demand"),
+        "Brent / WTI": ("BZ=F", "CL=F", "Geopolitical Spread")
     },
     "✅ EQUITIES vs REAL ASSETS": {
-        "SPX / Gold": ("^GSPC", "GC=F"),
-        "SPX / Copper": ("^GSPC", "HG=F"),
-        "SPX / Oil": ("^GSPC", "CL=F"),
-        "VNQ / SPY (RE/Stocks)": ("VNQ", "SPY"),
-        "XLE / SPX (Energy/Mkt)": ("XLE", "^GSPC")
+        "SPX / Gold": ("^GSPC", "GC=F", "Stocks priced in Real Money"),
+        "SPX / Copper": ("^GSPC", "HG=F", "Financial vs Real Economy"),
+        "SPX / Oil": ("^GSPC", "CL=F", "Stocks vs Energy Costs"),
+        "VNQ / SPY (RE/Stocks)": ("VNQ", "SPY", "Real Estate vs Broad Market"),
+        "XLE / SPX (Energy/Mkt)": ("XLE", "^GSPC", "Old Economy vs New Economy")
     },
     "✅ TRADE & MACRO STRESS": {
-        "XLI / SPX (Ind/Mkt)": ("XLI", "^GSPC"),
-        "ITA / SPX (Defense/Mkt)": ("ITA", "^GSPC"),
-        "HYG / JNK (Quality Junk)": ("HYG", "JNK")
+        "XLI / SPX (Ind/Mkt)": ("XLI", "^GSPC", "Industrial Strength"),
+        "ITA / SPX (Defense/Mkt)": ("ITA", "^GSPC", "War Premium / Geopolitics"),
+        "HYG / JNK (Quality Junk)": ("HYG", "JNK", "High Yield Dispersion")
     }
 }
 
@@ -169,7 +216,7 @@ RATIO_GROUPS = {
 # 3. HELPER FUNCTIONS
 # -----------------------------------------------------------------------------
 
-@st.cache_data(ttl=120) # Cache for 2 mins
+@st.cache_data(ttl=120)
 def get_market_data(tickers_list, period="1y"):
     """Fetches data for a list of tickers safely."""
     # Filter out special keywords
@@ -184,28 +231,19 @@ def get_market_data(tickers_list, period="1y"):
         return pd.DataFrame()
 
 def get_crypto_total_proxy(data_df):
-    """
-    Constructs synthetic TOTAL, TOTAL2, TOTAL3 indices from available components.
-    Yahoo does not have 'TOTAL' ticker, so we sum the majors.
-    """
-    # Components to build totals
+    """Constructs synthetic TOTAL, TOTAL2, TOTAL3 indices."""
     coins = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", "DOGE-USD", "TRX-USD", "AVAX-USD", "LINK-USD"]
-    
-    # Ensure they exist in df
     available = [c for c in coins if c in data_df.columns]
+    
     if not available:
         return None, None, None
         
     sub_df = data_df[available].fillna(method='ffill')
-    
-    # 1. TOTAL (Sum of all tracked majors)
     total = sub_df.sum(axis=1)
     
-    # 2. TOTAL 2 (Ex-BTC)
     ex_btc = [c for c in available if c != "BTC-USD"]
     total2 = sub_df[ex_btc].sum(axis=1) if ex_btc else pd.Series()
     
-    # 3. TOTAL 3 (Ex-BTC & ETH)
     ex_btc_eth = [c for c in available if c not in ["BTC-USD", "ETH-USD"]]
     total3 = sub_df[ex_btc_eth].sum(axis=1) if ex_btc_eth else pd.Series()
     
@@ -272,10 +310,8 @@ with st.sidebar:
     st.caption("Institutional Dashboard")
     
     mode = st.radio("Select View Mode:", ["Standard Tickers", "Institutional Ratios"])
-    
     st.markdown("---")
     
-    # MODIFICATION: Using st.radio instead of st.selectbox to prevent "text editing" / typing
     if mode == "Standard Tickers":
         selected_category = st.radio("Asset Class", list(TICKERS.keys()))
     else:
@@ -290,11 +326,13 @@ with st.sidebar:
 # Prepare List of All Tickers Needed
 all_needed_tickers = set()
 for cat in TICKERS.values():
-    all_needed_tickers.update(cat.values())
+    for t_data in cat.values():
+        all_needed_tickers.add(t_data[0]) # Extract ticker symbol (index 0)
+
 for cat in RATIO_GROUPS.values():
-    for num, den in cat.values():
-        all_needed_tickers.add(num)
-        all_needed_tickers.add(den)
+    for t_data in cat.values():
+        all_needed_tickers.add(t_data[0]) # Numerator
+        all_needed_tickers.add(t_data[1]) # Denominator
 
 # Add Crypto Components for synthetic indices
 crypto_components = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", "USDT-USD", "USDC-USD"]
@@ -303,8 +341,6 @@ all_needed_tickers.update(crypto_components)
 # FETCH DATA ONCE
 with st.spinner("Fetching Global Market Data..."):
     market_data = get_market_data(list(all_needed_tickers))
-    
-    # Generate Synthetic Indices
     syn_total, syn_total2, syn_total3 = get_crypto_total_proxy(market_data)
 
 # HEADER
@@ -318,7 +354,7 @@ if mode == "Standard Tickers":
     # Standard Grid
     items = TICKERS[selected_category]
     cols = st.columns(3)
-    for i, (label, ticker) in enumerate(items.items()):
+    for i, (label, (ticker, desc)) in enumerate(items.items()):
         col_idx = i % 3
         
         if ticker in market_data.columns:
@@ -330,6 +366,7 @@ if mode == "Standard Tickers":
                 with cols[col_idx]:
                     color = "#00FF00" if pct >= 0 else "#FF4B4B"
                     st.metric(label, f"{val:,.2f}", f"{pct:.2f}%")
+                    st.caption(desc) # Display the description
                     st.plotly_chart(plot_sparkline(series, color), use_container_width=True, config={'displayModeBar': False}, key=f"std_{i}")
         else:
             with cols[col_idx]:
@@ -340,7 +377,7 @@ else: # RATIO MODE
     items = RATIO_GROUPS[selected_category]
     cols = st.columns(3)
     
-    for i, (label, (num_t, den_t)) in enumerate(items.items()):
+    for i, (label, (num_t, den_t, desc)) in enumerate(items.items()):
         col_idx = i % 3
         
         # Resolve Numerator
@@ -357,7 +394,6 @@ else: # RATIO MODE
         
         # Calculate Ratio
         if series_num is not None and series_den is not None:
-            # Align Indices
             common_idx = series_num.index.intersection(series_den.index)
             if not common_idx.empty:
                 ratio_series = series_num.loc[common_idx] / series_den.loc[common_idx]
@@ -366,11 +402,12 @@ else: # RATIO MODE
                 if val is not None:
                     data_summary_for_ai.append(f"{label}: {val:.4f} ({pct:.2f}%)")
                     with cols[col_idx]:
-                        color = "#3498db" # Blue for ratios usually, or conditonal
+                        color = "#3498db" # Default Blue
                         if "Risk On" in label or "BTC/SPX" in label:
                             color = "#00FF00" if pct > 0 else "#FF4B4B"
                         
                         st.metric(label, f"{val:.4f}", f"{pct:.2f}%")
+                        st.caption(desc) # Display the description
                         st.plotly_chart(plot_sparkline(ratio_series, color), use_container_width=True, config={'displayModeBar': False}, key=f"ratio_{i}")
         else:
             with cols[col_idx]:
