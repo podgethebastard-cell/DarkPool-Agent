@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from openai import OpenAI
 import uuid
+import sys
 
 # ==========================================
 # 1. PAGE CONFIGURATION & STYLING
@@ -62,7 +63,6 @@ class NativeIndicators:
 
     @staticmethod
     def stdev(series, length):
-        # FIXED: Added missing stdev function
         return series.rolling(window=length).std()
 
     @staticmethod
@@ -216,7 +216,7 @@ def calculate_rsi_divergence(df, length=14, lookback=5):
     last_pl_rsi = np.nan
     last_ph_price = np.nan
     last_ph_rsi = np.nan
-    
+     
     for i in range(lookback*2, len(df)):
         curr_idx = i - lookback
         if rsi.iloc[curr_idx] == piv_low.iloc[curr_idx]:
@@ -251,7 +251,7 @@ def calculate_gann_hilo(df, length=3):
     trend = [0] * len(df) 
     curr_trend = 1
     curr_act = sma_low.iloc[0] if not np.isnan(sma_low.iloc[0]) else low.iloc[0]
-    
+     
     for i in range(len(df)):
         c = close.iloc[i]
         sh = sma_high.iloc[i]
@@ -386,79 +386,117 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# --- CREATE TABS FOR EACH TICKER ---
+# ==========================================
+# 7. DATA SUMMARY & TERMINAL OUTPUT
+# ==========================================
+st.subheader("📊 Ticker Summary (Terminal View)")
+
+# Container to hold stats
+ticker_stats = []
+
+# Loop through tickers to generate summary
+for t in TICKERS:
+    d = get_ticker_data(t)
+    if not d.empty:
+        # Normalize columns if needed
+        for col in ['Open','High','Low','Close','Volume']:
+            if col in d.columns and isinstance(d[col], pd.DataFrame): 
+                d[col] = d[col].squeeze()
+                
+        # Calculate basic items for the summary
+        curr = d['Close'].iloc[-1]
+        prev = d['Close'].iloc[-2]
+        chg = ((curr - prev) / prev) * 100
+        vol = d['Volume'].iloc[-1]
+        
+        # Calculate a quick trend indicator (Apex) just for the table
+        d = calculate_apex_trend(d)
+        trend = "BULL" if d['Apex_Trend'].iloc[-1] == 1 else ("BEAR" if d['Apex_Trend'].iloc[-1] == -1 else "NEUT")
+        
+        ticker_stats.append({
+            "Ticker": t,
+            "Price": round(curr, 2),
+            "Change %": round(chg, 2),
+            "Volume": int(vol),
+            "Trend": trend
+        })
+
+# Create DataFrame
+summary_df = pd.DataFrame(ticker_stats)
+
+# --- PRINT TO SYSTEM TERMINAL (CONSOLE) ---
+print("\n" + "="*40)
+print(" LIVE TICKER SUMMARY ")
+print("="*40)
+print(summary_df.to_string(index=False))
+print("="*40 + "\n")
+
+# --- SHOW IN STREAMLIT UI ---
+st.dataframe(summary_df, use_container_width=True, hide_index=True)
+st.markdown("---")
+
+# --- CREATE TABS FOR DETAILED VIEW ---
 tabs = st.tabs(TICKERS)
 
 for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
     with tab:
-        # 1. FETCH DATA FIRST (Needed for metrics)
+        # 1. FETCH DATA (Cached)
         df = get_ticker_data(ticker_name)
 
-        # 2. SHOW METRICS IF DATA EXISTS
-        if not df.empty:
+        if df.empty:
+            st.warning(f"No data available for {ticker_name}.")
+        else:
+            # 2. PRE-PROCESS COLUMNS
             for col in ['Open','High','Low','Close','Volume']:
                 if col in df.columns and isinstance(df[col], pd.DataFrame): 
                     df[col] = df[col].squeeze()
             
+            # 3. METRICS
             current_price = df['Close'].iloc[-1]
             prev_price = df['Close'].iloc[-2]
             delta = current_price - prev_price
             pct_change = (delta / prev_price) * 100
             
             st.metric(label=f"{ticker_name} Live Price", value=f"{current_price:.2f}", delta=f"{delta:.2f} ({pct_change:.2f}%)")
-        else:
-            st.warning("Fetching price data...")
-
-        # 3. TRADINGVIEW "ADVANCED" WIDGET (With Search & Drawing Tools)
-        # We start with the likely symbol, but allow user to change it using the built-in search.
-        default_tv_sym = f"LSE:{ticker_name}"
-        unique_tv_id = f"tv_chart_{i}"
-        
-        # NOTE: allow_symbol_change: true puts the search bar INSIDE the widget
-        components.html(f"""
-        <div class="tradingview-widget-container">
-          <div id="{unique_tv_id}"></div>
-          <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-          <script type="text/javascript">
-          new TradingView.widget(
-          {{
-          "width": "100%",
-          "height": 500,
-          "symbol": "{default_tv_sym}",
-          "interval": "D",
-          "timezone": "Etc/UTC",
-          "theme": "dark",
-          "style": "1",
-          "locale": "en",
-          "toolbar_bg": "#f1f3f6",
-          "enable_publishing": false,
-          "allow_symbol_change": true, 
-          "hide_side_toolbar": false,
-          "container_id": "{unique_tv_id}"
-          }}
-          );
-          </script>
-        </div>
-        """, height=500)
-
-        st.markdown("---")
-
-        # 4. PLOTLY ANALYSIS
-        if df.empty:
-            st.warning(f"No data available for {ticker_name}.")
-        else:
-            # INDICATORS
+            
+            # 4. CALCULATE INDICATORS (MOVED UP FOR AI REPORT ACCESS)
             df = calculate_apex_trend(df)
             df = calculate_evwm(df)
-            # FIXED: Do not overwrite entire DF
             df['Money_Flow'] = calculate_money_flow(df) 
             df = calculate_darkpool_macd(df)  
             df = calculate_my_adx(df)         
             df = calculate_rsi_divergence(df)
             df = calculate_gann_hilo(df)      
             df = calculate_advanced_volume(df)
-            res, sup = calculate_sr(df) 
+            res, sup = calculate_sr(df)
 
+            # 5. AI REPORT (MOVED TO TOP)
+            st.markdown("### 🤖 AI Analyst Report")
+            if st.button(f"Generate Report for {ticker_name}", key=f"btn_{i}"):
+                 if not st.session_state.get('openai_api_key'):
+                     st.warning("Needs API Key")
+                 else:
+                     with st.spinner(f"Analyzing {ticker_name}..."):
+                         last = df.iloc[-1]
+                         gann_state = "BULL" if last['Gann_Trend'] == 1 else "BEAR"
+                         prompt = f"""
+                         Analyze {ticker_name}. 
+                         MACRO: {macro_score} ({risk_state}).
+                         TREND: Apex={"Bull" if last['Apex_Trend']==1 else "Bear"}. Gann HiLo={gann_state}.
+                         MOMENTUM: MACD Hist={last['DP_Hist']:.4f}. ADX={last['ADX']:.1f}. RSI={last['RSI']:.1f}.
+                         VOLUME: CMF={last['CMF']:.3f}. RVOL={last['RVOL']:.2f}. MFI={last['MFI']:.1f}.
+                         Verdict (Bull/Bear/Neutral)? <150 words.
+                         """
+                         try:
+                             client = OpenAI(api_key=st.session_state['openai_api_key'])
+                             resp = client.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":prompt}])
+                             st.success(resp.choices[0].message.content)
+                         except Exception as e:
+                             st.error(str(e))
+            
+            st.markdown("---")
+
+            # 6. PLOTLY ANALYSIS
             # PLOTLY (7 Rows)
             fig = make_subplots(rows=7, cols=1, shared_xaxes=True, vertical_spacing=0.03,
                                 row_heights=[0.3, 0.1, 0.1, 0.12, 0.12, 0.12, 0.14],
@@ -514,27 +552,3 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
 
             fig.update_layout(height=1600, template="plotly_dark", margin=dict(l=0,r=0,t=30,b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True, key=f"plot_{i}")
-
-            # AI REPORT
-            st.markdown("### 🤖 AI Analyst Report")
-            if st.button(f"Generate Report for {ticker_name}", key=f"btn_{i}"):
-                 if not st.session_state.get('openai_api_key'):
-                     st.warning("Needs API Key")
-                 else:
-                     with st.spinner(f"Analyzing {ticker_name}..."):
-                         last = df.iloc[-1]
-                         gann_state = "BULL" if last['Gann_Trend'] == 1 else "BEAR"
-                         prompt = f"""
-                         Analyze {ticker_name}. 
-                         MACRO: {macro_score} ({risk_state}).
-                         TREND: Apex={"Bull" if last['Apex_Trend']==1 else "Bear"}. Gann HiLo={gann_state}.
-                         MOMENTUM: MACD Hist={last['DP_Hist']:.4f}. ADX={last['ADX']:.1f}. RSI={last['RSI']:.1f}.
-                         VOLUME: CMF={last['CMF']:.3f}. RVOL={last['RVOL']:.2f}. MFI={last['MFI']:.1f}.
-                         Verdict (Bull/Bear/Neutral)? <150 words.
-                         """
-                         try:
-                             client = OpenAI(api_key=st.session_state['openai_api_key'])
-                             resp = client.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":prompt}])
-                             st.success(resp.choices[0].message.content)
-                         except Exception as e:
-                             st.error(str(e))
