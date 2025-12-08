@@ -15,7 +15,7 @@ from datetime import datetime, time
 # 1. PREMIUM UI CONFIGURATION
 # ==========================================
 # FIX: Changed page_title to "Equity Titan" as requested
-st.set_page_config(layout="wide", page_title="Equity Titan", page_icon="🌍")
+st.set_page_config(layout="wide", page_title="📊Equity Titan", page_icon="🌍")
 
 st.markdown("""
 <style>
