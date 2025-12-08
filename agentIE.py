@@ -62,6 +62,7 @@ class NativeIndicators:
 
     @staticmethod
     def stdev(series, length):
+        # FIXED: Added missing stdev to prevent AttributeError
         return series.rolling(window=length).std()
 
     @staticmethod
@@ -357,24 +358,18 @@ def get_ticker_data(symbol):
 with st.sidebar:
     st.header("Settings")
     
-    # ----------------------------------------
-    # FIXED: Secrets Authentication Logic
-    # ----------------------------------------
+    # Secrets Logic
     secret_key = None
-    
-    # 1. Try to load from Streamlit Secrets
     try:
         if "OPENAI_API_KEY" in st.secrets:
             secret_key = st.secrets["OPENAI_API_KEY"]
             st.success("Authentication Successful (Secrets)", icon="✅")
     except FileNotFoundError:
-        pass # No secrets file found locally, ignore
+        pass 
         
-    # 2. Logic: If secret found, use it. Else, ask user.
     if secret_key:
         st.session_state['openai_api_key'] = secret_key
     else:
-        # Fallback to manual input
         user_key = st.text_input("OpenAI API Key (Manual)", type="password")
         if user_key:
             st.session_state['openai_api_key'] = user_key
@@ -402,43 +397,48 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
 
         # 2. SHOW METRICS IF DATA EXISTS
         if not df.empty:
-            # Squeeze
             for col in ['Open','High','Low','Close','Volume']:
                 if col in df.columns and isinstance(df[col], pd.DataFrame): 
                     df[col] = df[col].squeeze()
             
-            # Get latest values
             current_price = df['Close'].iloc[-1]
             prev_price = df['Close'].iloc[-2]
             delta = current_price - prev_price
             pct_change = (delta / prev_price) * 100
             
-            # Display Big Metric
             st.metric(label=f"{ticker_name} Live Price", value=f"{current_price:.2f}", delta=f"{delta:.2f} ({pct_change:.2f}%)")
         else:
             st.warning("Fetching price data...")
 
-        # 3. MANUAL TRADINGVIEW SEARCH
-        col_search, col_chart = st.columns([1, 4])
+        # 3. ADVANCED TRADINGVIEW CHART WITH NATIVE SEARCH
+        # We start with the likely correct symbol (LSE:SGLN), but "allow_symbol_change": true
+        # allows the user to click the symbol name in the chart and change it.
+        default_tv_sym = f"LSE:{ticker_name}"
+        unique_tv_id = f"tv_chart_{i}"
         
-        with col_search:
-            st.markdown("##### 🔎 Widget Settings")
-            st.info("If the chart is wrong, type the exact symbol below (e.g. `OANDA:XAUUSD` or `BINANCE:BTCUSDT`)")
-            # Default to LSE:{Ticker}
-            default_tv = f"LSE:{ticker_name}"
-            user_tv_symbol = st.text_input("Symbol", value=default_tv, key=f"tv_input_{i}")
-            
-        with col_chart:
-            unique_tv_id = f"tv_chart_{i}"
-            components.html(f"""
-            <div class="tradingview-widget-container">
-              <div id="{unique_tv_id}"></div>
-              <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-              <script type="text/javascript">
-              new TradingView.widget({{"width": "100%", "height": 450, "symbol": "{user_tv_symbol}", "interval": "D", "theme": "dark", "container_id": "{unique_tv_id}"}});
-              </script>
-            </div>
-            """, height=450)
+        components.html(f"""
+        <div class="tradingview-widget-container">
+          <div id="{unique_tv_id}"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+          <script type="text/javascript">
+          new TradingView.widget(
+          {{
+          "width": "100%",
+          "height": 500,
+          "symbol": "{default_tv_sym}",
+          "interval": "D",
+          "timezone": "Etc/UTC",
+          "theme": "dark",
+          "style": "1",
+          "locale": "en",
+          "enable_publishing": false,
+          "allow_symbol_change": true,  
+          "container_id": "{unique_tv_id}"
+          }}
+          );
+          </script>
+        </div>
+        """, height=500)
 
         st.markdown("---")
 
@@ -449,6 +449,7 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
             # INDICATORS
             df = calculate_apex_trend(df)
             df = calculate_evwm(df)
+            # FIXED: Correct assignment to avoid overwriting dataframe
             df['Money_Flow'] = calculate_money_flow(df) 
             df = calculate_darkpool_macd(df)  
             df = calculate_my_adx(df)         
