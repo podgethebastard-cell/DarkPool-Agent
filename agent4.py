@@ -103,7 +103,7 @@ st.markdown("""
 # 2. SIDEBAR CONTROLS
 # ==========================================
 st.sidebar.title("⚡ TITAN CONFIG")
-st.sidebar.caption("v5.1 | KRAKEN | AI")
+st.sidebar.caption("v5.2 | DARK VECTOR ENGINE")
 st.sidebar.markdown("---")
 
 # Market Data
@@ -114,26 +114,26 @@ limit = st.sidebar.slider("Candles", min_value=200, max_value=1500, value=500)
 
 st.sidebar.markdown("---")
 
-# Strategies
+# Strategies (MATCHING PINE SCRIPT GROUPS)
 st.sidebar.subheader("LOGIC ENGINE")
-with st.sidebar.expander("Titan Settings", expanded=True):
-    amplitude = st.number_input("Sensitivity", min_value=1, value=5)
-    channel_dev = st.number_input("Deviation", min_value=1.0, value=3.0, step=0.1)
+with st.sidebar.expander("Apex Engine (1m/5m)", expanded=True):
+    amplitude = st.number_input("Sensitivity (Lookback)", min_value=1, value=5, help="Perfect for 1m/5m. Reacts fast to breakouts.")
+    channel_dev = st.number_input("Stop Deviation", min_value=1.0, value=3.0, step=0.1, help="3.0 gives the trade room to breathe.")
+    
+with st.sidebar.expander("Trend Reference"):
     hma_len = st.number_input("HMA Length", min_value=1, value=50)
-    use_hma_filter = st.checkbox("HMA Filter", value=False)
+    use_hma_filter = st.checkbox("Use HMA as Filter?", value=False)
 
-with st.sidebar.expander("Money Flow Matrix"):
+with st.sidebar.expander("Money Flow & Vol"):
     mf_len = st.number_input("MF Length", value=14)
-    hyper_long = st.number_input("Hyper Long", value=25)
-    hyper_short = st.number_input("Hyper Short", value=13)
-
-with st.sidebar.expander("Advanced Volume"):
     vol_metric = st.selectbox("Sub-Chart Metric", ["CMF", "MFI", "Volume RSI", "RVOL", "Vol Osc"])
     vol_len = st.number_input("Volume Length", value=20)
+    hyper_long = 25
+    hyper_short = 13
 
 st.sidebar.markdown("---")
 
-# --- CREDENTIALS HANDLING (SECRETS vs MANUAL) ---
+# --- CREDENTIALS HANDLING ---
 st.sidebar.subheader("SYSTEM CREDENTIALS")
 
 # 1. TELEGRAM
@@ -262,11 +262,20 @@ def get_data(symbol, timeframe, limit):
     except: return pd.DataFrame()
 
 def run_titan_engine(df):
-    # Titan Vector
+    # --- 1. DARK VECTOR LOGIC (STRICT PINE MAPPING) ---
+    
+    # Pine: float standard_atr = ta.atr(100) -> Uses RMA (Wilder's)
+    # Python: ewm(alpha=1/100) is equivalent to Pine's RMA
     df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
-    df['dev'] = (df['tr'].rolling(100).mean() / 2) * channel_dev
+    df['atr_algo'] = (df['tr'].ewm(alpha=1/100, adjust=False).mean() / 2)
+    
+    # Pine: dev = channel_dev * atr_algo
+    df['dev'] = df['atr_algo'] * channel_dev
+    
+    # Pine: hma_val = ta.hma(close, hma_len)
     df['hma'] = calc_hma_full(df['close'], hma_len)
 
+    # Pine: Staircase Logic
     df['ll'] = df['low'].rolling(amplitude).min()
     df['hh'] = df['high'].rolling(amplitude).max()
     
@@ -277,25 +286,26 @@ def run_titan_engine(df):
     for i in range(amplitude, len(df)):
         c = df['close'].iloc[i]; l = df['ll'].iloc[i]; h = df['hh'].iloc[i]
         dev = df['dev'].iloc[i] if not np.isnan(df['dev'].iloc[i]) else 0
+        
         curr_max_l = max(l, curr_max_l)
         curr_min_h = min(h, curr_min_h) if curr_min_h != 0 else h
 
-        if curr_trend == 0: 
+        if curr_trend == 0: # Bull
             if c < curr_max_l: curr_trend = 1; curr_min_h = h
             else: 
                 curr_min_h = min(curr_min_h, h)
                 if l < curr_max_l: curr_max_l = l
-        else:
+        else: # Bear
             if c > curr_min_h: curr_trend = 0; curr_max_l = l
             else: 
                 curr_max_l = max(curr_max_l, l)
                 if h > curr_min_h: curr_min_h = h
         
-        if curr_trend == 0:
+        if curr_trend == 0: # Bull Stop
             s = l + dev
             if s < curr_stop: s = curr_stop
             curr_stop = s
-        else:
+        else: # Bear Stop
             s = h - dev
             if s > curr_stop and curr_stop != 0: s = curr_stop
             elif curr_stop == 0: s = h - dev
@@ -307,7 +317,7 @@ def run_titan_engine(df):
     df['trend'] = trend; df['trend_stop'] = stop
     df['is_bull'] = df['trend'] == 0
     
-    # Signals
+    # Pine: Signal Generation
     df['bull_flip'] = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False).astype(bool))
     df['bear_flip'] = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True).astype(bool))
     filter_buy = ~use_hma_filter | (df['close'] > df['hma'])
@@ -315,17 +325,18 @@ def run_titan_engine(df):
     df['buy_signal'] = df['bull_flip'] & filter_buy
     df['sell_signal'] = df['bear_flip'] & filter_sell
 
-    # Money Flow Matrix
+    # --- 2. MONEY FLOW MATRIX ---
     rsi_src = calculate_rsi(df['close'], mf_len) - 50
     mf_vol = df['volume'] / df['volume'].rolling(mf_len).mean()
     df['money_flow'] = (rsi_src * mf_vol).fillna(0).ewm(span=3).mean()
     
+    # Hyper Wave
     pc = df['close'].diff()
     ss = pc.ewm(span=hyper_long).mean().ewm(span=hyper_short).mean()
     ss_abs = abs(pc).ewm(span=hyper_long).mean().ewm(span=hyper_short).mean()
     df['hyper_wave'] = np.where(ss_abs != 0, (100 * (ss / ss_abs)) / 2, 0)
 
-    # Advanced Volume
+    # --- 3. ADVANCED VOLUME ---
     mfm = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
     df['cmf'] = (mfm.fillna(0) * df['volume']).rolling(vol_len).sum() / df['volume'].rolling(vol_len).sum()
     df['mfi'] = calculate_mfi(df['high'], df['low'], df['close'], df['volume'], vol_len)
@@ -404,7 +415,7 @@ if not df.empty:
     with c3: st.markdown(f"""<div class="titan-card"><h4>Money Flow</h4><h2 class="{'text-bull' if last['money_flow']>0 else 'text-bear'}">{last['money_flow']:.2f}</h2><div class="sub">Institutional Pressure</div></div>""", unsafe_allow_html=True)
     with c4: st.markdown(f"""<div class="titan-card"><h4>RVOL</h4><h2 class="{'text-bull' if last['rvol']>1.5 else 'text-white'}">{last['rvol']:.2f}x</h2><div class="sub">Anomaly Detection</div></div>""", unsafe_allow_html=True)
 
-    # --- ACTION CENTER (MANUAL CONTROLS) ---
+    # --- ACTION CENTER (MANUAL) ---
     col_a, col_b = st.columns(2)
     
     with col_a:
