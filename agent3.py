@@ -13,7 +13,7 @@ import urllib.parse
 # ==========================================
 # 1. PREMIUM UI CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="Titan Terminal: Equity Mode", page_icon="🏢")
+st.set_page_config(layout="wide", page_title="Titan Terminal: Global Equity", page_icon="🌍")
 
 st.markdown("""
 <style>
@@ -130,18 +130,42 @@ stock_assets = {
 }
 
 # --- SEARCH FEATURE ---
-search_mode = st.sidebar.radio("Asset Selection", ["Top List", "Search Any Ticker"], horizontal=True)
+search_mode = st.sidebar.radio("Asset Selection", 
+                               ["Top List", "Search US/Global", "Search UK (LSE)", "Search Japan (TSE)"], 
+                               horizontal=False) # Changed to vertical for cleaner look with 4 options
+
+ticker = "NVDA" # Default
+ticker_name = "NVIDIA"
 
 if search_mode == "Top List":
-    ticker_name = st.sidebar.selectbox("Target Asset", list(stock_assets.keys()))
-    ticker = stock_assets[ticker_name]
-else:
-    # UPDATED: More descriptive label for universal search
-    custom_symbol = st.sidebar.text_input("Enter Ticker (e.g. GME, ^GSPC, BRK-B)", value="NVDA").upper().strip()
-    ticker = custom_symbol
-    ticker_name = f"{custom_symbol} (Custom)"
+    ticker_name_input = st.sidebar.selectbox("Target Asset", list(stock_assets.keys()))
+    ticker = stock_assets[ticker_name_input]
+    ticker_name = ticker_name_input
 
-# UPDATED: Default index set to 3 (which corresponds to "1d")
+elif search_mode == "Search US/Global":
+    custom_symbol = st.sidebar.text_input("Enter Ticker (e.g. GME, ^GSPC)", value="NVDA").upper().strip()
+    ticker = custom_symbol
+    ticker_name = f"{custom_symbol} (Global)"
+
+elif search_mode == "Search UK (LSE)":
+    # User inputs e.g., 'RR' or 'BARC', we append .L
+    uk_symbol = st.sidebar.text_input("Enter UK Ticker (e.g. RR, BARC)", value="RR").upper().strip()
+    if not uk_symbol.endswith(".L"):
+        ticker = f"{uk_symbol}.L"
+    else:
+        ticker = uk_symbol
+    ticker_name = f"{ticker} (LSE)"
+
+elif search_mode == "Search Japan (TSE)":
+    # User inputs e.g., '7203' (Toyota), we append .T
+    jp_symbol = st.sidebar.text_input("Enter Japan Code (e.g. 7203, 9984)", value="7203").upper().strip()
+    if not jp_symbol.endswith(".T"):
+        ticker = f"{jp_symbol}.T"
+    else:
+        ticker = jp_symbol
+    ticker_name = f"{ticker} (TSE)"
+
+# Default to Daily (index 3)
 interval = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=3)
 
 # ==========================================
@@ -375,11 +399,21 @@ def get_data(ticker, interval):
 # ==========================================
 st.markdown(f'<div class="titan-header">🏢 TITAN TERMINAL: {ticker_name}</div>', unsafe_allow_html=True)
 
-# 1. TRADINGVIEW WIDGET (Stocks)
+# 1. TRADINGVIEW WIDGET (Enhanced for Global)
 tv_int_map = {"15m": "15", "1h": "60", "4h": "240", "1d": "D"}
-# For stocks, we usually just pass the ticker or NASDAQ:TICKER
-# We default to just ticker and let TV auto-resolve
-tv_sym = ticker 
+
+# Smart TradingView Symbol Mapper
+if search_mode == "Search UK (LSE)":
+    # yf uses "RR.L", TV uses "LSE:RR"
+    clean_sym = ticker.replace(".L", "")
+    tv_sym = f"LSE:{clean_sym}"
+elif search_mode == "Search Japan (TSE)":
+    # yf uses "7203.T", TV uses "TSE:7203"
+    clean_sym = ticker.replace(".T", "")
+    tv_sym = f"TSE:{clean_sym}"
+else:
+    # Default behavior for US/Global
+    tv_sym = ticker
 
 components.html(
     f"""<div class="tradingview-widget-container"><div id="tradingview_widget"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{"width": "100%","height": 450,"symbol": "{tv_sym}","interval": "{tv_int_map[interval]}","timezone": "Etc/UTC","theme": "dark","style": "1","locale": "en","toolbar_bg": "#f1f3f6","enable_publishing": false,"hide_side_toolbar": false,"allow_symbol_change": true,"container_id": "tradingview_widget"}});</script></div>""",
