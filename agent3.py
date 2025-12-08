@@ -14,7 +14,7 @@ from datetime import datetime, time
 # ==========================================
 # 1. PREMIUM UI CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="Titan Terminal: Global Equity", page_icon="🌍")
+st.set_page_config(layout="wide", page_title="Equity Titan", page_icon="🌍")
 
 st.markdown("""
 <style>
