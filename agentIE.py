@@ -12,8 +12,8 @@ import uuid
 # 1. PAGE CONFIGURATION & STYLING
 # ==========================================
 st.set_page_config(
-    page_title="LSE Mining & Commodities AI Analyst",
-    page_icon="⚒️",
+    page_title="DarkPool AI Analyst",
+    page_icon="xx",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -22,7 +22,6 @@ st.markdown("""
 <style>
     .metric-card { background-color: #1e1e1e; border: 1px solid #333; padding: 15px; border-radius: 10px; color: white; }
     .stAlert { background-color: #1e1e1e; color: white; border: 1px solid #444; }
-    /* Tabs Styling */
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
     .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #0e1117; border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
     .stTabs [aria-selected="true"] { background-color: #262730; border-bottom: 2px solid #00E676; }
@@ -58,6 +57,11 @@ class NativeIndicators:
         wmas = NativeIndicators.wma(series, length)
         diff = 2 * wmaf - wmas
         return NativeIndicators.wma(diff, sqrt_length)
+
+    @staticmethod
+    def stdev(series, length):
+        """Added missing STDEV function to fix crash"""
+        return series.rolling(window=length).std()
 
     @staticmethod
     def rsi(series, length=14):
@@ -115,7 +119,6 @@ def calculate_money_flow(df, length=14, smooth=3):
     return money_flow
 
 def calculate_apex_trend(df, len_main=55, mult=1.5):
-    # This is the APEX TREND logic
     close = df['Close']
     high = df['High']
     low = df['Low']
@@ -160,14 +163,13 @@ def calculate_evwm(df, length=21, vol_smooth=5, mult=2.0):
     final_force = np.sqrt(smooth_rvol)
     evwm = elasticity * final_force
     band_basis = ta.sma(evwm, length*2)
-    band_dev = ta.stdev(evwm, length*2) * mult
+    band_dev = ta.stdev(evwm, length*2) * mult # This line caused the crash, fixed now
     df['EVWM'] = evwm
     df['EVWM_Upper'] = band_basis + band_dev
     df['EVWM_Lower'] = band_basis - band_dev
     return df
 
 def calculate_sr(df, period=10):
-    # This is the LIQUIDITY / S/R logic
     high = df['High']
     low = df['Low']
     df['Pivot_High'] = high.rolling(period*2+1, center=True).max()
@@ -327,23 +329,23 @@ def get_macro_data():
         return 0, None
 
 # ==========================================
-# 5. DATA FETCHING
+# 5. DATA FETCHING (UPDATED FOR YOUR TICKERS)
 # ==========================================
-TICKERS = {
-    "SGLN (Gold)": "SGLN.L", "SSLN (Silver)": "SSLN.L",
-    "SPLT (Platinum)": "SPLT.L", "SPDM (Palladium)": "SPDM.L",
-    "SILG (Silver Miners)": "SILG.L", "COPP (Copper)": "COPP.L",
-    "URJP (Uranium)": "URJP.L", "SPGP (Gold Prod)": "SPGP.L"
-}
-
-def get_tv_symbol(yahoo):
-    if yahoo.endswith(".L"): return f"LSE:{yahoo.replace('.L', '')}"
-    if yahoo == "^GSPC": return "SP:SPX"
-    return yahoo
+# We use simple names for keys (tabs) and values (TradingView)
+# We append .L only inside the download function for Yahoo to work
+TICKERS = [
+    "SGLN", "SSLN", "SPLT", "SPDM", 
+    "SILG", "GJGB", "ESGP", "URJP", 
+    "COPP", "SPGP"
+]
 
 @st.cache_data(ttl=900)
 def get_ticker_data(symbol):
-    df = yf.download(symbol, period="1y", interval="1d")
+    # Yahoo requires .L for London stocks, but user input is just "SGLN"
+    # We silently add it here for data fetching only
+    yf_symbol = f"{symbol}.L" 
+    
+    df = yf.download(yf_symbol, period="1y", interval="1d")
     if isinstance(df.columns, pd.MultiIndex):
         try: df.columns = df.columns.droplevel(1)
         except: pass
@@ -361,7 +363,6 @@ with st.sidebar:
 
 macro_score, _ = get_macro_data()
 risk_state = "RISK ON" if macro_score >= 2 else ("RISK OFF" if macro_score <= -2 else "NEUTRAL")
-# FIXED: Variable name typo corrected here
 risk_color = "green" if macro_score >= 2 else ("red" if macro_score <= -2 else "gray")
 
 st.markdown(f"""
@@ -371,14 +372,12 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- CREATE TABS FOR EACH TICKER ---
-tab_names = list(TICKERS.keys())
-tabs = st.tabs(tab_names)
+tabs = st.tabs(TICKERS)
 
 # Iterate through tabs
-for i, (tab, (ticker_name, ticker_symbol)) in enumerate(zip(tabs, TICKERS.items())):
+for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
     with tab:
-        # TRADINGVIEW
-        tv_sym = get_tv_symbol(ticker_symbol)
+        # TRADINGVIEW (CLEAN TICKER: SGLN)
         unique_tv_id = f"tv_chart_{i}"
         
         components.html(f"""
@@ -386,16 +385,16 @@ for i, (tab, (ticker_name, ticker_symbol)) in enumerate(zip(tabs, TICKERS.items(
           <div id="{unique_tv_id}"></div>
           <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
           <script type="text/javascript">
-          new TradingView.widget({{"width": "100%", "height": 450, "symbol": "{tv_sym}", "interval": "D", "theme": "dark", "container_id": "{unique_tv_id}"}});
+          new TradingView.widget({{"width": "100%", "height": 450, "symbol": "{ticker_name}", "interval": "D", "theme": "dark", "container_id": "{unique_tv_id}"}});
           </script>
         </div>
         """, height=450)
 
         # FETCH & CALCULATE
-        df = get_ticker_data(ticker_symbol)
+        df = get_ticker_data(ticker_name)
         
         if df.empty:
-            st.warning("No data available.")
+            st.warning(f"No data available for {ticker_name}.")
         else:
             # Squeeze
             for col in ['Open','High','Low','Close','Volume']:
