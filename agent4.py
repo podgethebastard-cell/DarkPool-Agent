@@ -13,16 +13,15 @@ import time
 # ==========================================
 st.set_page_config(page_title="Titan Scalper [Terminal]", layout="wide", page_icon="⚡")
 
-# --- PRO UI STYLING ---
 st.markdown("""
     <style>
     /* MAIN BACKGROUND */
     .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Roboto Mono', monospace; }
     
-    /* REMOVE PADDING */
+    /* BLOCK PADDING */
     .block-container { padding-top: 1rem; padding-bottom: 5rem; }
     
-    /* METRIC CARD CSS */
+    /* TITAN METRIC CARD CSS */
     .titan-card {
         background: #111;
         border: 1px solid #333;
@@ -36,16 +35,17 @@ st.markdown("""
     .titan-card h2 { margin: 5px 0 0 0; font-size: 1.8rem; font-weight: 700; color: #fff; }
     .titan-card .sub { font-size: 0.8rem; color: #666; margin-top: 5px; }
     
-    /* BULL/BEAR BORDERS */
+    /* STATUS COLORS */
     .border-bull { border-left-color: #00ffbb !important; }
     .border-bear { border-left-color: #ff1155 !important; }
     .text-bull { color: #00ffbb !important; }
     .text-bear { color: #ff1155 !important; }
+    .text-white { color: #fff !important; }
     
     /* SIDEBAR */
     section[data-testid="stSidebar"] { background-color: #0a0a0a; border-right: 1px solid #222; }
     
-    /* TOASTS */
+    /* TOASTS & ALERTS */
     div[data-testid="stToast"] { background-color: #1a1a1a; border: 1px solid #333; color: white; }
     </style>
     """, unsafe_allow_html=True)
@@ -107,11 +107,7 @@ if test_btn:
     send_telegram_msg(bot_token, chat_id, "🔥 **TITAN SYSTEM ONLINE**")
     st.toast("Test Message Sent", icon="📡")
 
-def calculate_hma(series, length):
-    def wma(x): return np.dot(x, np.arange(1, len(x)+1)) / np.arange(1, len(x)+1).sum()
-    return series.rolling(int(np.sqrt(length))).apply(lambda x: wma(x), raw=True) # Simplified for stability
-
-# Re-implementing Weighted Avg manually for HMA to ensure speed and accuracy without recursion issues
+# Helper math functions (Non-recursive for speed)
 def weighted_ma(series, length):
     weights = np.arange(1, length + 1)
     return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
@@ -139,9 +135,9 @@ def calculate_mfi(high, low, close, volume, length):
     return 100 - (100 / (1 + (pos / neg)))
 
 # ==========================================
-# 4. MASTER ENGINE
+# 4. MASTER ENGINE (Titan + Matrix + Vol)
 # ==========================================
-@st.cache_data(ttl=5) # Fast refresh
+@st.cache_data(ttl=5) 
 def get_data(symbol, timeframe, limit):
     try:
         exchange = ccxt.kraken()
@@ -162,7 +158,7 @@ def run_titan_engine(df):
     df['hh'] = df['high'].rolling(amplitude).max()
     
     trend = np.zeros(len(df)); stop = np.zeros(len(df))
-    curr_trend = 0; curr_stop = df['close'].iloc[0]
+    curr_trend = 0; curr_stop = df['close'].iloc[0] # Init at price to prevent 0-scaling
     curr_max_l = 0.0; curr_min_h = 0.0
 
     for i in range(amplitude, len(df)):
@@ -257,7 +253,7 @@ if not df.empty:
     df = run_titan_engine(df)
     last = df.iloc[-1]
     
-    # --- BROADCASTING ---
+    # --- BROADCASTING (RESTORED EXACT FORMAT) ---
     if tg_on and bot_token and chat_id:
         if (last['buy_signal'] or last['sell_signal']) and st.session_state.last_signal_time != last['timestamp']:
             is_buy = last['buy_signal']
@@ -266,6 +262,7 @@ if not df.empty:
             risk = abs(last['close'] - last['trend_stop'])
             target = last['close'] + (risk * 1.5) if is_buy else last['close'] - (risk * 1.5)
             
+            # Message Construction
             msg = f"""🔥 *TITAN SIGNAL: {symbol} ({timeframe})*
 {icon} DIRECTION: *{direction}*
 🚪 ENTRY: `${last['close']:,.2f}`
@@ -277,6 +274,7 @@ if not df.empty:
 💀 Institutional Trend: {'MACRO BULL' if last['close'] > last['hma'] else 'MACRO BEAR'}
 ⚠️ _Not financial advice. DYOR._
 #DarkPool #Titan #Crypto"""
+            
             send_telegram_msg(bot_token, chat_id, msg)
             st.session_state.last_signal_time = last['timestamp']
             st.toast(f"Broadcast: {direction}", icon="🚀")
@@ -324,7 +322,7 @@ if not df.empty:
             <div class="sub">Anomaly Detection</div>
         </div>""", unsafe_allow_html=True)
 
-    # --- TRI-PANE CHART ---
+    # --- TRI-PANE CHART (SCALING FIXED) ---
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, 
         row_heights=[0.55, 0.20, 0.25],
@@ -334,9 +332,10 @@ if not df.empty:
     # 1. Price
     fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
     
-    # Stops
-    b_stop = df['trend_stop'].where(df['is_bull'], np.nan)
-    s_stop = df['trend_stop'].where(~df['is_bull'], np.nan)
+    # Stops (Zero removed for scaling)
+    b_stop = df['trend_stop'].where(df['is_bull'], np.nan).replace(0, np.nan)
+    s_stop = df['trend_stop'].where(~df['is_bull'], np.nan).replace(0, np.nan)
+    
     fig.add_trace(go.Scatter(x=df['timestamp'], y=b_stop, mode='lines', line=dict(color='#00ffbb', width=2), name='Bull Stop'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df['timestamp'], y=s_stop, mode='lines', line=dict(color='#ff1155', width=2), name='Bear Stop'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', line=dict(color='gray', dash='dot'), name='HMA'), row=1, col=1)
@@ -373,8 +372,9 @@ if not df.empty:
              fig.add_hline(y=80, line_dash="dot", line_color="red", row=3, col=1)
              fig.add_hline(y=20, line_dash="dot", line_color="green", row=3, col=1)
 
+    # FINAL SCALING ADJUSTMENT
     fig.update_layout(height=900, paper_bgcolor='#050505', plot_bgcolor='#050505', font=dict(color="#aaa"), showlegend=False, xaxis_rangeslider_visible=False)
-    fig.update_yaxes(gridcolor="#222")
+    fig.update_yaxes(gridcolor="#222", autorange=True, fixedrange=False) # Enables proper zoom
     fig.update_xaxes(gridcolor="#222")
     
     st.plotly_chart(fig, use_container_width=True)
