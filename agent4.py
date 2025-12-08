@@ -10,7 +10,7 @@ import time
 # ==========================================
 st.set_page_config(page_title="Titan Scalper [Kraken]", layout="wide", page_icon="⚡")
 
-# Custom CSS for that "Dark/Titan" aesthetic
+# Custom CSS
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: #ffffff; }
@@ -18,10 +18,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Sidebar Controls
+# Sidebar
 st.sidebar.header("⚡ Titan Scalper Config")
-
-# CHANGED: Defaulted to BTC/USD for Kraken
 symbol = st.sidebar.text_input("Symbol (Kraken format)", value="BTC/USD") 
 timeframe = st.sidebar.selectbox("Timeframe", options=['1m', '5m'], index=1)
 limit = st.sidebar.slider("Candles to Load", min_value=100, max_value=1000, value=300)
@@ -39,7 +37,6 @@ use_hma_filter = st.sidebar.checkbox("Use HMA Filter?", value=False)
 
 def calculate_hma(series, length):
     """Calculates Hull Moving Average"""
-    # Simplified weighted moving average for speed
     def weighted_avg(w):
         def _compute(x):
             return np.dot(x, w) / w.sum()
@@ -57,7 +54,7 @@ def calculate_hma(series, length):
     return hma
 
 def run_titan_engine(df):
-    # 1. Volatility Scaling (ATR)
+    # 1. Volatility Scaling
     df['tr'] = np.maximum(df['high'] - df['low'], 
                           np.maximum(abs(df['high'] - df['close'].shift(1)), 
                                      abs(df['low'] - df['close'].shift(1))))
@@ -73,14 +70,13 @@ def run_titan_engine(df):
 
     trend = np.zeros(len(df))
     trend_stop = np.zeros(len(df))
-    max_low = np.zeros(len(df))
-    min_high = np.zeros(len(df))
     
     curr_trend = 0 # 0 = Bull, 1 = Bear
     curr_max_low = 0.0
     curr_min_high = 0.0
     curr_trend_stop = 0.0
     
+    # Loop
     for i in range(amplitude, len(df)):
         close = df['close'].iloc[i]
         low_price = df['lowest_low'].iloc[i]
@@ -124,17 +120,19 @@ def run_titan_engine(df):
 
         trend[i] = curr_trend
         trend_stop[i] = curr_trend_stop
-        max_low[i] = curr_max_low
-        min_high[i] = curr_min_high
 
     df['trend'] = trend
     df['trend_stop'] = trend_stop
     df['is_bull'] = df['trend'] == 0
     df['is_bear'] = df['trend'] == 1
     
-    # 4. Signals
-    df['bull_flip'] = (df['is_bull']) & (~df['is_bull'].shift(1))
-    df['bear_flip'] = (df['is_bear']) & (~df['is_bear'].shift(1))
+    # 4. Signals (FIXED THE CRASH HERE)
+    # We fill NaNs with False so the '~' operator has valid booleans to work with
+    prev_is_bull = df['is_bull'].shift(1).fillna(False).astype(bool)
+    prev_is_bear = df['is_bear'].shift(1).fillna(False).astype(bool)
+
+    df['bull_flip'] = (df['is_bull']) & (~prev_is_bull)
+    df['bear_flip'] = (df['is_bear']) & (~prev_is_bear)
     
     df['filter_ok_buy'] = ~use_hma_filter | (df['close'] > df['hma'])
     df['filter_ok_sell'] = ~use_hma_filter | (df['close'] < df['hma'])
@@ -150,7 +148,6 @@ def run_titan_engine(df):
 @st.cache_data(ttl=60) 
 def get_data(symbol, timeframe, limit):
     try:
-        # CHANGED: Using Kraken to bypass US Server blocks on Streamlit Cloud
         exchange = ccxt.kraken()
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
