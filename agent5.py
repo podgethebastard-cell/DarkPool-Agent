@@ -43,13 +43,9 @@ st.markdown("""
         font-weight: 600;
         color: #E0E0E0;
     }
-    .category-header {
-        font-size: 1.2rem;
+    /* Radio Button Styling (to replace dropdown) */
+    .stRadio > label {
         font-weight: bold;
-        color: #888;
-        margin-top: 20px;
-        margin-bottom: 10px;
-        border-bottom: 1px solid #333;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -60,41 +56,41 @@ st.markdown("""
 
 # A. SINGLE ASSETS (Original Request)
 TICKERS = {
-    ". MASTER CORE": {
+    "15. MASTER CORE": {
         "S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "DXY": "DX-Y.NYB",
         "US 10Y": "^TNX", "US 02Y": "^IRX", "VIX": "^VIX",
         "WTI Crude": "CL=F", "Gold": "GC=F", "Copper": "HG=F",
         "HYG (Junk)": "HYG", "TLT (Long Bond)": "TLT",
         "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD"
     },
-    ". Global Equity Indices": {
+    "1. Global Equity Indices": {
         "S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "Dow Jones": "^DJI", "Russell 2000": "^RUT",
         "DAX (DE)": "^GDAXI", "FTSE (UK)": "^FTSE", "CAC (FR)": "^FCHI", "STOXX50": "^STOXX50E",
         "Nikkei (JP)": "^N225", "Hang Seng (HK)": "^HSI", "Shanghai": "000001.SS", "KOSPI": "^KS11",
         "ACWI": "ACWI", "VT (World)": "VT", "EEM (Emerging)": "EEM"
     },
-    ". Volatility & Fear": {
+    "2. Volatility & Fear": {
         "VIX": "^VIX", "VXN (Nasdaq)": "^VXN", "VXD (Dow)": "^VXD",
         "MOVE Proxy (ICE BofA)": "MOVE.MX" 
     },
-    ". Interest Rates": {
+    "3. Interest Rates": {
         "US 10Y": "^TNX", "US 02Y": "^IRX", "US 30Y": "^TYX", "US 05Y": "^FVX",
         "TLT": "TLT", "IEF": "IEF", "SHY": "SHY", "LQD": "LQD", "HYG": "HYG", "TIP": "TIP"
     },
-    ". Currencies": {
+    "4. Currencies": {
         "DXY": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X",
         "USD/JPY": "USDJPY=X", "USD/CNY": "USDCNY=X", "AUD/USD": "AUDUSD=X",
         "USD/CHF": "USDCHF=X", "USD/MXN": "USDMXN=X"
     },
-    ". Commodities": {
+    "7. Commodities": {
         "WTI": "CL=F", "Brent": "BZ=F", "NatGas": "NG=F",
         "Gold": "GC=F", "Silver": "SI=F", "Platinum": "PL=F", "Palladium": "PA=F",
         "Copper": "HG=F", "Wheat": "KE=F", "Corn": "ZC=F", "Soybeans": "ZS=F"
     },
-    ". Real Estate": {
+    "8. Real Estate": {
         "VNQ (US REITs)": "VNQ", "REET (Global)": "REET", "XLRE": "XLRE"
     },
-    ". Crypto Macro": {
+    "11. Crypto Macro": {
         "BTC.D (Proxy)": "BTC-USD", "Total Cap (Proxy)": "BTC-USD", # Placeholders, handled by special logic
         "BTC": "BTC-USD", "ETH": "ETH-USD"
     }
@@ -277,10 +273,13 @@ with st.sidebar:
     
     mode = st.radio("Select View Mode:", ["Standard Tickers", "Institutional Ratios"])
     
+    st.markdown("---")
+    
+    # MODIFICATION: Using st.radio instead of st.selectbox to prevent "text editing" / typing
     if mode == "Standard Tickers":
-        selected_category = st.selectbox("Asset Class", list(TICKERS.keys()))
+        selected_category = st.radio("Asset Class", list(TICKERS.keys()))
     else:
-        selected_category = st.selectbox("Ratio Strategy", list(RATIO_GROUPS.keys()))
+        selected_category = st.radio("Ratio Strategy", list(RATIO_GROUPS.keys()))
         
     st.markdown("---")
     if st.button("Generate AI Report"):
