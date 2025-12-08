@@ -92,7 +92,7 @@ def send_telegram_msg(token, chat, msg):
     payload = {
         "chat_id": chat,
         "text": msg,
-        "parse_mode": "Markdown"
+        "parse_mode": "Markdown" # Markdown for bolding
     }
     try:
         requests.post(url, json=payload)
@@ -248,7 +248,7 @@ if not df.empty:
         # Only send if new timestamp
         if (is_buy or is_sell) and (st.session_state.last_signal_time != sig_time):
             
-            # Message Variables
+            # --- TITAN SIGNAL FORMATTING ---
             direction = "LONG" if is_buy else "SHORT"
             icon = "🟢" if is_buy else "🔴"
             entry = last_row['close']
@@ -258,10 +258,16 @@ if not df.empty:
             risk = abs(entry - stop)
             target = entry + (risk * 1.5) if is_buy else entry - (risk * 1.5)
             
+            # Trend
             trend_str = "BULLISH" if last_row['is_bull'] else "BEARISH"
             
-            # Simple derived metrics
+            # Momentum
             mom_str = "POSITIVE" if last_row['close'] > last_row['open'] else "NEGATIVE"
+            
+            # Money Flow (Estimated via Volume direction)
+            mf_str = "INFLOW" if (last_row['close'] > last_row['open']) and (last_row['volume'] > df['volume'].mean()) else ("OUTFLOW" if last_row['close'] < last_row['open'] else "NEUTRAL")
+            
+            # Institutional Trend
             inst_str = "MACRO BULL" if last_row['close'] > last_row['hma'] else "MACRO BEAR"
 
             msg = f"""🔥 *TITAN SIGNAL: {symbol} ({timeframe})*
@@ -271,6 +277,7 @@ if not df.empty:
 🎯 TARGET: `${target:,.2f}`
 🌊 Trend: {trend_str}
 📊 Momentum: {mom_str}
+💰 Money Flow: {mf_str}
 💀 Institutional Trend: {inst_str}
 ⚠️ _Not financial advice. DYOR._
 #DarkPool #Titan #Crypto"""
