@@ -83,6 +83,63 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
+# 1.1 WORLD CLOCK WIDGET
+# ==========================================
+st.markdown("""
+<div style="
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    padding: 10px;
+    margin-bottom: 15px;
+    font-family: 'SF Mono', monospace;
+">
+    <div style="text-align: center;">
+        <div style="color: #888; font-size: 0.75rem; letter-spacing: 1px;">NEW YORK</div>
+        <div id="clock-ny" style="color: #2979FF; font-weight: bold; font-size: 1.1rem;">--:--:--</div>
+    </div>
+    <div style="width: 1px; height: 30px; background: #333;"></div>
+    <div style="text-align: center;">
+        <div style="color: #888; font-size: 0.75rem; letter-spacing: 1px;">LONDON</div>
+        <div id="clock-uk" style="color: #E040FB; font-weight: bold; font-size: 1.1rem;">--:--:--</div>
+    </div>
+    <div style="width: 1px; height: 30px; background: #333;"></div>
+    <div style="text-align: center;">
+        <div style="color: #888; font-size: 0.75rem; letter-spacing: 1px;">TOKYO</div>
+        <div id="clock-jp" style="color: #00E676; font-weight: bold; font-size: 1.1rem;">--:--:--</div>
+    </div>
+</div>
+
+<script>
+function updateTime() {
+    const now = new Date();
+    
+    // Formatters
+    const fmtNY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const fmtUK = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const fmtJP = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Direct update attempt
+    try {
+        const doc = window.parent.document; // Try to reach parent if in iframe
+        const elNY = document.getElementById('clock-ny') || doc.getElementById('clock-ny');
+        const elUK = document.getElementById('clock-uk') || doc.getElementById('clock-uk');
+        const elJP = document.getElementById('clock-jp') || doc.getElementById('clock-jp');
+        
+        if(elNY) elNY.innerText = fmtNY.format(now);
+        if(elUK) elUK.innerText = fmtUK.format(now);
+        if(elJP) elJP.innerText = fmtJP.format(now);
+    } catch(e) {}
+}
+setInterval(updateTime, 1000);
+updateTime();
+</script>
+""", unsafe_allow_html=True)
+
 # --- SIDEBAR CONTROL ---
 st.sidebar.header("⚡ System Control")
 
@@ -132,7 +189,7 @@ stock_assets = {
 # --- SEARCH FEATURE ---
 search_mode = st.sidebar.radio("Asset Selection", 
                                ["Top List", "Search US/Global", "Search UK (LSE)", "Search Japan (TSE)"], 
-                               horizontal=False) # Changed to vertical for cleaner look with 4 options
+                               horizontal=False)
 
 ticker = "NVDA" # Default
 ticker_name = "NVIDIA"
@@ -148,7 +205,6 @@ elif search_mode == "Search US/Global":
     ticker_name = f"{custom_symbol} (Global)"
 
 elif search_mode == "Search UK (LSE)":
-    # User inputs e.g., 'RR' or 'BARC', we append .L
     uk_symbol = st.sidebar.text_input("Enter UK Ticker (e.g. RR, BARC)", value="RR").upper().strip()
     if not uk_symbol.endswith(".L"):
         ticker = f"{uk_symbol}.L"
@@ -157,7 +213,6 @@ elif search_mode == "Search UK (LSE)":
     ticker_name = f"{ticker} (LSE)"
 
 elif search_mode == "Search Japan (TSE)":
-    # User inputs e.g., '7203' (Toyota), we append .T
     jp_symbol = st.sidebar.text_input("Enter Japan Code (e.g. 7203, 9984)", value="7203").upper().strip()
     if not jp_symbol.endswith(".T"):
         ticker = f"{jp_symbol}.T"
@@ -201,10 +256,6 @@ def calculate_linreg_mom(series, length=20):
 # --- INSTITUTIONAL DATA FETCHING (1D & 1W) ---
 @st.cache_data(ttl=600)
 def get_institutional_trend(ticker):
-    """
-    Fetches Daily and Weekly data specifically for the 14th Indicator.
-    Returns the latest 50 EMA for Daily and Weekly.
-    """
     try:
         # Download 1 Year of Daily Data
         df_d = yf.download(ticker, period="2y", interval="1d", progress=False)
@@ -233,7 +284,7 @@ def calculate_engine(df, ticker):
     df['Apex_Upper'] = df['Apex_Base'] + (df['Apex_ATR'] * apex_mult)
     df['Apex_Lower'] = df['Apex_Base'] - (df['Apex_ATR'] * apex_mult)
     df['Apex_Trend'] = np.where(df['Close'] > df['Apex_Upper'], 1, 
-                       np.where(df['Close'] < df['Apex_Lower'], -1, np.nan))
+                        np.where(df['Close'] < df['Apex_Lower'], -1, np.nan))
     df['Apex_Trend'] = df['Apex_Trend'].ffill().fillna(0)
 
     # 2. LIQUIDITY ZONES (Pivots)
@@ -243,27 +294,46 @@ def calculate_engine(df, ticker):
     df['Supply_Zone'] = np.where(df['High'] == df['Pivot_High'], df['High'], np.nan)
     df['Demand_Zone'] = np.where(df['Low'] == df['Pivot_Low'], df['Low'], np.nan)
 
-    # 3. SQUEEZE MOMENTUM
-    df['Basis'] = df['Close'].rolling(20).mean()
-    df['Dev'] = df['Close'].rolling(20).std() * 2.0
-    df['UpperBB'] = df['Basis'] + df['Dev']
-    df['LowerBB'] = df['Basis'] - df['Dev']
-    df['ATR'] = calculate_atr(df, 20)
-    df['UpperKC'] = df['Basis'] + (df['ATR'] * 1.5)
-    df['LowerKC'] = df['Basis'] - (df['ATR'] * 1.5)
-    df['Squeeze_On'] = (df['LowerBB'] > df['LowerKC']) & (df['UpperBB'] < df['UpperKC'])
+    # 3. MONEY FLOW MATRIX (Superior Replacement for Squeeze)
+    # 3.1 Money Flow (RSI * Vol Ratio)
+    mfLen = 14
+    mfSmooth = 3
+    # RSI Calculation
+    delta_mf = df['Close'].diff()
+    gain_mf = delta_mf.where(delta_mf > 0, 0)
+    loss_mf = -delta_mf.where(delta_mf < 0, 0)
+    avg_gain_mf = gain_mf.ewm(alpha=1/mfLen, adjust=False).mean()
+    avg_loss_mf = loss_mf.ewm(alpha=1/mfLen, adjust=False).mean()
+    rs_mf = avg_gain_mf / avg_loss_mf
+    rsi_mf = 100 - (100 / (1 + rs_mf))
     
-    mean_hl = (df['High'].rolling(20).max() + df['Low'].rolling(20).min()) / 2
-    avg_val = (mean_hl + df['Basis']) / 2
-    delta = df['Close'] - avg_val
-    df['Sqz_Mom'] = calculate_linreg_mom(delta, 20)
+    rsiSource = rsi_mf - 50
+    mfVolume = df['Volume'] / df['Volume'].rolling(mfLen).mean()
+    df['Matrix_MF'] = (rsiSource * mfVolume).ewm(span=mfSmooth, adjust=False).mean()
+    
+    # 3.2 Dynamic Thresholds (Bollinger on Money Flow)
+    bbLen = 20
+    bbMult = 2.0
+    df['MF_BB_Mid'] = df['Matrix_MF'].rolling(bbLen).mean()
+    df['MF_BB_Std'] = df['Matrix_MF'].rolling(bbLen).std()
+    df['MF_BB_Up'] = df['MF_BB_Mid'] + (df['MF_BB_Std'] * bbMult)
+    df['MF_BB_Low'] = df['MF_BB_Mid'] - (df['MF_BB_Std'] * bbMult)
+    
+    # 3.3 Hyper Wave (TSI)
+    tsiLong = 25
+    tsiShort = 13
+    pc = df['Close'].diff()
+    # Double Smooth Function using EWM
+    ds_pc = pc.ewm(span=tsiLong, adjust=False).mean().ewm(span=tsiShort, adjust=False).mean()
+    ds_abs_pc = pc.abs().ewm(span=tsiLong, adjust=False).mean().ewm(span=tsiShort, adjust=False).mean()
+    df['Matrix_HyperWave'] = (100 * (ds_pc / ds_abs_pc)) / 2
 
     # 4. GANN HIGH LOW
     gann_len = 3
     df['Gann_High'] = df['High'].rolling(gann_len).mean()
     df['Gann_Low'] = df['Low'].rolling(gann_len).mean()
     df['Gann_Trend'] = np.where(df['Close'] > df['Gann_High'].shift(1), 1, 
-                       np.where(df['Close'] < df['Gann_Low'].shift(1), -1, np.nan))
+                        np.where(df['Close'] < df['Gann_Low'].shift(1), -1, np.nan))
     df['Gann_Trend'] = df['Gann_Trend'].ffill().fillna(0)
 
     # 5. VOLUME DELTA
@@ -362,7 +432,7 @@ def calculate_strategies(df):
     box_high = df['High'].rolling(20).max().shift(1)
     box_low = df['Low'].rolling(20).min().shift(1)
     df['Sig_ADX'] = np.where((df['Close'] > box_high) & (df['ADX'] < 25), 1,
-                     np.where((df['Close'] < box_low) & (df['ADX'] < 25), -1, 0))
+                      np.where((df['Close'] < box_low) & (df['ADX'] < 25), -1, 0))
 
     # 3. Bollinger Directed
     sma20 = df['Close'].rolling(20).mean()
@@ -485,7 +555,7 @@ if df is not None and not df.empty:
 
     # --- 3. TABS ---
     st.markdown("<br>", unsafe_allow_html=True)
-    tab_apex, tab_dpma, tab_macd, tab_cloud, tab_osc, tab_ai, tab_cast = st.tabs(["🌊 Apex Master", "💀 DarkPool Trends", "📊 Flows & Squeeze", "☁️ Ichimoku", "📈 Oscillators", "🤖 AI Analyst", "📡 Broadcast"])
+    tab_apex, tab_dpma, tab_matrix, tab_cloud, tab_osc, tab_ai, tab_cast = st.tabs(["🌊 Apex Master", "💀 DarkPool Trends", "🔋 Money Flow Matrix", "☁️ Ichimoku", "📈 Oscillators", "🤖 AI Analyst", "📡 Broadcast"])
 
     with tab_apex:
         fig = go.Figure()
@@ -510,15 +580,28 @@ if df is not None and not df.empty:
         fig_dp.update_layout(height=600, template="plotly_dark", title=f"DarkPool Institutional MAs ({interval})", xaxis_rangeslider_visible=False, paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
         st.plotly_chart(fig_dp, use_container_width=True)
 
-    with tab_macd:
-        fig_macd = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05)
-        colors_sqz = ['#00E676' if v > 0 else '#FF1744' for v in df['Sqz_Mom']]
-        fig_macd.add_trace(go.Bar(x=df.index, y=df['Sqz_Mom'], marker_color=colors_sqz, name="Squeeze Mom"), row=1, col=1)
-        fig_macd.add_trace(go.Bar(x=df.index, y=df['Hist'], marker_color='cyan', name="MACD Hist"), row=2, col=1)
+    with tab_matrix:
+        # REPLACED SQUEEZE WITH MONEY FLOW MATRIX
+        fig_matrix = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05)
+        
+        # 1. Money Flow Bars
+        mf_colors = ['#00E676' if v > 0 else '#FF1744' for v in df['Matrix_MF']]
+        fig_matrix.add_trace(go.Bar(x=df.index, y=df['Matrix_MF'], marker_color=mf_colors, name="Money Flow"), row=1, col=1)
+        # Hyper Wave Line Overlay
+        fig_matrix.add_trace(go.Scatter(x=df.index, y=df['Matrix_HyperWave'], line=dict(color='white', width=2), name="Hyper Wave"), row=1, col=1)
+        # Threshold Bands
+        fig_matrix.add_trace(go.Scatter(x=df.index, y=df['MF_BB_Up'], line=dict(color='gray', width=1, dash='dot'), name="Upper Band"), row=1, col=1)
+        fig_matrix.add_trace(go.Scatter(x=df.index, y=df['MF_BB_Low'], line=dict(color='gray', width=1, dash='dot'), name="Lower Band"), row=1, col=1)
+        
+        # 2. MACD (Standard)
+        fig_matrix.add_trace(go.Bar(x=df.index, y=df['Hist'], marker_color='cyan', name="MACD Hist"), row=2, col=1)
+        
+        # 3. Vol Delta
         vd_col = ['#00E676' if v > 0 else '#FF1744' for v in df['Vol_Delta']]
-        fig_macd.add_trace(go.Bar(x=df.index, y=df['Vol_Delta'], marker_color=vd_col, name="Vol Delta"), row=3, col=1)
-        fig_macd.update_layout(height=600, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
-        st.plotly_chart(fig_macd, use_container_width=True)
+        fig_matrix.add_trace(go.Bar(x=df.index, y=df['Vol_Delta'], marker_color=vd_col, name="Vol Delta"), row=3, col=1)
+        
+        fig_matrix.update_layout(height=600, template="plotly_dark", title="Money Flow Matrix & Cycles", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
+        st.plotly_chart(fig_matrix, use_container_width=True)
 
     with tab_cloud:
         fig_ichi = go.Figure()
@@ -547,6 +630,10 @@ if df is not None and not df.empty:
                 with st.spinner("Calculating Precise Levels..."):
                     client = OpenAI(api_key=api_key)
                     
+                    # AI Context variables regarding Matrix
+                    mf_last = last['Matrix_MF']
+                    hw_last = last['Matrix_HyperWave']
+                    
                     prompt = f"""
                     Act as a Senior Wall Street Quantitative Analyst. 
                     Analyze {ticker} ({interval}) at Price ${curr_price:.2f}.
@@ -557,7 +644,7 @@ if df is not None and not df.empty:
                     3. DarkPool MAs: {last['DP_Score']:.0f}/5 (Institutional Trend)
                     4. Institutional Trend (1D/1W): {inst_txt}
                     5. Liquidity: Supply @ ${last['Pivot_High']:.2f}, Demand @ ${last['Pivot_Low']:.2f}
-                    6. Momentum: {mom_txt}
+                    6. Money Flow Matrix: Flow={mf_last:.2f}, HyperWave={hw_last:.2f} (Pos=Bull, Neg=Bear)
                     
                     --- STRATEGY SIGNALS ---
                     - ADX Breakout: {'YES' if last['Sig_ADX'] != 0 else 'NO'}
