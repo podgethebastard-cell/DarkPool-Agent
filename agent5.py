@@ -58,7 +58,7 @@ st.markdown("""
 
 # Structure: "Label": ("Ticker", "Description")
 TICKERS = {
-    "15. MASTER CORE": {
+    "    MASTER CORE": {
         "S&P 500": ("^GSPC", "US Large Cap Benchmark"),
         "Nasdaq 100": ("^NDX", "Tech & Growth Core"),
         "DXY": ("DX-Y.NYB", "Global Liquidity Engine"),
@@ -73,7 +73,7 @@ TICKERS = {
         "Bitcoin": ("BTC-USD", "Digital Liquidity Sponge"),
         "Ethereum": ("ETH-USD", "Web3 / Tech Platform Risk")
     },
-    "1. Global Equity Indices": {
+    "   Global Equity Indices": {
         "S&P 500": ("^GSPC", "US Risk-On Core"),
         "Nasdaq 100": ("^NDX", "US Tech/Growth"),
         "Dow Jones": ("^DJI", "US Industrial/Value"),
@@ -90,13 +90,13 @@ TICKERS = {
         "VT (World)": ("VT", "Total World Stock Market"),
         "EEM (Emerging)": ("EEM", "Emerging Markets Risk")
     },
-    "2. Volatility & Fear": {
+    "   Volatility & Fear": {
         "VIX": ("^VIX", "S&P 500 Implied Volatility"),
         "VXN (Nasdaq)": ("^VXN", "Tech Sector Volatility"),
         "VXD (Dow)": ("^VXD", "Industrial Volatility"),
         "MOVE Proxy (ICE BofA)": ("MOVE.MX", "Bond Market Volatility (Stress)")
     },
-    "3. Interest Rates": {
+    "   Interest Rates": {
         "US 10Y": ("^TNX", "Benchmark Long Rate"),
         "US 02Y": ("^IRX", "Fed Policy Expectations"),
         "US 30Y": ("^TYX", "Long Duration / Inflation Exp"),
@@ -108,7 +108,7 @@ TICKERS = {
         "HYG": ("HYG", "High Yield Junk Bonds"),
         "TIP": ("TIP", "Inflation Protected Securities")
     },
-    "4. Currencies": {
+    "   Currencies": {
         "DXY": ("DX-Y.NYB", "US Dollar vs Major Peers"),
         "EUR/USD": ("EURUSD=X", "Euro Strength"),
         "GBP/USD": ("GBPUSD=X", "British Pound / Risk"),
@@ -118,7 +118,7 @@ TICKERS = {
         "USD/CHF": ("USDCHF=X", "Swiss Franc Safe Haven"),
         "USD/MXN": ("USDMXN=X", "Emerging Mkt Risk Gauge")
     },
-    "7. Commodities": {
+    "   Commodities": {
         "WTI": ("CL=F", "US Crude Oil"),
         "Brent": ("BZ=F", "Global Sea-Borne Oil"),
         "NatGas": ("NG=F", "US Heating/Industrial Energy"),
@@ -131,12 +131,12 @@ TICKERS = {
         "Corn": ("ZC=F", "Feed / Energy / Food"),
         "Soybeans": ("ZS=F", "Global Ag Export Demand")
     },
-    "8. Real Estate": {
+    "   Real Estate": {
         "VNQ (US REITs)": ("VNQ", "US Commercial Real Estate"),
         "REET (Global)": ("REET", "Global Property Market"),
         "XLRE": ("XLRE", "S&P 500 Real Estate Sector")
     },
-    "11. Crypto Macro": {
+    "    Crypto Macro": {
         "BTC.D (Proxy)": ("BTC-USD", "Bitcoin Dominance Pct"),
         "Total Cap (Proxy)": ("BTC-USD", "Total Crypto Market"), 
         "BTC": ("BTC-USD", "Digital Gold / Liquidity"),
@@ -146,7 +146,7 @@ TICKERS = {
 
 # Structure: "Label": ("Num_Ticker", "Den_Ticker", "Description")
 RATIO_GROUPS = {
-    "✅ CRYPTO RELATIVE STRENGTH": {
+    "   CRYPTO RELATIVE STRENGTH": {
         "BTC / ETH (Risk Appetite)": ("BTC-USD", "ETH-USD", "Higher = Risk Off / Bitcoin Safety"),
         "BTC / SPX (Adoption)": ("BTC-USD", "^GSPC", "Crypto vs TradFi Correlation"),
         "BTC / NDX (Tech Corr)": ("BTC-USD", "^NDX", "Bitcoin vs Tech Stocks"),
@@ -157,14 +157,14 @@ RATIO_GROUPS = {
         "BTC / VIX (Vol)": ("BTC-USD", "^VIX", "Price vs Fear Index"),
         "BTC / Gold (Hard Money)": ("BTC-USD", "GC=F", "Digital vs Analog Gold")
     },
-    "✅ CRYPTO DOMINANCE (Calculated)": {
+    "   CRYPTO DOMINANCE (Calculated)": {
         "TOTAL 3 / TOTAL": ("SPECIAL_TOTAL3", "SPECIAL_TOTAL", "Altseason Indicator (No BTC/ETH)"),
         "TOTAL 2 / TOTAL": ("SPECIAL_TOTAL2", "SPECIAL_TOTAL", "Alts + ETH Strength"),
         "BTC.D (BTC/Total)": ("BTC-USD", "SPECIAL_TOTAL", "Bitcoin Market Share"),
         "ETH.D (ETH/Total)": ("ETH-USD", "SPECIAL_TOTAL", "Ethereum Market Share"),
         "USDT.D (Tether/Total)": ("USDT-USD", "SPECIAL_TOTAL", "Stablecoin Flight to Safety")
     },
-    "✅ EQUITY RISK ROTATION": {
+    "   EQUITY RISK ROTATION": {
         "SPY / TLT (Risk On/Off)": ("SPY", "TLT", "Rising = Stocks Outperform Bonds"),
         "QQQ / IEF (Growth/Rates)": ("QQQ", "IEF", "Tech vs 7-10Y Treasuries"),
         "XLF / XLU (Fin/Util)": ("XLF", "XLU", "Cyclical vs Defensive"),
@@ -176,7 +176,7 @@ RATIO_GROUPS = {
         "KRE / XLF (Regional/Big)": ("KRE", "XLF", "Bank Stress Indicator"),
         "SMH / SPY (Semi Lead)": ("SMH", "SPY", "Semi-Conductors Leading Market")
     },
-    "✅ BOND & YIELD POWER": {
+    "   BOND & YIELD POWER": {
         "10Y / 2Y (Curve)": ("^TNX", "^IRX", "Recession Signal (Inversion)"),
         "10Y / 3M (Recession)": ("^TNX", "^IRX", "Deep Recession Signal"),
         "TLT / SHY (Duration)": ("TLT", "SHY", "Long Duration Demand"),
@@ -191,21 +191,21 @@ RATIO_GROUPS = {
         "USDJPY / DXY": ("USDJPY=X", "DX-Y.NYB", "Yen Weakness Isolation"),
         "EEM / DXY": ("EEM", "DX-Y.NYB", "Emerging Market Currency Health"),
     },
-    "✅ COMMODITIES & INFLATION": {
+    "   COMMODITIES & INFLATION": {
         "Gold / Silver": ("GC=F", "SI=F", "Mint Ratio (High = Deflation/Fear)"),
         "Copper / Gold": ("HG=F", "GC=F", "Growth vs Safety (Dr. Copper)"),
         "Oil / Gold": ("CL=F", "GC=F", "Energy Costs vs Monetary Base"),
         "Oil / Copper": ("CL=F", "HG=F", "Energy vs Industrial Demand"),
         "Brent / WTI": ("BZ=F", "CL=F", "Geopolitical Spread")
     },
-    "✅ EQUITIES vs REAL ASSETS": {
+    "   EQUITIES vs REAL ASSETS": {
         "SPX / Gold": ("^GSPC", "GC=F", "Stocks priced in Real Money"),
         "SPX / Copper": ("^GSPC", "HG=F", "Financial vs Real Economy"),
         "SPX / Oil": ("^GSPC", "CL=F", "Stocks vs Energy Costs"),
         "VNQ / SPY (RE/Stocks)": ("VNQ", "SPY", "Real Estate vs Broad Market"),
         "XLE / SPX (Energy/Mkt)": ("XLE", "^GSPC", "Old Economy vs New Economy")
     },
-    "✅ TRADE & MACRO STRESS": {
+    "   TRADE & MACRO STRESS": {
         "XLI / SPX (Ind/Mkt)": ("XLI", "^GSPC", "Industrial Strength"),
         "ITA / SPX (Defense/Mkt)": ("ITA", "^GSPC", "War Premium / Geopolitics"),
         "HYG / JNK (Quality Junk)": ("HYG", "JNK", "High Yield Dispersion")
