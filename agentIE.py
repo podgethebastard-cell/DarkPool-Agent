@@ -60,7 +60,7 @@ class NativeIndicators:
 
     @staticmethod
     def stdev(series, length):
-        # FIXED: Added missing stdev function to prevent AttributeError
+        # FIXED: Added missing stdev function
         return series.rolling(window=length).std()
 
     @staticmethod
@@ -116,7 +116,7 @@ def calculate_money_flow(df, length=14, smooth=3):
     rsi_source = ta.rsi(close, length=length) - 50
     mf_vol = volume / ta.sma(volume, length=length)
     money_flow = ta.ema(rsi_source * mf_vol, length=smooth)
-    return money_flow
+    return money_flow # Returns Series
 
 def calculate_apex_trend(df, len_main=55, mult=1.5):
     close = df['Close']
@@ -163,7 +163,7 @@ def calculate_evwm(df, length=21, vol_smooth=5, mult=2.0):
     final_force = np.sqrt(smooth_rvol)
     evwm = elasticity * final_force
     band_basis = ta.sma(evwm, length*2)
-    band_dev = ta.stdev(evwm, length*2) * mult 
+    band_dev = ta.stdev(evwm, length*2) * mult
     df['EVWM'] = evwm
     df['EVWM_Upper'] = band_basis + band_dev
     df['EVWM_Lower'] = band_basis - band_dev
@@ -329,8 +329,9 @@ def get_macro_data():
         return 0, None
 
 # ==========================================
-# 5. DATA FETCHING (FIXED KEYERROR & MAPPING)
+# 5. DATA FETCHING (CLEAN TICKERS)
 # ==========================================
+# User requested standard tickers only in the list. 
 TICKERS = [
     "SGLN", "SSLN", "SPLT", "SPDM", 
     "SILG", "GJGB", "ESGP", "URJP", 
@@ -339,20 +340,15 @@ TICKERS = [
 
 @st.cache_data(ttl=900)
 def get_ticker_data(symbol):
+    # Quietly handle London Stock Exchange suffix for yfinance
     yf_symbol = f"{symbol}.L"
     
-    # Use auto_adjust=False to get standard OHLC, avoiding some multi-index issues
     df = yf.download(yf_symbol, period="1y", interval="1d", auto_adjust=False)
     
-    # FIXED: Robust MultiIndex Flattener
+    # Robust Multi-Index Flattener (Fixes KeyError)
     if isinstance(df.columns, pd.MultiIndex):
-        # If columns are (Price, Ticker), we want level 0 (Price)
-        # If columns are (Ticker, Price), we want level 1 (Price)
-        
-        # Check if 'Close' is in level 0
         if 'Close' in df.columns.get_level_values(0):
             df.columns = df.columns.get_level_values(0)
-        # Check if 'Close' is in level 1
         elif df.columns.nlevels > 1 and 'Close' in df.columns.get_level_values(1):
             df.columns = df.columns.get_level_values(1)
             
@@ -383,9 +379,8 @@ tabs = st.tabs(TICKERS)
 
 for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
     with tab:
-        # FIXED: MAPPING LOGIC FOR TRADINGVIEW
-        # We manually attach "LSE:" because "SGLN" defaults to US OTC (Surgline)
-        # But we do NOT show this prefix in the Tab Title (user request)
+        # TRADINGVIEW: Explicitly use "LSE:" prefix so user gets Gold/Silver
+        # instead of "Surgline" (US OTC), but keep UI list clean as requested.
         tv_sym = f"LSE:{ticker_name}"
         unique_tv_id = f"tv_chart_{i}"
         
@@ -405,15 +400,16 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
         if df.empty:
             st.warning(f"No data available for {ticker_name}.")
         else:
-            # Squeeze single-column DFs to Series (Safety Check)
+            # Squeeze
             for col in ['Open','High','Low','Close','Volume']:
                 if col in df.columns and isinstance(df[col], pd.DataFrame): 
                     df[col] = df[col].squeeze()
 
-            # INDICATORS
+            # INDICATORS (Fixed Crash)
             df = calculate_apex_trend(df)
             df = calculate_evwm(df)
-            df = calculate_money_flow(df)
+            # FIXED: Assign to column instead of overwriting dataframe
+            df['Money_Flow'] = calculate_money_flow(df)
             df = calculate_darkpool_macd(df)  
             df = calculate_my_adx(df)         
             df = calculate_rsi_divergence(df)
