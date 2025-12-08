@@ -25,6 +25,8 @@ st.markdown("""
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
     .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #0e1117; border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
     .stTabs [aria-selected="true"] { background-color: #262730; border-bottom: 2px solid #00E676; }
+    /* Big Metric Styling */
+    [data-testid="stMetricValue"] { font-size: 2rem !important; color: #00E676 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -60,7 +62,6 @@ class NativeIndicators:
 
     @staticmethod
     def stdev(series, length):
-        # FIXED: Added missing stdev function
         return series.rolling(window=length).std()
 
     @staticmethod
@@ -116,7 +117,7 @@ def calculate_money_flow(df, length=14, smooth=3):
     rsi_source = ta.rsi(close, length=length) - 50
     mf_vol = volume / ta.sma(volume, length=length)
     money_flow = ta.ema(rsi_source * mf_vol, length=smooth)
-    return money_flow # Returns Series
+    return money_flow
 
 def calculate_apex_trend(df, len_main=55, mult=1.5):
     close = df['Close']
@@ -163,7 +164,7 @@ def calculate_evwm(df, length=21, vol_smooth=5, mult=2.0):
     final_force = np.sqrt(smooth_rvol)
     evwm = elasticity * final_force
     band_basis = ta.sma(evwm, length*2)
-    band_dev = ta.stdev(evwm, length*2) * mult
+    band_dev = ta.stdev(evwm, length*2) * mult 
     df['EVWM'] = evwm
     df['EVWM_Upper'] = band_basis + band_dev
     df['EVWM_Lower'] = band_basis - band_dev
@@ -331,7 +332,6 @@ def get_macro_data():
 # ==========================================
 # 5. DATA FETCHING (CLEAN TICKERS)
 # ==========================================
-# User requested standard tickers only in the list. 
 TICKERS = [
     "SGLN", "SSLN", "SPLT", "SPDM", 
     "SILG", "GJGB", "ESGP", "URJP", 
@@ -340,12 +340,9 @@ TICKERS = [
 
 @st.cache_data(ttl=900)
 def get_ticker_data(symbol):
-    # Quietly handle London Stock Exchange suffix for yfinance
     yf_symbol = f"{symbol}.L"
-    
     df = yf.download(yf_symbol, period="1y", interval="1d", auto_adjust=False)
     
-    # Robust Multi-Index Flattener (Fixes KeyError)
     if isinstance(df.columns, pd.MultiIndex):
         if 'Close' in df.columns.get_level_values(0):
             df.columns = df.columns.get_level_values(0)
@@ -359,8 +356,29 @@ def get_ticker_data(symbol):
 # ==========================================
 with st.sidebar:
     st.header("Settings")
-    api_key = st.text_input("OpenAI API Key", type="password")
-    if api_key: st.session_state['openai_api_key'] = api_key
+    
+    # ----------------------------------------
+    # FIXED: Secrets Authentication Logic
+    # ----------------------------------------
+    secret_key = None
+    
+    # 1. Try to load from Streamlit Secrets
+    try:
+        if "OPENAI_API_KEY" in st.secrets:
+            secret_key = st.secrets["OPENAI_API_KEY"]
+            st.success("Authentication Successful (Secrets)", icon="✅")
+    except FileNotFoundError:
+        pass # No secrets file found locally, ignore
+        
+    # 2. Logic: If secret found, use it. Else, ask user.
+    if secret_key:
+        st.session_state['openai_api_key'] = secret_key
+    else:
+        # Fallback to manual input
+        user_key = st.text_input("OpenAI API Key (Manual)", type="password")
+        if user_key:
+            st.session_state['openai_api_key'] = user_key
+            
     st.markdown("---")
     st.info("System Status: Online")
 
@@ -379,37 +397,59 @@ tabs = st.tabs(TICKERS)
 
 for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
     with tab:
-        # TRADINGVIEW: Explicitly use "LSE:" prefix so user gets Gold/Silver
-        # instead of "Surgline" (US OTC), but keep UI list clean as requested.
-        tv_sym = f"LSE:{ticker_name}"
-        unique_tv_id = f"tv_chart_{i}"
-        
-        components.html(f"""
-        <div class="tradingview-widget-container">
-          <div id="{unique_tv_id}"></div>
-          <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-          <script type="text/javascript">
-          new TradingView.widget({{"width": "100%", "height": 450, "symbol": "{tv_sym}", "interval": "D", "theme": "dark", "container_id": "{unique_tv_id}"}});
-          </script>
-        </div>
-        """, height=450)
-
-        # FETCH & CALCULATE
+        # 1. FETCH DATA FIRST (Needed for metrics)
         df = get_ticker_data(ticker_name)
-        
-        if df.empty:
-            st.warning(f"No data available for {ticker_name}.")
-        else:
+
+        # 2. SHOW METRICS IF DATA EXISTS
+        if not df.empty:
             # Squeeze
             for col in ['Open','High','Low','Close','Volume']:
                 if col in df.columns and isinstance(df[col], pd.DataFrame): 
                     df[col] = df[col].squeeze()
+            
+            # Get latest values
+            current_price = df['Close'].iloc[-1]
+            prev_price = df['Close'].iloc[-2]
+            delta = current_price - prev_price
+            pct_change = (delta / prev_price) * 100
+            
+            # Display Big Metric
+            st.metric(label=f"{ticker_name} Live Price", value=f"{current_price:.2f}", delta=f"{delta:.2f} ({pct_change:.2f}%)")
+        else:
+            st.warning("Fetching price data...")
 
-            # INDICATORS (Fixed Crash)
+        # 3. MANUAL TRADINGVIEW SEARCH
+        col_search, col_chart = st.columns([1, 4])
+        
+        with col_search:
+            st.markdown("##### 🔎 Widget Settings")
+            st.info("If the chart is wrong, type the exact symbol below (e.g. `OANDA:XAUUSD` or `BINANCE:BTCUSDT`)")
+            # Default to LSE:{Ticker}
+            default_tv = f"LSE:{ticker_name}"
+            user_tv_symbol = st.text_input("Symbol", value=default_tv, key=f"tv_input_{i}")
+            
+        with col_chart:
+            unique_tv_id = f"tv_chart_{i}"
+            components.html(f"""
+            <div class="tradingview-widget-container">
+              <div id="{unique_tv_id}"></div>
+              <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+              <script type="text/javascript">
+              new TradingView.widget({{"width": "100%", "height": 450, "symbol": "{user_tv_symbol}", "interval": "D", "theme": "dark", "container_id": "{unique_tv_id}"}});
+              </script>
+            </div>
+            """, height=450)
+
+        st.markdown("---")
+
+        # 4. PLOTLY ANALYSIS
+        if df.empty:
+            st.warning(f"No data available for {ticker_name}.")
+        else:
+            # INDICATORS
             df = calculate_apex_trend(df)
             df = calculate_evwm(df)
-            # FIXED: Assign to column instead of overwriting dataframe
-            df['Money_Flow'] = calculate_money_flow(df)
+            df['Money_Flow'] = calculate_money_flow(df) 
             df = calculate_darkpool_macd(df)  
             df = calculate_my_adx(df)         
             df = calculate_rsi_divergence(df)
