@@ -8,7 +8,7 @@ import time
 # ==========================================
 # 1. TITAN CONFIGURATION & PAGE SETUP
 # ==========================================
-st.set_page_config(page_title="Titan Scalper [1m/5m]", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="Titan Scalper [Kraken]", layout="wide", page_icon="⚡")
 
 # Custom CSS for that "Dark/Titan" aesthetic
 st.markdown("""
@@ -20,7 +20,9 @@ st.markdown("""
 
 # Sidebar Controls
 st.sidebar.header("⚡ Titan Scalper Config")
-symbol = st.sidebar.text_input("Symbol (Binance format)", value="BTC/USDT")
+
+# CHANGED: Defaulted to BTC/USD for Kraken
+symbol = st.sidebar.text_input("Symbol (Kraken format)", value="BTC/USD") 
 timeframe = st.sidebar.selectbox("Timeframe", options=['1m', '5m'], index=1)
 limit = st.sidebar.slider("Candles to Load", min_value=100, max_value=1000, value=300)
 
@@ -37,10 +39,7 @@ use_hma_filter = st.sidebar.checkbox("Use HMA Filter?", value=False)
 
 def calculate_hma(series, length):
     """Calculates Hull Moving Average"""
-    wma1 = series.rolling(window=int(length/2)).mean() # Simplified WMA for speed in Python, real HMA uses weighted
-    wma2 = series.rolling(window=length).mean()
-    # True HMA requires weighted moving averages, implementing a close approximation for speed
-    # Or using pandas_ta if installed. Here is a raw numpy weighted implementation:
+    # Simplified weighted moving average for speed
     def weighted_avg(w):
         def _compute(x):
             return np.dot(x, w) / w.sum()
@@ -59,7 +58,6 @@ def calculate_hma(series, length):
 
 def run_titan_engine(df):
     # 1. Volatility Scaling (ATR)
-    # Pine: ta.atr(100) -> we use TR then rolling mean
     df['tr'] = np.maximum(df['high'] - df['low'], 
                           np.maximum(abs(df['high'] - df['close'].shift(1)), 
                                      abs(df['low'] - df['close'].shift(1))))
@@ -69,8 +67,7 @@ def run_titan_engine(df):
     # 2. HMA Calculation
     df['hma'] = calculate_hma(df['close'], hma_len)
 
-    # 3. Staircase Trend Logic (Iterative Loop required for state persistence)
-    # Pre-calculate rolling min/max for speed
+    # 3. Staircase Trend Logic
     df['lowest_low'] = df['low'].rolling(window=amplitude).min()
     df['highest_high'] = df['high'].rolling(window=amplitude).max()
 
@@ -79,27 +76,24 @@ def run_titan_engine(df):
     max_low = np.zeros(len(df))
     min_high = np.zeros(len(df))
     
-    # Initialize variables for the loop
     curr_trend = 0 # 0 = Bull, 1 = Bear
     curr_max_low = 0.0
     curr_min_high = 0.0
     curr_trend_stop = 0.0
     
-    # Iterate through DataFrame (starting from index amplitude to avoid NaNs)
     for i in range(amplitude, len(df)):
         close = df['close'].iloc[i]
         low_price = df['lowest_low'].iloc[i]
         high_price = df['highest_high'].iloc[i]
         safe_dev = df['dev'].iloc[i] if not np.isnan(df['dev'].iloc[i]) else 0
         
-        # Pine: max_low := math.max(low_price, nz(max_low[1]))
         curr_max_low = max(low_price, curr_max_low)
         curr_min_high = min(high_price, curr_min_high) if curr_min_high != 0 else high_price
 
         # State Logic
         if curr_trend == 0: # Bullish
             if close < curr_max_low:
-                curr_trend = 1 # Flip to Bear
+                curr_trend = 1 
                 curr_min_high = high_price
             else:
                 curr_min_high = min(curr_min_high, high_price)
@@ -107,7 +101,7 @@ def run_titan_engine(df):
                     curr_max_low = low_price
         else: # Bearish
             if close > curr_min_high:
-                curr_trend = 0 # Flip to Bull
+                curr_trend = 0 
                 curr_max_low = low_price
             else:
                 curr_max_low = max(curr_max_low, low_price)
@@ -128,7 +122,6 @@ def run_titan_engine(df):
                 down_line = high_price - safe_dev
             curr_trend_stop = down_line
 
-        # Store values
         trend[i] = curr_trend
         trend_stop[i] = curr_trend_stop
         max_low[i] = curr_max_low
@@ -140,7 +133,6 @@ def run_titan_engine(df):
     df['is_bear'] = df['trend'] == 1
     
     # 4. Signals
-    # valid_buy = is_bull and not is_bull[1] and filter_ok
     df['bull_flip'] = (df['is_bull']) & (~df['is_bull'].shift(1))
     df['bear_flip'] = (df['is_bear']) & (~df['is_bear'].shift(1))
     
@@ -153,12 +145,13 @@ def run_titan_engine(df):
     return df
 
 # ==========================================
-# 3. DATA FETCHING
+# 3. DATA FETCHING (KRAKEN)
 # ==========================================
-@st.cache_data(ttl=60) # Cache for 1 min to prevent API spam
+@st.cache_data(ttl=60) 
 def get_data(symbol, timeframe, limit):
     try:
-        exchange = ccxt.binance()
+        # CHANGED: Using Kraken to bypass US Server blocks on Streamlit Cloud
+        exchange = ccxt.kraken()
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -176,9 +169,7 @@ df = get_data(symbol, timeframe, limit)
 if not df.empty:
     df = run_titan_engine(df)
     
-    # Get latest values
     last_row = df.iloc[-1]
-    prev_row = df.iloc[-2]
     
     # --- HEADER METRICS ---
     col1, col2, col3, col4 = st.columns(4)
@@ -207,8 +198,6 @@ if not df.empty:
     ))
 
     # Titan Stop Line
-    # We color the line based on trend. Plotly requires separate traces for colors or a complex line map.
-    # Simple approach: Plot single line, color gray, or plot two lines filtered by trend.
     bull_line = df.copy()
     bull_line.loc[bull_line['trend'] == 1, 'trend_stop'] = None
     
