@@ -4,12 +4,14 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import openai
+import streamlit.components.v1 as components
+import urllib.parse
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & STYLING
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Macro Titan Outlook",
+    page_title="Macro Insighter Pro",
     page_icon="🦅",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -22,7 +24,7 @@ st.markdown("""
     div[data-testid="stMetric"] {
         background-color: #1E1E1E;
         border: 1px solid #333;
-        padding: 15px;
+        padding: 10px;
         border-radius: 8px;
         transition: transform 0.2s;
     }
@@ -39,11 +41,17 @@ st.markdown("""
         margin-bottom: 10px;
         font-style: italic;
     }
-    /* Chart Container */
-    div[data-testid="stPlotlyChart"] {
-        background-color: #0E1117;
-        border-radius: 8px;
-        margin-bottom: 20px;
+    /* Button Styling (Small Chart Button) */
+    div[data-testid="stButton"] button {
+        width: 100%;
+        border-radius: 5px;
+        border: 1px solid #444;
+        background-color: #262730;
+        color: white;
+    }
+    div[data-testid="stButton"] button:hover {
+        border-color: #00A6ED;
+        color: #00A6ED;
     }
     /* Radio Button Styling */
     .stRadio > label {
@@ -58,7 +66,7 @@ st.markdown("""
 
 # Structure: "Label": ("Ticker", "Description")
 TICKERS = {
-    "    MASTER CORE": {
+    "✅ MASTER CORE": {
         "S&P 500": ("^GSPC", "US Large Cap Benchmark"),
         "Nasdaq 100": ("^NDX", "Tech & Growth Core"),
         "DXY": ("DX-Y.NYB", "Global Liquidity Engine"),
@@ -73,7 +81,7 @@ TICKERS = {
         "Bitcoin": ("BTC-USD", "Digital Liquidity Sponge"),
         "Ethereum": ("ETH-USD", "Web3 / Tech Platform Risk")
     },
-    "   Global Equity Indices": {
+    "✅ Global Equity Indices": {
         "S&P 500": ("^GSPC", "US Risk-On Core"),
         "Nasdaq 100": ("^NDX", "US Tech/Growth"),
         "Dow Jones": ("^DJI", "US Industrial/Value"),
@@ -90,13 +98,13 @@ TICKERS = {
         "VT (World)": ("VT", "Total World Stock Market"),
         "EEM (Emerging)": ("EEM", "Emerging Markets Risk")
     },
-    "   Volatility & Fear": {
+    "✅ Volatility & Fear": {
         "VIX": ("^VIX", "S&P 500 Implied Volatility"),
         "VXN (Nasdaq)": ("^VXN", "Tech Sector Volatility"),
         "VXD (Dow)": ("^VXD", "Industrial Volatility"),
         "MOVE Proxy (ICE BofA)": ("MOVE.MX", "Bond Market Volatility (Stress)")
     },
-    "   Interest Rates": {
+    "✅ Interest Rates": {
         "US 10Y": ("^TNX", "Benchmark Long Rate"),
         "US 02Y": ("^IRX", "Fed Policy Expectations"),
         "US 30Y": ("^TYX", "Long Duration / Inflation Exp"),
@@ -108,7 +116,7 @@ TICKERS = {
         "HYG": ("HYG", "High Yield Junk Bonds"),
         "TIP": ("TIP", "Inflation Protected Securities")
     },
-    "   Currencies": {
+    "✅ Currencies": {
         "DXY": ("DX-Y.NYB", "US Dollar vs Major Peers"),
         "EUR/USD": ("EURUSD=X", "Euro Strength"),
         "GBP/USD": ("GBPUSD=X", "British Pound / Risk"),
@@ -118,7 +126,7 @@ TICKERS = {
         "USD/CHF": ("USDCHF=X", "Swiss Franc Safe Haven"),
         "USD/MXN": ("USDMXN=X", "Emerging Mkt Risk Gauge")
     },
-    "   Commodities": {
+    "✅ Commodities": {
         "WTI": ("CL=F", "US Crude Oil"),
         "Brent": ("BZ=F", "Global Sea-Borne Oil"),
         "NatGas": ("NG=F", "US Heating/Industrial Energy"),
@@ -131,12 +139,12 @@ TICKERS = {
         "Corn": ("ZC=F", "Feed / Energy / Food"),
         "Soybeans": ("ZS=F", "Global Ag Export Demand")
     },
-    "   Real Estate": {
+    "✅ Real Estate": {
         "VNQ (US REITs)": ("VNQ", "US Commercial Real Estate"),
         "REET (Global)": ("REET", "Global Property Market"),
         "XLRE": ("XLRE", "S&P 500 Real Estate Sector")
     },
-    "    Crypto Macro": {
+    "✅ Crypto Macro": {
         "BTC.D (Proxy)": ("BTC-USD", "Bitcoin Dominance Pct"),
         "Total Cap (Proxy)": ("BTC-USD", "Total Crypto Market"), 
         "BTC": ("BTC-USD", "Digital Gold / Liquidity"),
@@ -146,7 +154,7 @@ TICKERS = {
 
 # Structure: "Label": ("Num_Ticker", "Den_Ticker", "Description")
 RATIO_GROUPS = {
-    "   CRYPTO RELATIVE STRENGTH": {
+    "✅ CRYPTO RELATIVE STRENGTH": {
         "BTC / ETH (Risk Appetite)": ("BTC-USD", "ETH-USD", "Higher = Risk Off / Bitcoin Safety"),
         "BTC / SPX (Adoption)": ("BTC-USD", "^GSPC", "Crypto vs TradFi Correlation"),
         "BTC / NDX (Tech Corr)": ("BTC-USD", "^NDX", "Bitcoin vs Tech Stocks"),
@@ -157,14 +165,14 @@ RATIO_GROUPS = {
         "BTC / VIX (Vol)": ("BTC-USD", "^VIX", "Price vs Fear Index"),
         "BTC / Gold (Hard Money)": ("BTC-USD", "GC=F", "Digital vs Analog Gold")
     },
-    "   CRYPTO DOMINANCE (Calculated)": {
+    "✅ CRYPTO DOMINANCE (Calculated)": {
         "TOTAL 3 / TOTAL": ("SPECIAL_TOTAL3", "SPECIAL_TOTAL", "Altseason Indicator (No BTC/ETH)"),
         "TOTAL 2 / TOTAL": ("SPECIAL_TOTAL2", "SPECIAL_TOTAL", "Alts + ETH Strength"),
         "BTC.D (BTC/Total)": ("BTC-USD", "SPECIAL_TOTAL", "Bitcoin Market Share"),
         "ETH.D (ETH/Total)": ("ETH-USD", "SPECIAL_TOTAL", "Ethereum Market Share"),
         "USDT.D (Tether/Total)": ("USDT-USD", "SPECIAL_TOTAL", "Stablecoin Flight to Safety")
     },
-    "   EQUITY RISK ROTATION": {
+    "✅ EQUITY RISK ROTATION": {
         "SPY / TLT (Risk On/Off)": ("SPY", "TLT", "Rising = Stocks Outperform Bonds"),
         "QQQ / IEF (Growth/Rates)": ("QQQ", "IEF", "Tech vs 7-10Y Treasuries"),
         "XLF / XLU (Fin/Util)": ("XLF", "XLU", "Cyclical vs Defensive"),
@@ -176,7 +184,7 @@ RATIO_GROUPS = {
         "KRE / XLF (Regional/Big)": ("KRE", "XLF", "Bank Stress Indicator"),
         "SMH / SPY (Semi Lead)": ("SMH", "SPY", "Semi-Conductors Leading Market")
     },
-    "   BOND & YIELD POWER": {
+    "✅ BOND & YIELD POWER": {
         "10Y / 2Y (Curve)": ("^TNX", "^IRX", "Recession Signal (Inversion)"),
         "10Y / 3M (Recession)": ("^TNX", "^IRX", "Deep Recession Signal"),
         "TLT / SHY (Duration)": ("TLT", "SHY", "Long Duration Demand"),
@@ -184,28 +192,28 @@ RATIO_GROUPS = {
         "IEF / SHY": ("IEF", "SHY", "Medium vs Short Duration"),
         "MOVE / VIX (Stress)": ("MOVE.MX", "^VIX", "Bond Vol vs Equity Vol")
     },
-    "   DOLLAR & LIQUIDITY": {
+    "✅ DOLLAR & LIQUIDITY": {
         "DXY / Gold": ("DX-Y.NYB", "GC=F", "Fiat Strength vs Hard Money"),
         "DXY / Oil": ("DX-Y.NYB", "CL=F", "Dollar Purchasing Power (Energy)"),
         "EURUSD / DXY": ("EURUSD=X", "DX-Y.NYB", "Euro Relative Strength"),
         "USDJPY / DXY": ("USDJPY=X", "DX-Y.NYB", "Yen Weakness Isolation"),
         "EEM / DXY": ("EEM", "DX-Y.NYB", "Emerging Market Currency Health"),
     },
-    "   COMMODITIES & INFLATION": {
+    "✅ COMMODITIES & INFLATION": {
         "Gold / Silver": ("GC=F", "SI=F", "Mint Ratio (High = Deflation/Fear)"),
         "Copper / Gold": ("HG=F", "GC=F", "Growth vs Safety (Dr. Copper)"),
         "Oil / Gold": ("CL=F", "GC=F", "Energy Costs vs Monetary Base"),
         "Oil / Copper": ("CL=F", "HG=F", "Energy vs Industrial Demand"),
         "Brent / WTI": ("BZ=F", "CL=F", "Geopolitical Spread")
     },
-    "   EQUITIES vs REAL ASSETS": {
+    "✅ EQUITIES vs REAL ASSETS": {
         "SPX / Gold": ("^GSPC", "GC=F", "Stocks priced in Real Money"),
         "SPX / Copper": ("^GSPC", "HG=F", "Financial vs Real Economy"),
         "SPX / Oil": ("^GSPC", "CL=F", "Stocks vs Energy Costs"),
         "VNQ / SPY (RE/Stocks)": ("VNQ", "SPY", "Real Estate vs Broad Market"),
         "XLE / SPX (Energy/Mkt)": ("XLE", "^GSPC", "Old Economy vs New Economy")
     },
-    "   TRADE & MACRO STRESS": {
+    "✅ TRADE & MACRO STRESS": {
         "XLI / SPX (Ind/Mkt)": ("XLI", "^GSPC", "Industrial Strength"),
         "ITA / SPX (Defense/Mkt)": ("ITA", "^GSPC", "War Premium / Geopolitics"),
         "HYG / JNK (Quality Junk)": ("HYG", "JNK", "High Yield Dispersion")
@@ -279,6 +287,72 @@ def color_to_rgb(hex_color):
     hex_color = hex_color.lstrip('#')
     return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
+def convert_to_tradingview(yahoo_ticker):
+    """
+    Converts Yahoo Finance tickers to TradingView format for the widget.
+    This is a heuristic mapping.
+    """
+    t = yahoo_ticker
+    
+    # 1. Indices
+    if t == "^GSPC": return "SP:SPX"
+    if t == "^NDX": return "NASDAQ:NDX"
+    if t == "^DJI": return "DJ:DJI"
+    if t == "^RUT": return "RUSSELL:RUT"
+    if t == "^VIX": return "CBOE:VIX"
+    if t == "^TNX": return "US10Y"
+    if t == "^IRX": return "US02Y"
+    if t == "DX-Y.NYB": return "DXY"
+    if t == "^GDAXI": return "XETR:DAX"
+    if t == "^FTSE": return "TVC:UK100"
+    if t == "^N225": return "TVC:NI225"
+    if t == "^HSI": return "HSI"
+    
+    # 2. Crypto
+    if "-USD" in t: return f"COINBASE:{t.replace('-USD', 'USD')}"
+    
+    # 3. Futures/Commodities
+    if t == "CL=F": return "NYMEX:CL1!"
+    if t == "GC=F": return "COMEX:GC1!"
+    if t == "SI=F": return "COMEX:SI1!"
+    if t == "HG=F": return "COMEX:HG1!"
+    if t == "BZ=F": return "ICE:BRN1!"
+    
+    # 4. Currencies
+    if "=X" in t: return t.replace("=X", "")
+    
+    # 5. Default (ETFs usually match, e.g., SPY, TLT)
+    return t
+
+def render_tradingview_widget(ticker):
+    """Renders the HTML for TradingView widget."""
+    tv_ticker = convert_to_tradingview(ticker)
+    
+    html_code = f"""
+    <div class="tradingview-widget-container" style="height:400px;width:100%">
+      <div id="tradingview_12345" style="height:calc(100% - 32px);width:100%"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget(
+      {{
+        "autosize": true,
+        "symbol": "{tv_ticker}",
+        "interval": "D",
+        "timezone": "Etc/UTC",
+        "theme": "dark",
+        "style": "1",
+        "locale": "en",
+        "enable_publishing": false,
+        "hide_side_toolbar": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_12345"
+      }}
+      );
+      </script>
+    </div>
+    """
+    return html_code
+
 def generate_ai_analysis(summary_text):
     try:
         api_key = st.secrets.get("OPENAI_API_KEY")
@@ -304,6 +378,10 @@ def generate_ai_analysis(summary_text):
 # 4. MAIN APP LOGIC
 # -----------------------------------------------------------------------------
 
+# Initialize Session State for TV Widget
+if 'tv_ticker' not in st.session_state:
+    st.session_state['tv_ticker'] = "BTC-USD"
+
 # Sidebar
 with st.sidebar:
     st.title("🦅 Macro Insighter")
@@ -318,6 +396,24 @@ with st.sidebar:
         selected_category = st.radio("Ratio Strategy", list(RATIO_GROUPS.keys()))
         
     st.markdown("---")
+    
+    # BROADCAST SECTION
+    st.subheader("📢 Broadcast Signal")
+    broadcast_msg = st.text_area("Message Preview", "Market update...")
+    
+    # Broadcast Buttons (Intent Links)
+    col_x, col_tg = st.columns(2)
+    
+    # Encode message for URL
+    encoded_msg = urllib.parse.quote(broadcast_msg)
+    
+    with col_x:
+        st.link_button("X (Post)", f"https://twitter.com/intent/tweet?text={encoded_msg}")
+    with col_tg:
+        st.link_button("Telegram", f"https://t.me/share/url?url=&text={encoded_msg}")
+
+    st.markdown("---")
+    
     if st.button("Generate AI Report"):
         st.session_state['run_ai'] = True
     if st.button("Refresh Data"):
@@ -327,14 +423,13 @@ with st.sidebar:
 all_needed_tickers = set()
 for cat in TICKERS.values():
     for t_data in cat.values():
-        all_needed_tickers.add(t_data[0]) # Extract ticker symbol (index 0)
+        all_needed_tickers.add(t_data[0]) 
 
 for cat in RATIO_GROUPS.values():
     for t_data in cat.values():
-        all_needed_tickers.add(t_data[0]) # Numerator
-        all_needed_tickers.add(t_data[1]) # Denominator
+        all_needed_tickers.add(t_data[0]) 
+        all_needed_tickers.add(t_data[1]) 
 
-# Add Crypto Components for synthetic indices
 crypto_components = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", "USDT-USD", "USDC-USD"]
 all_needed_tickers.update(crypto_components)
 
@@ -343,11 +438,21 @@ with st.spinner("Fetching Global Market Data..."):
     market_data = get_market_data(list(all_needed_tickers))
     syn_total, syn_total2, syn_total3 = get_crypto_total_proxy(market_data)
 
-# HEADER
+# -----------------------------------------------------------------------------
+# TRADINGVIEW WIDGET (TOP SECTION)
+# -----------------------------------------------------------------------------
 st.title(f"{selected_category}")
+
+# Display the widget for the currently selected session ticker
+st.markdown("### 📈 Live Chart")
+with st.expander("Show/Hide Live Chart", expanded=True):
+    components.html(render_tradingview_widget(st.session_state['tv_ticker']), height=420)
+
 st.markdown("---")
 
-# RENDER CONTENT
+# -----------------------------------------------------------------------------
+# RENDER CONTENT GRID
+# -----------------------------------------------------------------------------
 data_summary_for_ai = []
 
 if mode == "Standard Tickers":
@@ -366,8 +471,13 @@ if mode == "Standard Tickers":
                 with cols[col_idx]:
                     color = "#00FF00" if pct >= 0 else "#FF4B4B"
                     st.metric(label, f"{val:,.2f}", f"{pct:.2f}%")
-                    st.caption(desc) # Display the description
+                    st.caption(desc)
                     st.plotly_chart(plot_sparkline(series, color), use_container_width=True, config={'displayModeBar': False}, key=f"std_{i}")
+                    
+                    # 🚀 INTERACTIVE BUTTON TO UPDATE TV WIDGET
+                    if st.button(f"📊 Chart {label}", key=f"btn_{i}"):
+                        st.session_state['tv_ticker'] = ticker
+                        st.rerun() # Force reload to update widget
         else:
             with cols[col_idx]:
                 st.warning(f"{label}: No Data")
@@ -407,8 +517,13 @@ else: # RATIO MODE
                             color = "#00FF00" if pct > 0 else "#FF4B4B"
                         
                         st.metric(label, f"{val:.4f}", f"{pct:.2f}%")
-                        st.caption(desc) # Display the description
+                        st.caption(desc)
                         st.plotly_chart(plot_sparkline(ratio_series, color), use_container_width=True, config={'displayModeBar': False}, key=f"ratio_{i}")
+                        
+                        # Note: For ratios, we chart the Numerator asset by default
+                        if st.button(f"📊 Chart {num_t}", key=f"btn_r_{i}"):
+                            st.session_state['tv_ticker'] = num_t
+                            st.rerun()
         else:
             with cols[col_idx]:
                 st.info(f"{label}: Insufficient Data")
