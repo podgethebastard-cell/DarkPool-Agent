@@ -123,9 +123,8 @@ function updateTime() {
     const fmtUK = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const fmtJP = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    // Direct update attempt
     try {
-        const doc = window.parent.document; // Try to reach parent if in iframe
+        const doc = window.parent.document;
         const elNY = document.getElementById('clock-ny') || doc.getElementById('clock-ny');
         const elUK = document.getElementById('clock-uk') || doc.getElementById('clock-uk');
         const elJP = document.getElementById('clock-jp') || doc.getElementById('clock-jp');
@@ -295,10 +294,8 @@ def calculate_engine(df, ticker):
     df['Demand_Zone'] = np.where(df['Low'] == df['Pivot_Low'], df['Low'], np.nan)
 
     # 3. MONEY FLOW MATRIX (Superior Replacement for Squeeze)
-    # 3.1 Money Flow (RSI * Vol Ratio)
     mfLen = 14
     mfSmooth = 3
-    # RSI Calculation
     delta_mf = df['Close'].diff()
     gain_mf = delta_mf.where(delta_mf > 0, 0)
     loss_mf = -delta_mf.where(delta_mf < 0, 0)
@@ -311,7 +308,7 @@ def calculate_engine(df, ticker):
     mfVolume = df['Volume'] / df['Volume'].rolling(mfLen).mean()
     df['Matrix_MF'] = (rsiSource * mfVolume).ewm(span=mfSmooth, adjust=False).mean()
     
-    # 3.2 Dynamic Thresholds (Bollinger on Money Flow)
+    # Dynamic Thresholds
     bbLen = 20
     bbMult = 2.0
     df['MF_BB_Mid'] = df['Matrix_MF'].rolling(bbLen).mean()
@@ -319,11 +316,10 @@ def calculate_engine(df, ticker):
     df['MF_BB_Up'] = df['MF_BB_Mid'] + (df['MF_BB_Std'] * bbMult)
     df['MF_BB_Low'] = df['MF_BB_Mid'] - (df['MF_BB_Std'] * bbMult)
     
-    # 3.3 Hyper Wave (TSI)
+    # Hyper Wave (TSI)
     tsiLong = 25
     tsiShort = 13
     pc = df['Close'].diff()
-    # Double Smooth Function using EWM
     ds_pc = pc.ewm(span=tsiLong, adjust=False).mean().ewm(span=tsiShort, adjust=False).mean()
     ds_abs_pc = pc.abs().ewm(span=tsiLong, adjust=False).mean().ewm(span=tsiShort, adjust=False).mean()
     df['Matrix_HyperWave'] = (100 * (ds_pc / ds_abs_pc)) / 2
@@ -380,7 +376,7 @@ def calculate_engine(df, ticker):
     df['Signal'] = df['MACD'].ewm(span=9).mean()
     df['Hist'] = (df['MACD'] - df['Signal']) * (df['Volume'] / df['Volume'].rolling(20).mean())
 
-    # 11. STOCHASTIC RSI (FIXED)
+    # 11. STOCHASTIC RSI
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -389,16 +385,13 @@ def calculate_engine(df, ticker):
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # Stoch Logic
     min_rsi = df['RSI'].rolling(14).min()
     max_rsi = df['RSI'].rolling(14).max()
     stoch = (df['RSI'] - min_rsi) / (max_rsi - min_rsi)
     df['Stoch_K'] = stoch.rolling(3).mean() * 100
     df['Stoch_D'] = df['Stoch_K'].rolling(3).mean()
     
-    # 12. ATR (Already calc for ADX/Apex)
-    
-    # 13. DARKPOOL MOVING AVERAGES (5-Layer System)
+    # 13. DARKPOOL MAs
     df['DP_MA10'] = df['Close'].ewm(span=10).mean()
     df['DP_MA20'] = df['Close'].ewm(span=20).mean()
     df['DP_MA50'] = df['Close'].ewm(span=50).mean()
@@ -414,11 +407,19 @@ def calculate_engine(df, ticker):
     )
 
     # 14. INSTITUTIONAL TREND (1D & 1W EMA Cloud)
-    # We fetch this once and apply it to the whole column for the AI to read
     ema_d, ema_w = get_institutional_trend(ticker)
     df['Inst_EMA_D'] = ema_d
     df['Inst_EMA_W'] = ema_w
-    df['Inst_Trend'] = np.where(ema_d > ema_w, 1, -1) # 1 = Bullish, -1 = Bearish
+    df['Inst_Trend'] = np.where(ema_d > ema_w, 1, -1)
+
+    # 15. NEW ADDITIONS: RVOL & VWAP (Anchored)
+    # RVOL: Volume / 20-period SMA Volume
+    df['RVOL'] = df['Volume'] / df['Volume'].rolling(20).mean()
+    
+    # VWAP (Cumulative/Anchored to the visible dataset)
+    # Typically calculated as Cumulative (Price * Vol) / Cumulative Vol
+    tp = (df['High'] + df['Low'] + df['Close']) / 3
+    df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
 
     return df
 
@@ -428,7 +429,7 @@ def calculate_strategies(df):
     mom = df['Close'] - df['Close'].shift(12)
     df['Sig_Mom'] = np.where((mom > 0) & (mom.shift(1) > 0), 1, np.where((mom < 0) & (mom.shift(1) < 0), -1, 0))
     
-    # 2. ADX Breakout (Close > 20 High + ADX < 25)
+    # 2. ADX Breakout
     box_high = df['High'].rolling(20).max().shift(1)
     box_low = df['Low'].rolling(20).min().shift(1)
     df['Sig_ADX'] = np.where((df['Close'] > box_high) & (df['ADX'] < 25), 1,
@@ -437,12 +438,9 @@ def calculate_strategies(df):
     # 3. Bollinger Directed
     sma20 = df['Close'].rolling(20).mean()
     std20 = df['Close'].rolling(20).std()
-    # Close < Lower (Dip Buy attempt) or Close > Upper (Breakout/Overbought)
-    # Simple crossover logic:
     df['Sig_BB'] = np.where(df['Close'] < (sma20 - 2*std20), 1, np.where(df['Close'] > (sma20 + 2*std20), -1, 0))
 
     # 4. RSI Strategy (30/70)
-    # Uses the fixed RSI from calculate_engine
     df['Sig_RSI'] = np.where(df['RSI'] < 30, 1, np.where(df['RSI'] > 70, -1, 0))
     
     return df
@@ -454,7 +452,6 @@ def get_data(ticker, interval):
     d_int = "1h" if interval == "4h" else interval
     df = yf.download(ticker, period=period, interval=d_int, progress=False)
     
-    # Handle MultiIndex (Fix for new yfinance)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
         
@@ -469,20 +466,15 @@ def get_data(ticker, interval):
 # ==========================================
 st.markdown(f'<div class="titan-header">🏢 TITAN TERMINAL: {ticker_name}</div>', unsafe_allow_html=True)
 
-# 1. TRADINGVIEW WIDGET (Enhanced for Global)
+# 1. TRADINGVIEW WIDGET
 tv_int_map = {"15m": "15", "1h": "60", "4h": "240", "1d": "D"}
-
-# Smart TradingView Symbol Mapper
 if search_mode == "Search UK (LSE)":
-    # yf uses "RR.L", TV uses "LSE:RR"
     clean_sym = ticker.replace(".L", "")
     tv_sym = f"LSE:{clean_sym}"
 elif search_mode == "Search Japan (TSE)":
-    # yf uses "7203.T", TV uses "TSE:7203"
     clean_sym = ticker.replace(".T", "")
     tv_sym = f"TSE:{clean_sym}"
 else:
-    # Default behavior for US/Global
     tv_sym = ticker
 
 components.html(
@@ -518,10 +510,14 @@ if df is not None and not df.empty:
     target_short = curr_price - (3 * atr_val)
     cloud_top = last['Apex_Upper']
     cloud_bot = last['Apex_Lower']
+    
+    # New Variables
+    rvol_val = last['RVOL']
+    vwap_val = last['VWAP']
 
     # --- 2. SIGNAL HUD ---
     st.markdown("### 🧬 Market DNA")
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     
     def card(label, value, condition):
         color_class = "bull" if condition == 1 else "bear" if condition == -1 else "neu"
@@ -537,7 +533,7 @@ if df is not None and not df.empty:
     mom_txt = "POSITIVE" if mom_cond == 1 else "NEGATIVE"
     c2.markdown(card("Momentum", mom_txt, mom_cond), unsafe_allow_html=True)
     
-    # Institutional Trend (Indicator 14)
+    # Institutional Trend
     inst_cond = last['Inst_Trend']
     inst_txt = "MACRO BULL" if inst_cond == 1 else "MACRO BEAR"
     c3.markdown(card("Inst. Trend (1D/1W)", inst_txt, inst_cond), unsafe_allow_html=True)
@@ -553,6 +549,11 @@ if df is not None and not df.empty:
     bb_txt = "DIP BUY" if bb_cond == 1 else "RIP SELL" if bb_cond == -1 else "WAIT"
     c5.markdown(card("Bollinger", bb_txt, bb_cond), unsafe_allow_html=True)
 
+    # RVOL (NEW 6th Card)
+    rvol_cond = 1 if rvol_val > 1.5 else -1 if rvol_val < 0.75 else 0
+    rvol_txt = f"{rvol_val:.2f}x (HIGH)" if rvol_cond == 1 else f"{rvol_val:.2f}x (LOW)" if rvol_cond == -1 else f"{rvol_val:.2f}x"
+    c6.markdown(card("Rel. Volume", rvol_txt, rvol_cond), unsafe_allow_html=True)
+
     # --- 3. TABS ---
     st.markdown("<br>", unsafe_allow_html=True)
     tab_apex, tab_dpma, tab_matrix, tab_cloud, tab_osc, tab_ai, tab_cast = st.tabs(["🌊 Apex Master", "💀 DarkPool Trends", "🔋 Money Flow Matrix", "☁️ Ichimoku", "📈 Oscillators", "🤖 AI Analyst", "📡 Broadcast"])
@@ -563,13 +564,16 @@ if df is not None and not df.empty:
         fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Upper'], line=dict(width=0), showlegend=False))
         fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Lower'], fill='tonexty', fillcolor='rgba(0, 230, 118, 0.15)' if last['Apex_Trend'] == 1 else 'rgba(255, 23, 68, 0.15)', line=dict(width=0), name="Apex Cloud"))
         fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Base'], line=dict(color='#00E676' if last['Apex_Trend'] == 1 else '#FF1744', width=2), name="Apex Base"))
+        
+        # VWAP TRACE (NEW)
+        fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='#FFD700', width=2, dash='dash'), name="VWAP (Anchor)"))
+
         # Gann Trace
         fig.add_trace(go.Scatter(x=df.index, y=df['Gann_High'], line=dict(color='yellow', width=1, dash='dot'), name="Gann Level"))
-        fig.update_layout(height=600, template="plotly_dark", title=f"Apex Trend & Liquidity ({interval})", xaxis_rangeslider_visible=False, paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
+        fig.update_layout(height=600, template="plotly_dark", title=f"Apex Trend, VWAP & Liquidity ({interval})", xaxis_rangeslider_visible=False, paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
         st.plotly_chart(fig, use_container_width=True)
 
     with tab_dpma:
-        # DarkPool MAs (#13)
         fig_dp = go.Figure()
         fig_dp.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"))
         fig_dp.add_trace(go.Scatter(x=df.index, y=df['DP_MA10'], line=dict(color='#00E5FF', width=1), name="EMA 10 (Fast)"))
@@ -581,19 +585,16 @@ if df is not None and not df.empty:
         st.plotly_chart(fig_dp, use_container_width=True)
 
     with tab_matrix:
-        # REPLACED SQUEEZE WITH MONEY FLOW MATRIX
         fig_matrix = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.05)
         
         # 1. Money Flow Bars
         mf_colors = ['#00E676' if v > 0 else '#FF1744' for v in df['Matrix_MF']]
         fig_matrix.add_trace(go.Bar(x=df.index, y=df['Matrix_MF'], marker_color=mf_colors, name="Money Flow"), row=1, col=1)
-        # Hyper Wave Line Overlay
         fig_matrix.add_trace(go.Scatter(x=df.index, y=df['Matrix_HyperWave'], line=dict(color='white', width=2), name="Hyper Wave"), row=1, col=1)
-        # Threshold Bands
         fig_matrix.add_trace(go.Scatter(x=df.index, y=df['MF_BB_Up'], line=dict(color='gray', width=1, dash='dot'), name="Upper Band"), row=1, col=1)
         fig_matrix.add_trace(go.Scatter(x=df.index, y=df['MF_BB_Low'], line=dict(color='gray', width=1, dash='dot'), name="Lower Band"), row=1, col=1)
         
-        # 2. MACD (Standard)
+        # 2. MACD
         fig_matrix.add_trace(go.Bar(x=df.index, y=df['Hist'], marker_color='cyan', name="MACD Hist"), row=2, col=1)
         
         # 3. Vol Delta
@@ -630,7 +631,6 @@ if df is not None and not df.empty:
                 with st.spinner("Calculating Precise Levels..."):
                     client = OpenAI(api_key=api_key)
                     
-                    # AI Context variables regarding Matrix
                     mf_last = last['Matrix_MF']
                     hw_last = last['Matrix_HyperWave']
                     
@@ -641,30 +641,30 @@ if df is not None and not df.empty:
                     --- TECHNICAL DATA ---
                     1. ATR (Volatility): ${atr_val:.2f}
                     2. Apex Trend: {apex_txt} (Cloud Top: ${cloud_top:.2f}, Bot: ${cloud_bot:.2f})
-                    3. DarkPool MAs: {last['DP_Score']:.0f}/5 (Institutional Trend)
-                    4. Institutional Trend (1D/1W): {inst_txt}
-                    5. Liquidity: Supply @ ${last['Pivot_High']:.2f}, Demand @ ${last['Pivot_Low']:.2f}
-                    6. Money Flow Matrix: Flow={mf_last:.2f}, HyperWave={hw_last:.2f} (Pos=Bull, Neg=Bear)
+                    3. VWAP (Anchored): ${vwap_val:.2f}
+                    4. Relative Volume (RVOL): {rvol_val:.2f}x (Normal=1.0)
+                    5. Institutional Trend (1D/1W): {inst_txt}
+                    6. Money Flow Matrix: Flow={mf_last:.2f}, HyperWave={hw_last:.2f}
                     
                     --- STRATEGY SIGNALS ---
                     - ADX Breakout: {'YES' if last['Sig_ADX'] != 0 else 'NO'}
                     - Bollinger: {bb_txt}
                     - RSI: {last['Sig_RSI']}
                     
-                    --- CALCULATED LEVELS (Use these if valid) ---
+                    --- CALCULATED LEVELS ---
                     - LONG SETUP: Stop < ${stop_long:.2f}, Target > ${target_long:.2f}
                     - SHORT SETUP: Stop > ${stop_short:.2f}, Target < ${target_short:.2f}
                     
                     --- MISSION ---
                     Synthesize a TRADE PLAN in strictly formatted MARKDOWN.
-                    Do not print messy raw numbers. Round to 2 decimal places.
-                    Focus on Equity/Tech specific dynamics (Sector strength, correlations).
+                    Critically analyze RVOL. High RVOL validates moves; Low RVOL suggests traps.
+                    Compare Price vs VWAP (Above = Bull Control).
                     
                     OUTPUT FORMAT:
                     ### 📋 Trade Plan: Equity Alpha Report
                     
                     **1. VERDICT:** LONG / SHORT / WAIT (Confidence Level)
-                    * **Rationale:** (1 sentence confluence summary)
+                    * **Rationale:** (RVOL + Trend + Matrix confluence)
                     
                     **2. ENTRY ZONE**
                     * **Price Range:** (e.g. $150.00 - $151.50)
@@ -672,7 +672,7 @@ if df is not None and not df.empty:
                     
                     **3. STOP LOSS**
                     * **Hard Stop:** (Specific Price)
-                    * **Rationale:** (e.g. Below Apex Cloud)
+                    * **Rationale:** (e.g. Below VWAP/Apex Cloud)
                     
                     **4. TAKE PROFIT**
                     * **Conservative:** (Price)
@@ -698,9 +698,10 @@ if df is not None and not df.empty:
 🛑 STOP LOSS: ${stop_loss:,.2f}
 🎯 TARGET: ${take_profit:,.2f}
 🌊 Trend: {apex_txt}
-📊 Momentum: {mom_txt}
+📊 RVOL: {rvol_val:.2f}x
 💰 Money Flow: {mfi_txt}
-💀 Institutional Trend: {inst_txt}
+💀 Inst. Trend: {inst_txt}
+⚖️ VWAP: ${vwap_val:.2f}
 ⚠️ *Not financial advice. DYOR.*
 #Stocks #Tech #Titan #{ticker}
         """
