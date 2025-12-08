@@ -60,7 +60,7 @@ class NativeIndicators:
 
     @staticmethod
     def stdev(series, length):
-        """Added missing STDEV function to fix crash"""
+        # FIXED: Added missing stdev function to prevent AttributeError
         return series.rolling(window=length).std()
 
     @staticmethod
@@ -163,7 +163,7 @@ def calculate_evwm(df, length=21, vol_smooth=5, mult=2.0):
     final_force = np.sqrt(smooth_rvol)
     evwm = elasticity * final_force
     band_basis = ta.sma(evwm, length*2)
-    band_dev = ta.stdev(evwm, length*2) * mult # This line caused the crash, fixed now
+    band_dev = ta.stdev(evwm, length*2) * mult 
     df['EVWM'] = evwm
     df['EVWM_Upper'] = band_basis + band_dev
     df['EVWM_Lower'] = band_basis - band_dev
@@ -329,10 +329,8 @@ def get_macro_data():
         return 0, None
 
 # ==========================================
-# 5. DATA FETCHING (UPDATED FOR YOUR TICKERS)
+# 5. DATA FETCHING (FIXED KEYERROR & MAPPING)
 # ==========================================
-# We use simple names for keys (tabs) and values (TradingView)
-# We append .L only inside the download function for Yahoo to work
 TICKERS = [
     "SGLN", "SSLN", "SPLT", "SPDM", 
     "SILG", "GJGB", "ESGP", "URJP", 
@@ -341,14 +339,23 @@ TICKERS = [
 
 @st.cache_data(ttl=900)
 def get_ticker_data(symbol):
-    # Yahoo requires .L for London stocks, but user input is just "SGLN"
-    # We silently add it here for data fetching only
-    yf_symbol = f"{symbol}.L" 
+    yf_symbol = f"{symbol}.L"
     
-    df = yf.download(yf_symbol, period="1y", interval="1d")
+    # Use auto_adjust=False to get standard OHLC, avoiding some multi-index issues
+    df = yf.download(yf_symbol, period="1y", interval="1d", auto_adjust=False)
+    
+    # FIXED: Robust MultiIndex Flattener
     if isinstance(df.columns, pd.MultiIndex):
-        try: df.columns = df.columns.droplevel(1)
-        except: pass
+        # If columns are (Price, Ticker), we want level 0 (Price)
+        # If columns are (Ticker, Price), we want level 1 (Price)
+        
+        # Check if 'Close' is in level 0
+        if 'Close' in df.columns.get_level_values(0):
+            df.columns = df.columns.get_level_values(0)
+        # Check if 'Close' is in level 1
+        elif df.columns.nlevels > 1 and 'Close' in df.columns.get_level_values(1):
+            df.columns = df.columns.get_level_values(1)
+            
     return df
 
 # ==========================================
@@ -374,10 +381,12 @@ st.markdown(f"""
 # --- CREATE TABS FOR EACH TICKER ---
 tabs = st.tabs(TICKERS)
 
-# Iterate through tabs
 for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
     with tab:
-        # TRADINGVIEW (CLEAN TICKER: SGLN)
+        # FIXED: MAPPING LOGIC FOR TRADINGVIEW
+        # We manually attach "LSE:" because "SGLN" defaults to US OTC (Surgline)
+        # But we do NOT show this prefix in the Tab Title (user request)
+        tv_sym = f"LSE:{ticker_name}"
         unique_tv_id = f"tv_chart_{i}"
         
         components.html(f"""
@@ -385,7 +394,7 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
           <div id="{unique_tv_id}"></div>
           <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
           <script type="text/javascript">
-          new TradingView.widget({{"width": "100%", "height": 450, "symbol": "{ticker_name}", "interval": "D", "theme": "dark", "container_id": "{unique_tv_id}"}});
+          new TradingView.widget({{"width": "100%", "height": 450, "symbol": "{tv_sym}", "interval": "D", "theme": "dark", "container_id": "{unique_tv_id}"}});
           </script>
         </div>
         """, height=450)
@@ -396,11 +405,12 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
         if df.empty:
             st.warning(f"No data available for {ticker_name}.")
         else:
-            # Squeeze
+            # Squeeze single-column DFs to Series (Safety Check)
             for col in ['Open','High','Low','Close','Volume']:
-                if isinstance(df[col], pd.DataFrame): df[col] = df[col].squeeze()
+                if col in df.columns and isinstance(df[col], pd.DataFrame): 
+                    df[col] = df[col].squeeze()
 
-            # INDICATORS (Apex & Liquidity included)
+            # INDICATORS
             df = calculate_apex_trend(df)
             df = calculate_evwm(df)
             df = calculate_money_flow(df)
@@ -409,7 +419,7 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
             df = calculate_rsi_divergence(df)
             df = calculate_gann_hilo(df)      
             df = calculate_advanced_volume(df)
-            res, sup = calculate_sr(df) # Liquidity Levels
+            res, sup = calculate_sr(df) 
 
             # PLOTLY (7 Rows)
             fig = make_subplots(rows=7, cols=1, shared_xaxes=True, vertical_spacing=0.03,
@@ -418,14 +428,11 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
                                                 "DarkPool MACD", "ADX Optimized", "RSI & Divergence", 
                                                 "Adv. Volume (CMF)"))
 
-            # R1: Price + Apex Cloud + Gann + Liquidity S/R
+            # R1: Price
             fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-            # Apex Cloud
             fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Upper'], line=dict(width=0), showlegend=False), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Lower'], fill='tonexty', fillcolor='rgba(0, 230, 118, 0.1)', line=dict(width=0), name="Apex Cloud"), row=1, col=1)
-            # Gann
             fig.add_trace(go.Scatter(x=df.index, y=df['Gann_Activator'], line=dict(color='orange', width=2), name="Gann Activator"), row=1, col=1)
-            # Liquidity / S/R Lines
             for r in res: fig.add_hline(y=r, line=dict(color='red', dash='dash'), row=1, col=1)
             for s in sup: fig.add_hline(y=s, line=dict(color='green', dash='dash'), row=1, col=1)
             
