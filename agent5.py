@@ -184,7 +184,7 @@ RATIO_GROUPS = {
         "IEF / SHY": ("IEF", "SHY", "Medium vs Short Duration"),
         "MOVE / VIX (Stress)": ("MOVE.MX", "^VIX", "Bond Vol vs Equity Vol")
     },
-    "✅ DOLLAR & LIQUIDITY": {
+    "   DOLLAR & LIQUIDITY": {
         "DXY / Gold": ("DX-Y.NYB", "GC=F", "Fiat Strength vs Hard Money"),
         "DXY / Oil": ("DX-Y.NYB", "CL=F", "Dollar Purchasing Power (Energy)"),
         "EURUSD / DXY": ("EURUSD=X", "DX-Y.NYB", "Euro Relative Strength"),
