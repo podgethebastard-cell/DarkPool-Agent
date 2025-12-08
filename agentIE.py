@@ -14,7 +14,7 @@ st.set_page_config(
     page_title="Macro Insighter - DarkPool",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed" # Changed to collapsed since sidebar is now minimal
 )
 
 # Custom CSS to match the "Macro Insighter" Dashboard Look
@@ -272,30 +272,16 @@ def get_ticker_data(symbol):
 # ==========================================
 # 4. SIDEBAR & SETTINGS
 # ==========================================
+# REMOVED REDUNDANT VISUALS FROM SIDEBAR
 with st.sidebar:
-    st.header("Macro Insighter")
-    st.caption("Institutional Dashboard")
+    st.header("Settings")
     
-    st.markdown("### Select View Mode")
-    view_mode = st.radio("Mode", ["Standard Tickers", "Institutional Ratios"], label_visibility="collapsed")
-    
-    st.markdown("### Asset Class")
-    st.checkbox("MASTER CORE", value=True)
-    st.checkbox("Global Equity Indices", value=True)
-    st.checkbox("Volatility & Fear", value=True)
-    st.checkbox("Commodities", value=True)
-    
-    st.markdown("---")
-    
-    # API Key Handling
+    # API Key Handling (Retained as it is functional)
     secret_key = st.secrets.get("OPENAI_API_KEY", None)
     if secret_key: st.session_state['openai_api_key'] = secret_key
     else:
         user_key = st.text_input("OpenAI Key", type="password")
         if user_key: st.session_state['openai_api_key'] = user_key
-        
-    st.markdown("### Broadcast Signal")
-    st.text_area("Message Preview", "Market update...", height=100)
 
 # ==========================================
 # 5. STATE MANAGEMENT
