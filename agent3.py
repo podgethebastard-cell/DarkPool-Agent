@@ -9,6 +9,7 @@ import streamlit.components.v1 as components
 from scipy.stats import linregress
 import requests
 import urllib.parse
+from datetime import datetime, time
 
 # ==========================================
 # 1. PREMIUM UI CONFIGURATION
@@ -55,6 +56,30 @@ st.markdown("""
     .bull { color: #00E676 !important; text-shadow: 0 0 10px rgba(0, 230, 118, 0.4); }
     .bear { color: #FF1744 !important; text-shadow: 0 0 10px rgba(255, 23, 68, 0.4); }
     .neu  { color: #B0BEC5 !important; }
+    
+    /* Divergence Alert Style */
+    .div-alert {
+        background-color: rgba(255, 82, 82, 0.1);
+        border: 1px solid #FF5252;
+        color: #FF5252;
+        padding: 10px;
+        border-radius: 8px;
+        text-align: center;
+        font-weight: bold;
+        margin-bottom: 10px;
+        animation: pulse 2s infinite;
+    }
+    .div-alert-bull {
+        background-color: rgba(0, 230, 118, 0.1);
+        border: 1px solid #00E676;
+        color: #00E676;
+    }
+    
+    @keyframes pulse {
+        0% { opacity: 0.8; }
+        50% { opacity: 1; }
+        100% { opacity: 0.8; }
+    }
     
     /* Header Glow */
     .titan-header {
@@ -324,6 +349,20 @@ def calculate_engine(df, ticker):
     ds_abs_pc = pc.abs().ewm(span=tsiLong, adjust=False).mean().ewm(span=tsiShort, adjust=False).mean()
     df['Matrix_HyperWave'] = (100 * (ds_pc / ds_abs_pc)) / 2
 
+    # --- DIVERGENCE DETECTION LOGIC (ADDED) ---
+    # We look for simple divergences over a 5-bar window
+    df['Div_Signal'] = 0 # 0=None, 1=Bull Div, -1=Bear Div
+    
+    # Bearish Div: Price Higher High, Matrix MF Lower High
+    price_hh = (df['High'] > df['High'].shift(1)) & (df['High'] > df['High'].shift(2))
+    mf_lh = (df['Matrix_MF'] < df['Matrix_MF'].shift(1)) & (df['Matrix_MF'] < df['Matrix_MF'].shift(2))
+    df.loc[price_hh & mf_lh & (df['Matrix_MF'] > 0), 'Div_Signal'] = -1
+    
+    # Bullish Div: Price Lower Low, Matrix MF Higher Low
+    price_ll = (df['Low'] < df['Low'].shift(1)) & (df['Low'] < df['Low'].shift(2))
+    mf_hl = (df['Matrix_MF'] > df['Matrix_MF'].shift(1)) & (df['Matrix_MF'] > df['Matrix_MF'].shift(2))
+    df.loc[price_ll & mf_hl & (df['Matrix_MF'] < 0), 'Div_Signal'] = 1
+    
     # 4. GANN HIGH LOW
     gann_len = 3
     df['Gann_High'] = df['High'].rolling(gann_len).mean()
@@ -412,12 +451,8 @@ def calculate_engine(df, ticker):
     df['Inst_EMA_W'] = ema_w
     df['Inst_Trend'] = np.where(ema_d > ema_w, 1, -1)
 
-    # 15. NEW ADDITIONS: RVOL & VWAP (Anchored)
-    # RVOL: Volume / 20-period SMA Volume
+    # 15. RVOL & VWAP (Anchored)
     df['RVOL'] = df['Volume'] / df['Volume'].rolling(20).mean()
-    
-    # VWAP (Cumulative/Anchored to the visible dataset)
-    # Typically calculated as Cumulative (Price * Vol) / Cumulative Vol
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
 
@@ -514,9 +549,17 @@ if df is not None and not df.empty:
     # New Variables
     rvol_val = last['RVOL']
     vwap_val = last['VWAP']
+    div_sig = last['Div_Signal'] # 1 or -1
 
     # --- 2. SIGNAL HUD ---
     st.markdown("### 🧬 Market DNA")
+    
+    # --- DIVERGENCE ALERT (ADDED) ---
+    if div_sig == -1:
+        st.markdown(f'<div class="div-alert">⚠️ BEARISH DIVERGENCE DETECTED (Price High / Flow Low)</div>', unsafe_allow_html=True)
+    elif div_sig == 1:
+        st.markdown(f'<div class="div-alert div-alert-bull">⚠️ BULLISH DIVERGENCE DETECTED (Price Low / Flow High)</div>', unsafe_allow_html=True)
+        
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     
     def card(label, value, condition):
@@ -549,7 +592,7 @@ if df is not None and not df.empty:
     bb_txt = "DIP BUY" if bb_cond == 1 else "RIP SELL" if bb_cond == -1 else "WAIT"
     c5.markdown(card("Bollinger", bb_txt, bb_cond), unsafe_allow_html=True)
 
-    # RVOL (NEW 6th Card)
+    # RVOL (Card 6)
     rvol_cond = 1 if rvol_val > 1.5 else -1 if rvol_val < 0.75 else 0
     rvol_txt = f"{rvol_val:.2f}x (HIGH)" if rvol_cond == 1 else f"{rvol_val:.2f}x (LOW)" if rvol_cond == -1 else f"{rvol_val:.2f}x"
     c6.markdown(card("Rel. Volume", rvol_txt, rvol_cond), unsafe_allow_html=True)
@@ -560,12 +603,43 @@ if df is not None and not df.empty:
 
     with tab_apex:
         fig = go.Figure()
+        
+        # --- SESSION HIGHLIGHT (ADDED) ---
+        # Highlight overlap between London (08:00-16:30) and New York (13:30-20:00) UTC
+        # Overlap is roughly 13:30 to 16:30 UTC
+        # We find indices in the dataframe that match this time (if intraday)
+        if interval in ["15m", "1h"]:
+            # Create a shape for every day in the range
+            # Note: This is computationally expensive if not vectorized, so we do a simple shading for "today" or recent
+            # Simplification: Just highlight the overlap hours on the visible chart
+            # We filter the dataframe for hours between 13 and 16
+            
+            # Using Plotly VRects for specific hours
+            # We iterate through unique dates in the index
+            unique_dates = df.index.normalize().unique()
+            for date in unique_dates[-5:]: # Last 5 days to keep it fast
+                start_overlap = date + pd.Timedelta(hours=13, minutes=30)
+                end_overlap = date + pd.Timedelta(hours=16, minutes=30)
+                
+                fig.add_vrect(
+                    x0=start_overlap, 
+                    x1=end_overlap, 
+                    fillcolor="purple", 
+                    opacity=0.1, 
+                    layer="below", 
+                    line_width=0,
+                    annotation_text="Session Overlap", 
+                    annotation_position="top left",
+                    annotation_font_size=10,
+                    annotation_font_color="rgba(255, 255, 255, 0.3)"
+                )
+
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"))
         fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Upper'], line=dict(width=0), showlegend=False))
         fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Lower'], fill='tonexty', fillcolor='rgba(0, 230, 118, 0.15)' if last['Apex_Trend'] == 1 else 'rgba(255, 23, 68, 0.15)', line=dict(width=0), name="Apex Cloud"))
         fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Base'], line=dict(color='#00E676' if last['Apex_Trend'] == 1 else '#FF1744', width=2), name="Apex Base"))
         
-        # VWAP TRACE (NEW)
+        # VWAP TRACE
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='#FFD700', width=2, dash='dash'), name="VWAP (Anchor)"))
 
         # Gann Trace
@@ -634,6 +708,11 @@ if df is not None and not df.empty:
                     mf_last = last['Matrix_MF']
                     hw_last = last['Matrix_HyperWave']
                     
+                    # Update Prompt with Divergence
+                    div_txt = "NONE"
+                    if div_sig == 1: div_txt = "BULLISH (Price Low, Flow High)"
+                    if div_sig == -1: div_txt = "BEARISH (Price High, Flow Low)"
+                    
                     prompt = f"""
                     Act as a Senior Wall Street Quantitative Analyst. 
                     Analyze {ticker} ({interval}) at Price ${curr_price:.2f}.
@@ -645,6 +724,7 @@ if df is not None and not df.empty:
                     4. Relative Volume (RVOL): {rvol_val:.2f}x (Normal=1.0)
                     5. Institutional Trend (1D/1W): {inst_txt}
                     6. Money Flow Matrix: Flow={mf_last:.2f}, HyperWave={hw_last:.2f}
+                    7. Divergence Signal: {div_txt}
                     
                     --- STRATEGY SIGNALS ---
                     - ADX Breakout: {'YES' if last['Sig_ADX'] != 0 else 'NO'}
@@ -658,7 +738,7 @@ if df is not None and not df.empty:
                     --- MISSION ---
                     Synthesize a TRADE PLAN in strictly formatted MARKDOWN.
                     Critically analyze RVOL. High RVOL validates moves; Low RVOL suggests traps.
-                    Compare Price vs VWAP (Above = Bull Control).
+                    If Divergence is present, prioritize it as a reversal signal.
                     
                     OUTPUT FORMAT:
                     ### 📋 Trade Plan: Equity Alpha Report
@@ -691,6 +771,11 @@ if df is not None and not df.empty:
         sig_emoji = "🟢" if apex_cond == 1 else "🔴" if apex_cond == -1 else "⚪"
         direction = "LONG" if apex_cond == 1 else "SHORT" if apex_cond == -1 else "NEUTRAL"
         
+        # Add Div to Broadcast
+        div_msg = ""
+        if div_sig == 1: div_msg = "\n⚠️ BULLISH DIVERGENCE DETECTED"
+        if div_sig == -1: div_msg = "\n⚠️ BEARISH DIVERGENCE DETECTED"
+        
         broadcast_msg = f"""
 🔥 TITAN EQUITY SIGNAL: {ticker} ({interval})
 {sig_emoji} DIRECTION: {direction}
@@ -701,7 +786,7 @@ if df is not None and not df.empty:
 📊 RVOL: {rvol_val:.2f}x
 💰 Money Flow: {mfi_txt}
 💀 Inst. Trend: {inst_txt}
-⚖️ VWAP: ${vwap_val:.2f}
+⚖️ VWAP: ${vwap_val:.2f}{div_msg}
 ⚠️ *Not financial advice. DYOR.*
 #Stocks #Tech #Titan #{ticker}
         """
