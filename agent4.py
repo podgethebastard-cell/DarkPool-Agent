@@ -92,6 +92,10 @@ st.markdown("""
     
     /* TOASTS & ALERTS */
     div[data-testid="stToast"] { background-color: #1a1a1a; border: 1px solid #333; color: white; }
+    
+    /* BUTTON STYLING */
+    button[kind="secondary"] { background-color: #111; color: #fff; border: 1px solid #333; }
+    button[kind="primary"] { background-color: #00ffbb; color: #000; border: none; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -99,7 +103,7 @@ st.markdown("""
 # 2. SIDEBAR CONTROLS
 # ==========================================
 st.sidebar.title("⚡ TITAN CONFIG")
-st.sidebar.caption("v5.0 | AI COMMANDER")
+st.sidebar.caption("v5.1 | KRAKEN | AI")
 st.sidebar.markdown("---")
 
 # Market Data
@@ -138,13 +142,14 @@ try:
     tg_token = st.secrets["TELEGRAM_TOKEN"]
     tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
     tg_secrets = True
+    st.sidebar.success("🔹 Telegram: Connected (Secrets)")
 except:
     tg_secrets = False
+    st.sidebar.warning("⚠️ TG Secrets Missing")
 
 if tg_secrets:
     bot_token = tg_token
     chat_id = tg_chat
-    st.sidebar.success("🔹 Telegram: Connected (Secrets)")
 else:
     bot_token = st.sidebar.text_input("Bot Token", type="password")
     chat_id = st.sidebar.text_input("Chat ID")
@@ -156,11 +161,10 @@ try:
     st.sidebar.success("🔹 OpenAI: Connected (Secrets)")
 except:
     ai_secrets = False
+    st.sidebar.warning("⚠️ OpenAI Secrets Missing")
 
 if not ai_secrets:
     ai_key = st.sidebar.text_input("OpenAI API Key", type="password")
-
-test_btn = st.sidebar.button("Test Connections")
 
 if 'last_signal_time' not in st.session_state:
     st.session_state.last_signal_time = None
@@ -184,7 +188,7 @@ def send_telegram_msg(token, chat, msg):
 # --- AI ANALYSIS FUNCTION ---
 def get_ai_analysis(df_summary, symbol, tf):
     if not ai_key:
-        return "⚠️ Please provide an OpenAI API Key."
+        return "⚠️ Please provide an OpenAI API Key in Secrets."
     
     client = OpenAI(api_key=ai_key)
     
@@ -210,17 +214,12 @@ def get_ai_analysis(df_summary, symbol, tf):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o", # Or gpt-3.5-turbo if you prefer speed/cost
+            model="gpt-4o",
             messages=[{"role": "system", "content": "You are a sniper scalper."}, {"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
     except Exception as e:
         return f"AI Error: {e}"
-
-if test_btn:
-    t_succ = send_telegram_msg(bot_token, chat_id, "🔥 **TITAN SYSTEM ONLINE**\nTelegram Connected.")
-    if t_succ: st.toast("Telegram OK", icon="✅")
-    if ai_key: st.toast("OpenAI Key Detected", icon="🤖")
 
 # Math Helpers
 def weighted_ma(series, length):
@@ -369,7 +368,7 @@ if not df.empty:
     df = run_titan_engine(df)
     last = df.iloc[-1]
     
-    # --- BROADCASTING ---
+    # --- BROADCAST LOGIC (AUTO) ---
     if tg_on and bot_token and chat_id:
         if (last['buy_signal'] or last['sell_signal']) and st.session_state.last_signal_time != last['timestamp']:
             is_buy = last['buy_signal']
@@ -390,48 +389,56 @@ if not df.empty:
 ⚠️ _Not financial advice. DYOR._
 #DarkPool #Titan #Crypto"""
             
-            success = send_telegram_msg(bot_token, chat_id, msg)
-            if success:
-                st.session_state.last_signal_time = last['timestamp']
-                st.toast(f"Broadcast: {direction}", icon="🚀")
+            send_telegram_msg(bot_token, chat_id, msg)
+            st.session_state.last_signal_time = last['timestamp']
+            st.toast(f"Auto-Broadcast: {direction}", icon="🚀")
 
     # --- HUD METRICS ---
     c1, c2, c3, c4 = st.columns(4)
-    
-    trend_cls = "border-bull" if last['is_bull'] else "border-bear"
-    trend_txt_cls = "text-bull" if last['is_bull'] else "text-bear"
     trend_lbl = "BULLISH" if last['is_bull'] else "BEARISH"
-    mf_val = last['money_flow']
-    mf_cls = "text-bull" if mf_val > 0 else "text-bear"
-    rvol_cls = "text-bull" if last['rvol'] > 1.5 else "text-bear" if last['rvol'] < 0.8 else "text-white"
+    trend_cls = "border-bull" if last['is_bull'] else "border-bear"
+    trend_txt = "text-bull" if last['is_bull'] else "text-bear"
     
-    with c1:
-        st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Price</h4><h2>${last['close']:,.2f}</h2>
-        <div class="sub">Trend: <span class="{trend_txt_cls}"><b>{trend_lbl}</b></span></div></div>""", unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Titan Stop</h4><h2>${last['trend_stop']:,.2f}</h2>
-        <div class="sub">Risk Mgmt System</div></div>""", unsafe_allow_html=True)
-    with c3:
-        st.markdown(f"""<div class="titan-card"><h4>Money Flow Matrix</h4><h2 class="{mf_cls}">{mf_val:.2f}</h2>
-        <div class="sub">Institutional Pressure</div></div>""", unsafe_allow_html=True)
-    with c4:
-        st.markdown(f"""<div class="titan-card"><h4>Relative Volume</h4><h2 class="{rvol_cls}">{last['rvol']:.2f}x</h2>
-        <div class="sub">Anomaly Detection</div></div>""", unsafe_allow_html=True)
+    with c1: st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Price</h4><h2>${last['close']:,.2f}</h2><div class="sub">Trend: <span class="{trend_txt}"><b>{trend_lbl}</b></span></div></div>""", unsafe_allow_html=True)
+    with c2: st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Titan Stop</h4><h2>${last['trend_stop']:,.2f}</h2><div class="sub">Risk Mgmt System</div></div>""", unsafe_allow_html=True)
+    with c3: st.markdown(f"""<div class="titan-card"><h4>Money Flow</h4><h2 class="{'text-bull' if last['money_flow']>0 else 'text-bear'}">{last['money_flow']:.2f}</h2><div class="sub">Institutional Pressure</div></div>""", unsafe_allow_html=True)
+    with c4: st.markdown(f"""<div class="titan-card"><h4>RVOL</h4><h2 class="{'text-bull' if last['rvol']>1.5 else 'text-white'}">{last['rvol']:.2f}x</h2><div class="sub">Anomaly Detection</div></div>""", unsafe_allow_html=True)
 
-    # --- AI ANALYSIS BUTTON ---
-    if st.button("🤖 GENERATE AI REPORT", use_container_width=True):
-        with st.spinner("Titan AI is analyzing market structure..."):
-            summary = {
-                'price': last['close'],
-                'trend': trend_lbl,
-                'stop': last['trend_stop'],
-                'mf': last['money_flow'],
-                'hw': last['hyper_wave'],
-                'rvol': last['rvol'],
-                'inst_trend': 'BULL' if last['close'] > last['hma'] else 'BEAR'
-            }
-            ai_report = get_ai_analysis(summary, symbol, timeframe)
-            st.markdown(f"""<div class="ai-box"><h3>🤖 TITAN AI ASSESSMENT</h3>{ai_report}</div>""", unsafe_allow_html=True)
+    # --- ACTION CENTER (MANUAL CONTROLS) ---
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        if st.button("🔥 BROADCAST SIGNAL NOW", use_container_width=True):
+            is_bull = last['is_bull']
+            direction = "LONG" if is_bull else "SHORT"
+            icon = "🟢" if is_bull else "🔴"
+            risk = abs(last['close'] - last['trend_stop'])
+            target = last['close'] + (risk * 1.5) if is_bull else last['close'] - (risk * 1.5)
+            
+            manual_msg = f"""🔥 *TITAN SIGNAL: {symbol} ({timeframe})*
+{icon} DIRECTION: *{direction}*
+🚪 ENTRY: `${last['close']:,.2f}`
+🛑 STOP LOSS: `${last['trend_stop']:,.2f}`
+🎯 TARGET: `${target:,.2f}`
+🌊 Trend: {'BULLISH' if is_bull else 'BEARISH'}
+📊 Momentum: {'POSITIVE' if last['hyper_wave'] > 0 else 'NEGATIVE'}
+💰 Money Flow: {'INFLOW' if last['money_flow'] > 5 else 'OUTFLOW' if last['money_flow'] < -5 else 'NEUTRAL'}
+💀 Institutional Trend: {'MACRO BULL' if last['close'] > last['hma'] else 'MACRO BEAR'}
+⚠️ _Not financial advice. DYOR._
+#DarkPool #Titan #Crypto"""
+            if send_telegram_msg(bot_token, chat_id, manual_msg):
+                st.success("✅ Signal Broadcasted Successfully!")
+
+    with col_b:
+        if st.button("🤖 GENERATE AI REPORT", use_container_width=True):
+            with st.spinner("Titan AI is analyzing market structure..."):
+                summary = {
+                    'price': last['close'], 'trend': trend_lbl, 'stop': last['trend_stop'],
+                    'mf': last['money_flow'], 'hw': last['hyper_wave'], 'rvol': last['rvol'],
+                    'inst_trend': 'BULL' if last['close'] > last['hma'] else 'BEAR'
+                }
+                ai_report = get_ai_analysis(summary, symbol, timeframe)
+                st.markdown(f"""<div class="ai-box"><h3>🤖 TITAN AI ASSESSMENT</h3>{ai_report}</div>""", unsafe_allow_html=True)
 
     # --- TRI-PANE CHART ---
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.55, 0.20, 0.25],
