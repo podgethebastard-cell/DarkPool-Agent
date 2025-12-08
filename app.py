@@ -15,7 +15,7 @@ from scipy.stats import linregress
 # ==========================================
 # 1. PAGE CONFIGURATION & CUSTOM UI
 # ==========================================
-st.set_page_config(layout="wide", page_title="Titan Terminal", page_icon="👁️")
+st.set_page_config(layout="wide", page_title="💀Titan Terminal", page_icon="👁️")
 
 # --- CUSTOM CSS FOR "DARKPOOL" AESTHETIC ---
 st.markdown("""
