@@ -361,7 +361,8 @@ with st.sidebar:
 
 macro_score, _ = get_macro_data()
 risk_state = "RISK ON" if macro_score >= 2 else ("RISK OFF" if macro_score <= -2 else "NEUTRAL")
-risk_col = "green" if macro_score >= 2 else ("red" if macro_score <= -2 else "gray")
+# FIXED: Variable name typo corrected here
+risk_color = "green" if macro_score >= 2 else ("red" if macro_score <= -2 else "gray")
 
 st.markdown(f"""
 <div style="background-color: #262730; padding: 10px; border-radius: 5px; border-left: 5px solid {risk_color}; margin-bottom: 20px;">
