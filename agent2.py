@@ -13,7 +13,7 @@ import urllib.parse
 # ==========================================
 # 1. PREMIUM UI CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="Titan Terminal: God Mode", page_icon="⚡")
+st.set_page_config(layout="wide", page_title="Crypto Titan", page_icon="⚡")
 
 st.markdown("""
 <style>
