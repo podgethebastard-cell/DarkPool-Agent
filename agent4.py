@@ -12,7 +12,7 @@ from openai import OpenAI # REQUIRES: pip install openai
 # ==========================================
 # 1. PAGE CONFIG & TERMINAL CSS
 # ==========================================
-st.set_page_config(page_title="Titan Scalper [Terminal]", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="Scalper Titan", layout="wide", page_icon="⚡")
 
 st.markdown("""
     <style>
