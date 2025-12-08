@@ -9,7 +9,7 @@ import openai
 # 1. PAGE CONFIGURATION & STYLING
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Macro Insighter Pro",
+    page_title="Macro Titan Outlook",
     page_icon="🦅",
     layout="wide",
     initial_sidebar_state="expanded"
