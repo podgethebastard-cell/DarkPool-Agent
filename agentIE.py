@@ -5,9 +5,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import pytz
+
 from datetime import datetime, time
-import pandas_ta as ta
+
 from openai import OpenAI
 
 # ==========================================
