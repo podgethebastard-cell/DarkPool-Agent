@@ -62,7 +62,7 @@ class NativeIndicators:
 
     @staticmethod
     def stdev(series, length):
-        # FIXED: Added missing stdev to prevent AttributeError
+        # FIXED: Added missing stdev function
         return series.rolling(window=length).std()
 
     @staticmethod
@@ -358,7 +358,6 @@ def get_ticker_data(symbol):
 with st.sidebar:
     st.header("Settings")
     
-    # Secrets Logic
     secret_key = None
     try:
         if "OPENAI_API_KEY" in st.secrets:
@@ -410,12 +409,12 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
         else:
             st.warning("Fetching price data...")
 
-        # 3. ADVANCED TRADINGVIEW CHART WITH NATIVE SEARCH
-        # We start with the likely correct symbol (LSE:SGLN), but "allow_symbol_change": true
-        # allows the user to click the symbol name in the chart and change it.
+        # 3. TRADINGVIEW "ADVANCED" WIDGET (With Search & Drawing Tools)
+        # We start with the likely symbol, but allow user to change it using the built-in search.
         default_tv_sym = f"LSE:{ticker_name}"
         unique_tv_id = f"tv_chart_{i}"
         
+        # NOTE: allow_symbol_change: true puts the search bar INSIDE the widget
         components.html(f"""
         <div class="tradingview-widget-container">
           <div id="{unique_tv_id}"></div>
@@ -431,8 +430,10 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
           "theme": "dark",
           "style": "1",
           "locale": "en",
+          "toolbar_bg": "#f1f3f6",
           "enable_publishing": false,
-          "allow_symbol_change": true,  
+          "allow_symbol_change": true, 
+          "hide_side_toolbar": false,
           "container_id": "{unique_tv_id}"
           }}
           );
@@ -449,7 +450,7 @@ for i, (tab, ticker_name) in enumerate(zip(tabs, TICKERS)):
             # INDICATORS
             df = calculate_apex_trend(df)
             df = calculate_evwm(df)
-            # FIXED: Correct assignment to avoid overwriting dataframe
+            # FIXED: Do not overwrite entire DF
             df['Money_Flow'] = calculate_money_flow(df) 
             df = calculate_darkpool_macd(df)  
             df = calculate_my_adx(df)         
