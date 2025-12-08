@@ -60,41 +60,41 @@ st.markdown("""
 
 # A. SINGLE ASSETS (Original Request)
 TICKERS = {
-    "15. MASTER CORE": {
+    ". MASTER CORE": {
         "S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "DXY": "DX-Y.NYB",
         "US 10Y": "^TNX", "US 02Y": "^IRX", "VIX": "^VIX",
         "WTI Crude": "CL=F", "Gold": "GC=F", "Copper": "HG=F",
         "HYG (Junk)": "HYG", "TLT (Long Bond)": "TLT",
         "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD"
     },
-    "1. Global Equity Indices": {
+    ". Global Equity Indices": {
         "S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "Dow Jones": "^DJI", "Russell 2000": "^RUT",
         "DAX (DE)": "^GDAXI", "FTSE (UK)": "^FTSE", "CAC (FR)": "^FCHI", "STOXX50": "^STOXX50E",
         "Nikkei (JP)": "^N225", "Hang Seng (HK)": "^HSI", "Shanghai": "000001.SS", "KOSPI": "^KS11",
         "ACWI": "ACWI", "VT (World)": "VT", "EEM (Emerging)": "EEM"
     },
-    "2. Volatility & Fear": {
+    ". Volatility & Fear": {
         "VIX": "^VIX", "VXN (Nasdaq)": "^VXN", "VXD (Dow)": "^VXD",
         "MOVE Proxy (ICE BofA)": "MOVE.MX" 
     },
-    "3. Interest Rates": {
+    ". Interest Rates": {
         "US 10Y": "^TNX", "US 02Y": "^IRX", "US 30Y": "^TYX", "US 05Y": "^FVX",
         "TLT": "TLT", "IEF": "IEF", "SHY": "SHY", "LQD": "LQD", "HYG": "HYG", "TIP": "TIP"
     },
-    "4. Currencies": {
+    ". Currencies": {
         "DXY": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X",
         "USD/JPY": "USDJPY=X", "USD/CNY": "USDCNY=X", "AUD/USD": "AUDUSD=X",
         "USD/CHF": "USDCHF=X", "USD/MXN": "USDMXN=X"
     },
-    "7. Commodities": {
+    ". Commodities": {
         "WTI": "CL=F", "Brent": "BZ=F", "NatGas": "NG=F",
         "Gold": "GC=F", "Silver": "SI=F", "Platinum": "PL=F", "Palladium": "PA=F",
         "Copper": "HG=F", "Wheat": "KE=F", "Corn": "ZC=F", "Soybeans": "ZS=F"
     },
-    "8. Real Estate": {
+    ". Real Estate": {
         "VNQ (US REITs)": "VNQ", "REET (Global)": "REET", "XLRE": "XLRE"
     },
-    "11. Crypto Macro": {
+    ". Crypto Macro": {
         "BTC.D (Proxy)": "BTC-USD", "Total Cap (Proxy)": "BTC-USD", # Placeholders, handled by special logic
         "BTC": "BTC-USD", "ETH": "ETH-USD"
     }
