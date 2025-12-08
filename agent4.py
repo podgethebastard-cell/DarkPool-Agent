@@ -1,0 +1,252 @@
+import streamlit as st
+import ccxt
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import time
+
+# ==========================================
+# 1. TITAN CONFIGURATION & PAGE SETUP
+# ==========================================
+st.set_page_config(page_title="Titan Scalper [1m/5m]", layout="wide", page_icon="⚡")
+
+# Custom CSS for that "Dark/Titan" aesthetic
+st.markdown("""
+    <style>
+    .stApp { background-color: #0e1117; color: #ffffff; }
+    .metric-card { background-color: #1e222b; border: 1px solid #444; padding: 10px; border-radius: 5px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Sidebar Controls
+st.sidebar.header("⚡ Titan Scalper Config")
+symbol = st.sidebar.text_input("Symbol (Binance format)", value="BTC/USDT")
+timeframe = st.sidebar.selectbox("Timeframe", options=['1m', '5m'], index=1)
+limit = st.sidebar.slider("Candles to Load", min_value=100, max_value=1000, value=300)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Engine Settings")
+amplitude = st.sidebar.number_input("Sensitivity (Lookback)", min_value=1, value=5, help="5 is the Sweet Spot for 1m/5m.")
+channel_dev = st.sidebar.number_input("Volatility Multiplier", min_value=1.0, value=3.0, step=0.1)
+hma_len = st.sidebar.number_input("HMA Length", min_value=1, value=50)
+use_hma_filter = st.sidebar.checkbox("Use HMA Filter?", value=False)
+
+# ==========================================
+# 2. MATH ENGINE (Universal Logic)
+# ==========================================
+
+def calculate_hma(series, length):
+    """Calculates Hull Moving Average"""
+    wma1 = series.rolling(window=int(length/2)).mean() # Simplified WMA for speed in Python, real HMA uses weighted
+    wma2 = series.rolling(window=length).mean()
+    # True HMA requires weighted moving averages, implementing a close approximation for speed
+    # Or using pandas_ta if installed. Here is a raw numpy weighted implementation:
+    def weighted_avg(w):
+        def _compute(x):
+            return np.dot(x, w) / w.sum()
+        return _compute
+    
+    weights_half = np.arange(1, int(length/2) + 1)
+    wma_half = series.rolling(int(length/2)).apply(weighted_avg(weights_half), raw=True)
+    
+    weights_full = np.arange(1, length + 1)
+    wma_full = series.rolling(length).apply(weighted_avg(weights_full), raw=True)
+    
+    diff = 2 * wma_half - wma_full
+    weights_sqrt = np.arange(1, int(np.sqrt(length)) + 1)
+    hma = diff.rolling(int(np.sqrt(length))).apply(weighted_avg(weights_sqrt), raw=True)
+    return hma
+
+def run_titan_engine(df):
+    # 1. Volatility Scaling (ATR)
+    # Pine: ta.atr(100) -> we use TR then rolling mean
+    df['tr'] = np.maximum(df['high'] - df['low'], 
+                          np.maximum(abs(df['high'] - df['close'].shift(1)), 
+                                     abs(df['low'] - df['close'].shift(1))))
+    df['atr_algo'] = df['tr'].rolling(window=100).mean() / 2
+    df['dev'] = df['atr_algo'] * channel_dev
+    
+    # 2. HMA Calculation
+    df['hma'] = calculate_hma(df['close'], hma_len)
+
+    # 3. Staircase Trend Logic (Iterative Loop required for state persistence)
+    # Pre-calculate rolling min/max for speed
+    df['lowest_low'] = df['low'].rolling(window=amplitude).min()
+    df['highest_high'] = df['high'].rolling(window=amplitude).max()
+
+    trend = np.zeros(len(df))
+    trend_stop = np.zeros(len(df))
+    max_low = np.zeros(len(df))
+    min_high = np.zeros(len(df))
+    
+    # Initialize variables for the loop
+    curr_trend = 0 # 0 = Bull, 1 = Bear
+    curr_max_low = 0.0
+    curr_min_high = 0.0
+    curr_trend_stop = 0.0
+    
+    # Iterate through DataFrame (starting from index amplitude to avoid NaNs)
+    for i in range(amplitude, len(df)):
+        close = df['close'].iloc[i]
+        low_price = df['lowest_low'].iloc[i]
+        high_price = df['highest_high'].iloc[i]
+        safe_dev = df['dev'].iloc[i] if not np.isnan(df['dev'].iloc[i]) else 0
+        
+        # Pine: max_low := math.max(low_price, nz(max_low[1]))
+        curr_max_low = max(low_price, curr_max_low)
+        curr_min_high = min(high_price, curr_min_high) if curr_min_high != 0 else high_price
+
+        # State Logic
+        if curr_trend == 0: # Bullish
+            if close < curr_max_low:
+                curr_trend = 1 # Flip to Bear
+                curr_min_high = high_price
+            else:
+                curr_min_high = min(curr_min_high, high_price)
+                if low_price < curr_max_low:
+                    curr_max_low = low_price
+        else: # Bearish
+            if close > curr_min_high:
+                curr_trend = 0 # Flip to Bull
+                curr_max_low = low_price
+            else:
+                curr_max_low = max(curr_max_low, low_price)
+                if high_price > curr_min_high:
+                    curr_min_high = high_price
+        
+        # Stop Line Logic
+        if curr_trend == 0: # Bull
+            up_line = low_price + safe_dev
+            if up_line < curr_trend_stop:
+                up_line = curr_trend_stop
+            curr_trend_stop = up_line
+        else: # Bear
+            down_line = high_price - safe_dev
+            if down_line > curr_trend_stop and curr_trend_stop != 0:
+                down_line = curr_trend_stop
+            elif curr_trend_stop == 0:
+                down_line = high_price - safe_dev
+            curr_trend_stop = down_line
+
+        # Store values
+        trend[i] = curr_trend
+        trend_stop[i] = curr_trend_stop
+        max_low[i] = curr_max_low
+        min_high[i] = curr_min_high
+
+    df['trend'] = trend
+    df['trend_stop'] = trend_stop
+    df['is_bull'] = df['trend'] == 0
+    df['is_bear'] = df['trend'] == 1
+    
+    # 4. Signals
+    # valid_buy = is_bull and not is_bull[1] and filter_ok
+    df['bull_flip'] = (df['is_bull']) & (~df['is_bull'].shift(1))
+    df['bear_flip'] = (df['is_bear']) & (~df['is_bear'].shift(1))
+    
+    df['filter_ok_buy'] = ~use_hma_filter | (df['close'] > df['hma'])
+    df['filter_ok_sell'] = ~use_hma_filter | (df['close'] < df['hma'])
+    
+    df['buy_signal'] = df['bull_flip'] & df['filter_ok_buy']
+    df['sell_signal'] = df['bear_flip'] & df['filter_ok_sell']
+
+    return df
+
+# ==========================================
+# 3. DATA FETCHING
+# ==========================================
+@st.cache_data(ttl=60) # Cache for 1 min to prevent API spam
+def get_data(symbol, timeframe, limit):
+    try:
+        exchange = ccxt.binance()
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return pd.DataFrame()
+
+# ==========================================
+# 4. MAIN DASHBOARD EXECUTION
+# ==========================================
+
+df = get_data(symbol, timeframe, limit)
+
+if not df.empty:
+    df = run_titan_engine(df)
+    
+    # Get latest values
+    last_row = df.iloc[-1]
+    prev_row = df.iloc[-2]
+    
+    # --- HEADER METRICS ---
+    col1, col2, col3, col4 = st.columns(4)
+    
+    trend_color = "#00ffbb" if last_row['is_bull'] else "#ff1155"
+    trend_text = "BULLISH" if last_row['is_bull'] else "BEARISH"
+    
+    col1.metric("Current Price", f"{last_row['close']:.2f}")
+    col2.markdown(f"**Trend State**<br><span style='color:{trend_color}; font-size:24px; font-weight:bold'>{trend_text}</span>", unsafe_allow_html=True)
+    col3.metric("Titan Stop Price", f"{last_row['trend_stop']:.2f}")
+    
+    filter_status = "OFF"
+    if use_hma_filter:
+        filter_status = "PASS" if (last_row['is_bull'] and last_row['close'] > last_row['hma']) or (last_row['is_bear'] and last_row['close'] < last_row['hma']) else "FAIL"
+    col4.metric("HMA Filter", filter_status)
+
+    # --- PLOTLY CHART ---
+    fig = go.Figure()
+
+    # Candles
+    fig.add_trace(go.Candlestick(
+        x=df['timestamp'],
+        open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+        name='Price',
+        increasing_line_color= '#00ffbb', decreasing_line_color= '#ff1155'
+    ))
+
+    # Titan Stop Line
+    # We color the line based on trend. Plotly requires separate traces for colors or a complex line map.
+    # Simple approach: Plot single line, color gray, or plot two lines filtered by trend.
+    bull_line = df.copy()
+    bull_line.loc[bull_line['trend'] == 1, 'trend_stop'] = None
+    
+    bear_line = df.copy()
+    bear_line.loc[bear_line['trend'] == 0, 'trend_stop'] = None
+
+    fig.add_trace(go.Scatter(x=bull_line['timestamp'], y=bull_line['trend_stop'], mode='lines', line=dict(color='#00ffbb', width=2), name='Bull Stop'))
+    fig.add_trace(go.Scatter(x=bear_line['timestamp'], y=bear_line['trend_stop'], mode='lines', line=dict(color='#ff1155', width=2), name='Bear Stop'))
+    
+    # HMA
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', line=dict(color='gray', width=1, dash='dot'), name='HMA', opacity=0.5))
+
+    # Buy Signals
+    buys = df[df['buy_signal']]
+    if not buys.empty:
+        fig.add_trace(go.Scatter(
+            x=buys['timestamp'], y=buys['low'] * 0.999,
+            mode='markers', marker=dict(symbol='diamond', size=10, color='#aaffdd'), name='Buy Signal'
+        ))
+
+    # Sell Signals
+    sells = df[df['sell_signal']]
+    if not sells.empty:
+        fig.add_trace(go.Scatter(
+            x=sells['timestamp'], y=sells['high'] * 1.001,
+            mode='markers', marker=dict(symbol='diamond', size=10, color='#ff99aa'), name='Sell Signal'
+        ))
+
+    fig.update_layout(
+        height=600,
+        paper_bgcolor='#0e1117',
+        plot_bgcolor='#0e1117',
+        xaxis_rangeslider_visible=False,
+        font=dict(color="white"),
+        title=f"Titan Scalper | {symbol} | {timeframe}"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.warning("Waiting for data... Check symbol or internet connection.")
