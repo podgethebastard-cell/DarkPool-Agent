@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -40,44 +39,65 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. HELPER FUNCTIONS (MATH)
+# 2. HELPER FUNCTIONS (MATH - NATIVE PANDAS)
 # ==========================================
+# Replaced 'ta' calls with native pandas/numpy logic
+
 def calculate_hma(series, length):
-    return ta.hma(series, length=length)
+    # Native HMA: WMA(2*WMA(n/2) - WMA(n)), sqrt(n)
+    half_length = int(length / 2)
+    sqrt_length = int(np.sqrt(length))
+    
+    def wma(s, l):
+        weights = np.arange(1, l + 1)
+        return s.rolling(l).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+
+    wmaf = wma(series, half_length)
+    wmas = wma(series, length)
+    diff = 2 * wmaf - wmas
+    return wma(diff, sqrt_length)
 
 def calculate_rma(series, length):
-    return ta.rma(series, length=length)
+    # Native RMA (Wilder's Smoothing)
+    return series.ewm(alpha=1/length, adjust=False).mean()
 
 def calculate_money_flow(df, length=14, smooth=3):
-    # Normalized Money Flow Logic from Pine Script
-    rsi_source = ta.rsi(df['Close'], length=length) - 50
-    mf_vol = df['Volume'] / ta.sma(df['Volume'], length=length)
-    money_flow = ta.ema(rsi_source * mf_vol, length=smooth)
+    # 1. RSI Logic (Native)
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -1 * delta.clip(upper=0)
+    avg_gain = calculate_rma(gain, length)
+    avg_loss = calculate_rma(loss, length)
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    # 2. Money Flow Logic
+    rsi_source = rsi - 50
+    # SMA is just .rolling().mean()
+    mf_vol = df['Volume'] / df['Volume'].rolling(length).mean()
+    # EMA is just .ewm().mean()
+    money_flow = (rsi_source * mf_vol).ewm(span=smooth, adjust=False).mean()
     return money_flow
 
 # ==========================================
-# 3. INDICATOR LOGIC (CONVERTED FROM PINE)
+# 3. INDICATOR LOGIC
 # ==========================================
 
 # --- A. MACRO RISK TRAFFIC LIGHT ---
-@st.cache_data(ttl=3600) # Cache macro data for 1 hour
+@st.cache_data(ttl=3600)
 def get_macro_data():
-    # Mapping Pine Tickers to Yahoo Finance
     tickers = {
         'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SPX': '^GSPC', 
         'NDX': '^IXIC', 'VIX': '^VIX', 'TLT': 'TLT', 
         'HYG': 'HYG', 'DXY': 'DX-Y.NYB', 'GOLD': 'GC=F', 
         'SILVER': 'SI=F', 'COPPER': 'HG=F', 'OIL': 'CL=F', 
-        'US10Y': '^TNX', 'US02Y': '^IRX' # Approximation
+        'US10Y': '^TNX', 'US02Y': '^IRX'
     }
     
+    # Download data
     data = yf.download(list(tickers.values()), period="1y", interval="1d")['Close']
-    
-    # Calculate Ratios
-    # Clean data (ffill for different market holidays)
     data = data.ffill().dropna()
     
-    # Ratios & Logic
     try:
         df = pd.DataFrame(index=data.index)
         
@@ -85,22 +105,22 @@ def get_macro_data():
         def get_col(key):
             return data[tickers[key]]
 
-        # Calculations
-        df['SPY_TLT'] = get_col('SPX') / get_col('TLT') # Proxy using SPX
+        # Ratios
+        df['SPY_TLT'] = get_col('SPX') / get_col('TLT')
         df['HYG_TLT'] = get_col('HYG') / get_col('TLT')
         df['BTC_SPX'] = get_col('BTC') / get_col('SPX')
         df['NDX_SPX'] = get_col('NDX') / get_col('SPX')
         df['COPPER_GOLD'] = get_col('COPPER') / get_col('GOLD')
         df['BTC_DXY'] = get_col('BTC') / get_col('DXY')
         df['VIX'] = get_col('VIX')
-        
-        # Yield Curve (using TNX/IRX proxies - Note: TNX is yield * 10)
         df['YIELD_CURVE'] = get_col('US10Y') - get_col('US02Y') 
 
-        # Regime Function (EMA Spread)
+        # --- FIX: NATIVE PANDAS EMA ---
         def get_regime(series, invert=False):
-            e20 = ta.ema(series, 20)
-            e50 = ta.ema(series, 50)
+            # FIXED: Used standard Pandas .ewm() instead of ta.ema()
+            e20 = series.ewm(span=20, adjust=False).mean()
+            e50 = series.ewm(span=50, adjust=False).mean()
+            
             spread_pct = (e20 - e50) / e50 * 100
             signal = np.where(spread_pct > 0.05, 1, np.where(spread_pct < -0.05, -1, 0))
             return signal * -1 if invert else signal
@@ -113,31 +133,31 @@ def get_macro_data():
         score += get_regime(df['NDX_SPX'])
         score += get_regime(df['COPPER_GOLD'])
         score += get_regime(df['BTC_DXY'])
-        score += get_regime(df['VIX'], invert=True) # Rising VIX is bad
+        score += get_regime(df['VIX'], invert=True)
         
-        # Yield Curve Logic (Simple Inversion check)
         yc_score = np.where(df['YIELD_CURVE'] > 0, 1, -1)
         score += yc_score
         
         last_score = score[-1]
-        
         return last_score, df
     except Exception as e:
         return 0, None
 
 # --- B. APEX TREND & LIQUIDITY ---
 def calculate_apex_trend(df, len_main=55, mult=1.5):
-    # Hull MA Baseline
-    baseline = ta.hma(df['Close'], length=len_main)
-    atr = ta.atr(df['High'], df['Low'], df['Close'], length=len_main)
+    # Hull MA Baseline (Using helper)
+    baseline = calculate_hma(df['Close'], length=len_main)
+    
+    # ATR Logic (Native)
+    h_l = df['High'] - df['Low']
+    h_pc = (df['High'] - df['Close'].shift(1)).abs()
+    l_pc = (df['Low'] - df['Close'].shift(1)).abs()
+    tr = pd.concat([h_l, h_pc, l_pc], axis=1).max(axis=1)
+    atr = calculate_rma(tr, len_main)
     
     upper = baseline + (atr * mult)
     lower = baseline - (atr * mult)
     
-    # Trend State
-    trend = pd.Series(0, index=df.index)
-    # Vectorized approach for trend state (iterative needed for state persistence)
-    curr_trend = 0
     trend_list = []
     
     for i in range(len(df)):
@@ -153,6 +173,9 @@ def calculate_apex_trend(df, len_main=55, mult=1.5):
             curr_trend = 1
         elif close < l:
             curr_trend = -1
+        else:
+            # Maintain previous trend if inside channel
+            curr_trend = trend_list[-1] if trend_list else 0
         
         trend_list.append(curr_trend)
     
@@ -163,38 +186,41 @@ def calculate_apex_trend(df, len_main=55, mult=1.5):
 
 # --- C. EVWM (Elastic Volume Weighted Momentum) ---
 def calculate_evwm(df, length=21, vol_smooth=5, mult=2.0):
-    baseline = ta.hma(df['Close'], length=length)
-    atr = ta.atr(df['High'], df['Low'], df['Close'], length=length)
+    baseline = calculate_hma(df['Close'], length=length)
+    
+    # ATR Logic (Native)
+    h_l = df['High'] - df['Low']
+    h_pc = (df['High'] - df['Close'].shift(1)).abs()
+    l_pc = (df['Low'] - df['Close'].shift(1)).abs()
+    tr = pd.concat([h_l, h_pc, l_pc], axis=1).max(axis=1)
+    atr = calculate_rma(tr, length)
     
     elasticity = (df['Close'] - baseline) / atr
     
     # Volume Weighting
-    rvol = df['Volume'] / ta.sma(df['Volume'], length=length)
-    smooth_rvol = ta.sma(rvol, length=vol_smooth)
+    rvol = df['Volume'] / df['Volume'].rolling(length).mean()
+    smooth_rvol = rvol.rolling(vol_smooth).mean()
     final_force = np.sqrt(smooth_rvol)
     
     evwm = elasticity * final_force
     
-    # Bands
-    band_basis = ta.sma(evwm, length=length*2)
-    band_dev = ta.stdev(evwm, length=length*2) * mult
+    # Bands (SMA + Stdev)
+    band_basis = evwm.rolling(length*2).mean()
+    band_dev = evwm.rolling(length*2).std() * mult
     
     df['EVWM'] = evwm
     df['EVWM_Upper'] = band_basis + band_dev
     df['EVWM_Lower'] = band_basis - band_dev
     return df
 
-# --- D. SUPPORT & RESISTANCE (Simplified Logic for Python Speed) ---
+# --- D. SUPPORT & RESISTANCE ---
 def calculate_sr(df, period=10):
-    # Find Pivots
     df['Pivot_High'] = df['High'].rolling(period*2+1, center=True).max()
     df['Pivot_Low'] = df['Low'].rolling(period*2+1, center=True).min()
     
-    # Identify where High == Pivot High
     is_pivot_high = (df['High'] == df['Pivot_High'])
     is_pivot_low = (df['Low'] == df['Pivot_Low'])
     
-    # Get last 3 pivots
     res_levels = df[is_pivot_high]['High'].tail(3).values
     sup_levels = df[is_pivot_low]['Low'].tail(3).values
     
@@ -216,7 +242,7 @@ TICKERS = {
     "SPGP (iShares Gold Producers)": "SPGP.L"
 }
 
-@st.cache_data(ttl=900) # 15 min cache for ticker data
+@st.cache_data(ttl=900)
 def get_ticker_data(symbol):
     df = yf.download(symbol, period="1y", interval="1d")
     return df
@@ -225,8 +251,6 @@ def get_ticker_data(symbol):
 # 5. AI ANALYST
 # ==========================================
 def generate_ai_report(ticker_name, df, macro_score, macro_state):
-    
-    # Extract latest metrics
     last_close = df['Close'].iloc[-1]
     last_apex = "BULLISH" if df['Apex_Trend'].iloc[-1] == 1 else "BEARISH"
     last_mf = df['Money_Flow'].iloc[-1]
@@ -255,7 +279,7 @@ def generate_ai_report(ticker_name, df, macro_score, macro_state):
     try:
         client = OpenAI(api_key=st.session_state.get('openai_api_key'))
         response = client.chat.completions.create(
-            model="gpt-4",  # Or gpt-3.5-turbo
+            model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
@@ -266,12 +290,9 @@ def generate_ai_report(ticker_name, df, macro_score, macro_state):
 # ==========================================
 # 6. MAIN APP LAYOUT
 # ==========================================
-
 # Sidebar
 with st.sidebar:
     st.header("Settings")
-    
-    # API Key Input
     api_key = st.text_input("OpenAI API Key", type="password")
     if api_key:
         st.session_state['openai_api_key'] = api_key
@@ -301,36 +322,32 @@ if selected_ticker:
     if df.empty:
         st.error("No data found for this ticker.")
     else:
-        # --- Run Calculations ---
+        # Run Calculations
         df = calculate_apex_trend(df)
         df['Money_Flow'] = calculate_money_flow(df)
         df = calculate_evwm(df)
         res_levels, sup_levels = calculate_sr(df)
         
-        # --- Visualization (Plotly) ---
+        # Visualization
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                             vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2],
                             subplot_titles=("Price & Apex Trend", "Money Flow Matrix", "EVWM Momentum"))
 
-        # Row 1: Price + Apex Cloud + S/R
-        # Candle
+        # Row 1
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-        
-        # Apex Cloud
         fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Upper'], line=dict(width=0), showlegend=False, hoverinfo='skip'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['Apex_Lower'], fill='tonexty', fillcolor='rgba(0, 230, 118, 0.1)', line=dict(width=0), name="Apex Cloud", hoverinfo='skip'), row=1, col=1)
         
-        # S/R Lines (Last 3)
         for r in res_levels:
             fig.add_hline(y=r, line_dash="dash", line_color="red", row=1, col=1, opacity=0.5)
         for s in sup_levels:
             fig.add_hline(y=s, line_dash="dash", line_color="green", row=1, col=1, opacity=0.5)
 
-        # Row 2: Money Flow
+        # Row 2
         colors = ['green' if x > 0 else 'red' for x in df['Money_Flow']]
         fig.add_trace(go.Bar(x=df.index, y=df['Money_Flow'], marker_color=colors, name="Money Flow"), row=2, col=1)
         
-        # Row 3: EVWM
+        # Row 3
         fig.add_trace(go.Scatter(x=df.index, y=df['EVWM'], line_color='white', name="EVWM"), row=3, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['EVWM_Upper'], line_color='gray', line_dash='dot', showlegend=False), row=3, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['EVWM_Lower'], line_color='gray', line_dash='dot', showlegend=False), row=3, col=1)
@@ -338,9 +355,8 @@ if selected_ticker:
         fig.update_layout(height=800, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # --- AI Report Section ---
+        # AI Report
         st.markdown("### 🤖 AI Analyst Report")
-        
         col_ai, col_but = st.columns([4, 1])
         with col_but:
             if st.button("Generate Report"):
