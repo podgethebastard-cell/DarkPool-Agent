@@ -130,17 +130,19 @@ stock_assets = {
 }
 
 # --- SEARCH FEATURE ---
-search_mode = st.sidebar.radio("Asset Selection", ["Top List", "Search Custom"], horizontal=True)
+search_mode = st.sidebar.radio("Asset Selection", ["Top List", "Search Any Ticker"], horizontal=True)
 
 if search_mode == "Top List":
     ticker_name = st.sidebar.selectbox("Target Asset", list(stock_assets.keys()))
     ticker = stock_assets[ticker_name]
 else:
-    custom_symbol = st.sidebar.text_input("Enter Ticker (e.g. GME, PLTR)", value="NVDA").upper().strip()
+    # UPDATED: More descriptive label for universal search
+    custom_symbol = st.sidebar.text_input("Enter Ticker (e.g. GME, ^GSPC, BRK-B)", value="NVDA").upper().strip()
     ticker = custom_symbol
     ticker_name = f"{custom_symbol} (Custom)"
 
-interval = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=1)
+# UPDATED: Default index set to 3 (which corresponds to "1d")
+interval = st.sidebar.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=3)
 
 # ==========================================
 # 2. ADVANCED MATH ENGINE
