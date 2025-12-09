@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 2.3: Full Telegram Restoration + Layout Optimization
+Version 3.0: Fixed Sync, Layout Optimized, Full Telegram Integration
 """
 import time
 import math
@@ -28,8 +28,9 @@ DB_PATH = "titan_signals.db"
 MAX_RETRIES = 3
 RETRY_DELAY = 0.5
 
-# Hardcoded to Binance Vision (Public Data) as requested
-BINANCE_API_BASE = "https://data-api.binance.vision/api/v3"
+# CRITICAL FIX: Use Binance US API for real-time data without 451 blocks
+# Binance Vision is historical/stale. Binance.com is geo-blocked.
+BINANCE_API_BASE = "https://api.binance.us/api/v3"
 
 # =============================================================================
 # PAGE CONFIG
@@ -328,15 +329,15 @@ def make_signal_id(row: pd.Series) -> str:
 
 
 # =============================================================================
-# BINANCE API (VISION DATA)
+# BINANCE API (REAL-TIME DATA)
 # =============================================================================
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def get_klines(
     symbol: str,
     interval: str,
     limit: int = 500
 ) -> pd.DataFrame:
-    """Fetch klines from Binance Vision (Public Data)"""
+    """Fetch klines from Binance US (Real-Time & Public)"""
     url = f"{BINANCE_API_BASE}/klines"
     params = {
         "symbol": symbol.upper(),
@@ -351,6 +352,9 @@ def get_klines(
             data = r.json()
             
             if not data or isinstance(data, dict):
+                # Fallback check
+                if isinstance(data, dict) and 'msg' in data:
+                    st.error(f"API Error: {data['msg']}")
                 return pd.DataFrame()
             
             cols = [
@@ -362,6 +366,9 @@ def get_klines(
             df['timestamp'] = pd.to_datetime(df['open_time'], unit='ms')
             df[['open', 'high', 'low', 'close', 'volume']] = \
                 df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+            
+            # Ensure sort order
+            df = df.sort_values('timestamp').reset_index(drop=True)
             
             return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].copy()
             
@@ -768,10 +775,10 @@ def tradingview_widget(symbol_tv: str = "BINANCE:BTCUSDT", interval: str = "60")
 # =============================================================================
 # MAIN LAYOUT & EXECUTION
 # =============================================================================
-# 1. Main Execution Chart (Full Width)
+# 1. Main Execution Chart (Full Width - Top)
 st.subheader("📊 Execution Chart — TITAN Engine")
 
-with st.spinner("Fetching data (Binance Vision)..."):
+with st.spinner("Fetching data (Binance US Real-Time)..."):
     df = get_klines(symbol, timeframe, limit)
 
 if not df.empty:
@@ -812,7 +819,7 @@ if not df.empty:
             line=dict(color='rgba(0, 179, 255, 0.4)', width=1)
         ))
     
-    # Trailing Stops (No gaps)
+    # Trailing Stops (No gaps - Fixed)
     bull_stop = df['trend_stop'].where(df['is_bull'], np.nan)
     bear_stop = df['trend_stop'].where(~df['is_bull'], np.nan)
     
