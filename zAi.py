@@ -2,8 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import requests
-import plotly.graph_objects as go
 from datetime import datetime
+import streamlit.components.v1 as components  # for TradingView
 
 # =========================
 # STREAMLIT CONFIG
@@ -36,7 +36,6 @@ def fetch_data(symbol, tf, limit):
     url_primary = "https://api.binance.us/api/v3/klines"
     url_fallback = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": tf, "limit": limit}
-    url_to_try = url_primary
 
     for attempt, current_url in enumerate([url_primary, url_fallback], start=1):
         try:
@@ -46,17 +45,25 @@ def fetch_data(symbol, tf, limit):
             if len(data) == 0:
                 st.warning(f"API at {current_url} returned empty data.")
                 continue
-            df = pd.DataFrame(data, columns=["time","open","high","low","close","volume","ct","qav","trades","tbav","tqav","ignore"])
+            df = pd.DataFrame(
+                data,
+                columns=[
+                    "time","open","high","low","close","volume",
+                    "ct","qav","trades","tbav","tqav","ignore"
+                ]
+            )
             df["time"] = pd.to_datetime(df["time"], unit="ms")
             for col in ["open","high","low","close","volume"]:
                 df[col] = df[col].astype(float)
-            st.success(f"Successfully fetched data from {current_url}.")
             return df[["time","open","high","low","close","volume"]]
         except requests.exceptions.HTTPError as http_err:
             st.error(f"HTTP error on attempt {attempt} with {current_url}: {http_err}")
-            st.code(r.text)
+            try:
+                st.code(r.text)
+            except Exception:
+                pass
         except Exception as err:
-            st.error(f"An unexpected error occurred on attempt {attempt} with {current_url}: {err}")
+            st.error(f"Unexpected error on attempt {attempt} with {current_url}: {err}")
     st.error("All data sources failed. Could not fetch market data.")
     return pd.DataFrame()
 
@@ -67,62 +74,81 @@ if df.empty:
 
 if len(df) < hma_len:
     st.warning(f"Not enough data to calculate HMA. Need at least {hma_len} candles. Current: {len(df)}.")
+    st.stop()
 
 # =========================
 # INDICATORS
 # =========================
+# --- ATR(14) ---
 df['tr1'] = df['high'] - df['low']
-df['tr2'] = abs(df['high'] - df['close'].shift(1))
-df['tr3'] = abs(df['low'] - df['close'].shift(1))
+df['tr2'] = (df['high'] - df['close'].shift(1)).abs()
+df['tr3'] = (df['low'] - df['close'].shift(1)).abs()
 df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
 df['ATR'] = df['tr'].rolling(14).mean()
 df.drop(['tr1', 'tr2', 'tr3', 'tr'], axis=1, inplace=True)
 
+# proper WMA for HMA
+def WMA(series, length):
+    weights = np.arange(1, length + 1)
+    return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+
 def HMA(series, length):
     half = int(length / 2)
     sqrt = int(np.sqrt(length))
-    wma1 = series.rolling(half).mean()
-    wma2 = series.rolling(length).mean()
+    if half < 1 or sqrt < 1:
+        return pd.Series(np.nan, index=series.index)
+    wma1 = WMA(series, half)
+    wma2 = WMA(series, length)
     diff = 2 * wma1 - wma2
-    return diff.rolling(sqrt).mean()
+    return WMA(diff, sqrt)
 
 df["HMA"] = HMA(df["close"], hma_len)
+
+# drop NaNs from indicator warm‑up
+df = df.dropna(subset=["ATR", "HMA"]).reset_index(drop=True)
+if df.empty:
+    st.error("No valid rows after indicator calculation. Try reducing HMA length or candles.")
+    st.stop()
 
 # =========================
 # TREND + SIGNAL LOGIC
 # =========================
 df["trend"] = np.where(df["close"] > df["HMA"], 1, -1)
-df["signal"] = df["trend"].diff()
+df["signal_raw"] = df["trend"].diff()
 
-buy_signals = df[df["signal"] == 2]
-sell_signals = df[df["signal"] == -2]
+# signal when trend changes sign
+df["signal"] = np.where(df["signal_raw"] == 2, 1,
+                        np.where(df["signal_raw"] == -2, -1, 0))
+
+buy_signals = df[df["signal"] == 1]
+sell_signals = df[df["signal"] == -1]
 
 # =========================
 # STOP LOSS & TAKE PROFIT CALCULATION (FIXED)
 # =========================
 price = df["close"].iloc[-1]
 atr_val = df["ATR"].iloc[-1]
-trend_state = df["trend"].iloc[-1]
+trend_state = int(df["trend"].iloc[-1])
 
-# --- NEW: DYNAMIC STOP LOSS BASED ON TREND ---
+if atr_val <= 0 or np.isnan(atr_val):
+    st.error("ATR is invalid (<= 0 or NaN). Cannot calculate risk levels.")
+    st.stop()
+
 if trend_state == 1:  # LONG (BULLISH)
     stop_price = price - (atr_mult * atr_val)
-elif trend_state == -1: # SHORT (BEARISH)
-    stop_price = price + (atr_mult * atr_val)
-else: # NO TREND
-    stop_price = price
-
-# --- NEW: DYNAMIC TAKE PROFIT LEVELS BASED ON TREND ---
-if trend_state == 1:  # LONG (BULLISH)
     take_profits = [price + (mult * atr_val) for mult in tp_levels]
 elif trend_state == -1: # SHORT (BEARISH)
+    stop_price = price + (atr_mult * atr_val)
     take_profits = [price - (mult * atr_val) for mult in tp_levels]
-else: # NO TREND
+else:  # safety
+    stop_price = price
     take_profits = [price, price, price]
 
 tp1, tp2, tp3 = take_profits
 
-# --- DEBUG: Show the calculation inputs to verify logic ---
+# =========================
+# DASHBOARD METRICS + DEBUG
+# =========================
 st.write("--- 🛠️ DEBUG: Calculation Inputs ---")
 st.write(f"Current Price: ${price:,.2f}")
 st.write(f"ATR Value: ${atr_val:,.2f}")
@@ -132,9 +158,6 @@ st.write(f"Calculated Stop Loss: ${stop_price:,.2f}")
 st.write(f"Calculated TP1: ${tp1:,.2f}, TP2: ${tp2:,.2f}, TP3: ${tp3:,.2f}")
 st.write("------------------------------------")
 
-# =========================
-# DASHBOARD METRICS
-# =========================
 trend_label = "BULLISH" if trend_state == 1 else "BEARISH" if trend_state == -1 else "NEUTRAL"
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("Price", f"${price:,.2f}")
@@ -152,10 +175,11 @@ tradingview_interval = timeframe_map.get(timeframe, "60")
 tradingview_symbol = symbol.upper()
 
 tradingview_html = f"""
-<div id="tradingview_chart"></div>
-<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-<script type="text/javascript">
-  setTimeout(function() {{
+<!-- TradingView Widget BEGIN -->
+<div class="tradingview-widget-container">
+  <div id="tradingview_chart"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
     new TradingView.widget({{
       "width": "100%",
       "height": 610,
@@ -172,10 +196,13 @@ tradingview_html = f"""
       "hide_side_toolbar": false,
       "save_image": true
     }});
-  }}, 500);
-</script>
+  </script>
+</div>
+<!-- TradingView Widget END -->
 """
-st.markdown(tradingview_html, unsafe_allow_html=True)
+
+# use components.html which handles script tags more reliably
+components.html(tradingview_html, height=650)
 
 # =========================
 # LIVE SIGNAL FEED
@@ -183,14 +210,18 @@ st.markdown(tradingview_html, unsafe_allow_html=True)
 st.subheader("Live Execution Feed")
 
 last_signal = "NONE"
-if not buy_signals.empty and buy_signals['time'].iloc[-1] == df['time'].iloc[-1]:
+latest_time = df['time'].iloc[-1]
+
+if not buy_signals.empty and buy_signals['time'].iloc[-1] == latest_time:
     last_signal = "BUY"
-elif not sell_signals.empty and sell_signals['time'].iloc[-1] == df['time'].iloc[-1]:
+elif not sell_signals.empty and sell_signals['time'].iloc[-1] == latest_time:
     last_signal = "SELL"
 
 st.success(f"Latest Signal: {last_signal}")
 
-# --- BROADCASTING LOGIC ---
+# =========================
+# BROADCASTING LOGIC
+# =========================
 st.sidebar.subheader("📡 Broadcast Keys")
 tg_token = st.secrets.get("TELEGRAM_TOKEN", "")
 tg_chat = st.secrets.get("TELEGRAM_CHAT_ID", "")
@@ -203,19 +234,39 @@ if not tg_chat:
 if tg_token and tg_chat and last_signal != "NONE":
     st.sidebar.subheader("📡 Broadcast")
     if last_signal == "BUY":
-        preview = f"🚀 BUY Signal for {symbol} on {timeframe}!\nENTRY: ${price:,.2f}\nSTOP: ${stop_price:,.2f}\nTP1: ${tp1:,.2f}\nTP2: ${tp2:,.2f}\nTP3: ${tp3:,.2f}"
-    else: # SELL
-        preview = f"🔻 SELL Signal for {symbol} on {timeframe}!\nENTRY: ${price:,.2f}\nSTOP: ${stop_price:,.2f}\nTP1: ${tp1:,.2f}\nTP2: ${tp2:,.2f}\nTP3: ${tp3:,.2f}"
-    
+        preview = (
+            f"🚀 BUY Signal for {symbol.upper()} on {timeframe}!\n"
+            f"ENTRY: ${price:,.2f}\n"
+            f"STOP: ${stop_price:,.2f}\n"
+            f"TP1: ${tp1:,.2f}\n"
+            f"TP2: ${tp2:,.2f}\n"
+            f"TP3: ${tp3:,.2f}"
+        )
+    else:
+        preview = (
+            f"🔻 SELL Signal for {symbol.upper()} on {timeframe}!\n"
+            f"ENTRY: ${price:,.2f}\n"
+            f"STOP: ${stop_price:,.2f}\n"
+            f"TP1: ${tp1:,.2f}\n"
+            f"TP2: ${tp2:,.2f}\n"
+            f"TP3: ${tp3:,.2f}"
+        )
+
     st.text_area("Preview", preview, height=150)
-    
+
     if st.button("Send🚀"):
         try:
-            requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id":tg_chat, "text":preview})
-            st.success("✅ Signal sent to Telegram.")
+            url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+            data = {"chat_id": tg_chat, "text": preview}
+            resp = requests.post(url, data=data, timeout=10)
+            if resp.status_code == 200:
+                st.success("✅ Signal sent to Telegram.")
+            else:
+                st.error(f"❌ Telegram API error: {resp.status_code} - {resp.text}")
         except Exception as e:
             st.error(f"❌ Failed to send Telegram message: {e}")
 else:
     st.sidebar.subheader("📡 Broadcast (No Signal to Send)")
 
 st.caption("TITAN Engine Online | REST Feed Active | Cloud Stable")
+
