@@ -5,51 +5,74 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import requests
-import websocket
 import json
 import threading
-import asyncio
-import pickle
-import hashlib
-import warnings
-from datetime import datetime, timedelta
 import time
 import sqlite3
 import logging
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any, Callable
-import yaml
-import os
-from pathlib import Path
-import sys
-from dataclasses import dataclass
-from enum import Enum
-import talib
-from scipy import stats
-import ccxt
-import pandas_ta as ta
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import IsolationForest
-import joblib
-import boto3
-import redis
-import psutil
-import gc
+import warnings
+warnings.filterwarnings('ignore')
 
 # =========================
-# CONFIGURATION & CONSTANTS
+# FALLBACK IMPORTS WITH GRACEFUL DEGRADATION
+# =========================
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    st.warning("yfinance not installed. Using alternative data source.")
+
+try:
+    import pandas_ta as ta
+    PANDAS_TA_AVAILABLE = True
+except ImportError:
+    PANDAS_TA_AVAILABLE = False
+    st.warning("pandas_ta not installed. Some indicators may be limited.")
+
+try:
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.ensemble import IsolationForest
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    st.warning("scikit-learn not installed. ML features disabled.")
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
+try:
+    import joblib
+    JOBLIB_AVAILABLE = True
+except ImportError:
+    JOBLIB_AVAILABLE = False
+
+# Try to import websocket but provide fallback
+try:
+    import websocket
+    WEBSOCKET_AVAILABLE = True
+except ImportError:
+    WEBSOCKET_AVAILABLE = False
+    st.info("WebSocket not available. Real-time features will use polling.")
+
+# =========================
+# CONFIGURATION
 # =========================
 CONFIG = {
-    'version': '3.0.0',
     'app_name': 'TITAN INTRADAY PRO',
     'cache_ttl': 30,
-    'max_candles': 5000,
-    'db_path': 'data/titan.db',
-    'log_path': 'logs/titan.log',
-    'backtest_days': 365,
-    'max_position_size': 0.1,  # 10% of capital
-    'min_position_size': 0.01,  # 1% of capital
-    'commission_rate': 0.001,  # 0.1%
-    'slippage_rate': 0.0005,   # 0.05%
+    'max_candles': 2000,
+    'db_path': 'titan_trading.db',
+    'default_symbol': 'BTC-USD',
+    'default_timeframe': '5m',
+    'initial_capital': 10000,
+    'max_position_size': 0.1,
+    'min_position_size': 0.01,
 }
 
 # =========================
@@ -57,17 +80,15 @@ CONFIG = {
 # =========================
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(CONFIG['log_path']),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 # =========================
 # ENUMS & DATA CLASSES
 # =========================
+from enum import Enum
+
 class TimeFrame(Enum):
     M1 = "1m"
     M5 = "5m"
@@ -77,16 +98,6 @@ class TimeFrame(Enum):
     H4 = "4h"
     D1 = "1d"
 
-class OrderType(Enum):
-    MARKET = "MARKET"
-    LIMIT = "LIMIT"
-    STOP = "STOP"
-    STOP_LIMIT = "STOP_LIMIT"
-
-class OrderSide(Enum):
-    BUY = "BUY"
-    SELL = "SELL"
-
 class SignalType(Enum):
     STRONG_BUY = "STRONG_BUY"
     BUY = "BUY"
@@ -94,33 +105,8 @@ class SignalType(Enum):
     SELL = "SELL"
     STRONG_SELL = "STRONG_SELL"
 
-@dataclass
-class Signal:
-    timestamp: datetime
-    symbol: str
-    signal_type: SignalType
-    price: float
-    confidence: float
-    indicators: Dict[str, float]
-    metadata: Dict[str, Any]
-
-@dataclass
-class Trade:
-    id: str
-    entry_time: datetime
-    exit_time: Optional[datetime]
-    symbol: str
-    side: OrderSide
-    entry_price: float
-    exit_price: Optional[float]
-    size: float
-    stop_loss: float
-    take_profit: float
-    pnl: Optional[float]
-    status: str
-
 # =========================
-# DATABASE MANAGER
+# DATABASE MANAGER (SIMPLIFIED)
 # =========================
 class DatabaseManager:
     def __init__(self, db_path: str = CONFIG['db_path']):
@@ -128,7 +114,7 @@ class DatabaseManager:
         self._init_database()
     
     def _init_database(self):
-        """Initialize database with all required tables"""
+        """Initialize SQLite database"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -141,9 +127,7 @@ class DatabaseManager:
                 signal_type TEXT,
                 price REAL,
                 confidence REAL,
-                indicators TEXT,
-                metadata TEXT,
-                processed BOOLEAN DEFAULT 0
+                processed INTEGER DEFAULT 0
             )
         ''')
         
@@ -158,75 +142,28 @@ class DatabaseManager:
                 entry_price REAL,
                 exit_price REAL,
                 size REAL,
-                stop_loss REAL,
-                take_profit REAL,
                 pnl REAL,
-                status TEXT,
-                commission REAL,
-                slippage REAL
-            )
-        ''')
-        
-        # Market data table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS market_data (
-                timestamp DATETIME,
-                symbol TEXT,
-                timeframe TEXT,
-                open REAL,
-                high REAL,
-                low REAL,
-                close REAL,
-                volume REAL,
-                PRIMARY KEY (timestamp, symbol, timeframe)
-            )
-        ''')
-        
-        # Performance metrics
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS performance (
-                date DATE,
-                symbol TEXT,
-                total_trades INTEGER,
-                winning_trades INTEGER,
-                total_pnl REAL,
-                win_rate REAL,
-                profit_factor REAL,
-                sharpe_ratio REAL,
-                max_drawdown REAL,
-                PRIMARY KEY (date, symbol)
-            )
-        ''')
-        
-        # User settings
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_settings (
-                user_id TEXT PRIMARY KEY,
-                settings TEXT,
-                last_updated DATETIME
+                status TEXT
             )
         ''')
         
         conn.commit()
         conn.close()
     
-    def save_signal(self, signal: Signal) -> int:
+    def save_signal(self, signal: Dict) -> int:
         """Save signal to database"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT INTO signals 
-            (timestamp, symbol, signal_type, price, confidence, indicators, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO signals (timestamp, symbol, signal_type, price, confidence)
+            VALUES (?, ?, ?, ?, ?)
         ''', (
-            signal.timestamp,
-            signal.symbol,
-            signal.signal_type.value,
-            signal.price,
-            signal.confidence,
-            json.dumps(signal.indicators),
-            json.dumps(signal.metadata)
+            signal['timestamp'],
+            signal['symbol'],
+            signal['signal_type'],
+            signal['price'],
+            signal['confidence']
         ))
         
         signal_id = cursor.lastrowid
@@ -235,7 +172,7 @@ class DatabaseManager:
         
         return signal_id
     
-    def get_recent_signals(self, symbol: str, limit: int = 50) -> List[Dict]:
+    def get_recent_signals(self, symbol: str, limit: int = 20) -> List[Dict]:
         """Get recent signals for a symbol"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -254,122 +191,208 @@ class DatabaseManager:
         return signals
 
 # =========================
-# MARKET DATA MANAGER
+# MARKET DATA MANAGER (WITH YFINANCE FALLBACK)
 # =========================
 class MarketDataManager:
     def __init__(self):
-        self.exchange = ccxt.binance({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
         self.cache = {}
-        self.ws_connections = {}
+    
+    def fetch_ohlcv_yfinance(self, symbol: str, interval: str, period: str = "60d") -> pd.DataFrame:
+        """Fetch OHLCV data using yfinance"""
+        if not YFINANCE_AVAILABLE:
+            raise ImportError("yfinance not available")
+        
+        # Map intervals
+        interval_map = {
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d"
+        }
+        
+        yf_interval = interval_map.get(interval, "5m")
+        
+        # Adjust period based on interval
+        if yf_interval in ["1m", "5m"]:
+            period = "7d"
+        elif yf_interval in ["15m", "30m"]:
+            period = "60d"
+        elif yf_interval == "1h":
+            period = "730d"
+        else:
+            period = "max"
+        
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period, interval=yf_interval)
+            
+            if df.empty:
+                # Try alternative symbol format
+                if "-" in symbol:
+                    alt_symbol = symbol.replace("-", "")
+                else:
+                    alt_symbol = f"{symbol}-USD"
+                
+                ticker = yf.Ticker(alt_symbol)
+                df = ticker.history(period=period, interval=yf_interval)
+            
+            # Rename columns to standard format
+            df = df.rename(columns={
+                'Open': 'open',
+                'High': 'high',
+                'Low': 'low',
+                'Close': 'close',
+                'Volume': 'volume'
+            })
+            
+            df.index.name = 'timestamp'
+            df = df[['open', 'high', 'low', 'close', 'volume']].dropna()
+            
+            return df
+        
+        except Exception as e:
+            logger.error(f"Error fetching data with yfinance: {e}")
+            return pd.DataFrame()
+    
+    def fetch_ohlcv_binance(self, symbol: str, interval: str, limit: int = 1000) -> pd.DataFrame:
+        """Fetch OHLCV data from Binance API"""
+        try:
+            # Convert symbol format
+            binance_symbol = symbol.replace("-", "")
+            if not binance_symbol.endswith("USDT"):
+                binance_symbol += "USDT"
+            
+            # Map intervals
+            interval_map = {
+                "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                "1h": "1h", "4h": "4h", "1d": "1d"
+            }
+            
+            binance_interval = interval_map.get(interval, "5m")
+            
+            url = "https://api.binance.com/api/v3/klines"
+            params = {
+                "symbol": binance_symbol,
+                "interval": binance_interval,
+                "limit": limit
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            df = pd.DataFrame(data, columns=[
+                "timestamp", "open", "high", "low", "close", "volume",
+                "close_time", "quote_volume", "trades", "taker_buy_base",
+                "taker_buy_quote", "ignore"
+            ])
+            
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
+            df.set_index("timestamp", inplace=True)
+            
+            # Convert to float
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = df[col].astype(float)
+            
+            return df[["open", "high", "low", "close", "volume"]]
+        
+        except Exception as e:
+            logger.error(f"Error fetching data from Binance: {e}")
+            # Fallback to yfinance
+            if YFINANCE_AVAILABLE:
+                return self.fetch_ohlcv_yfinance(symbol, interval)
+            return pd.DataFrame()
     
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 1000) -> pd.DataFrame:
-        """Fetch OHLCV data from exchange"""
+        """Main method to fetch OHLCV data with fallbacks"""
         cache_key = f"{symbol}_{timeframe}_{limit}"
         
+        # Check cache
         if cache_key in self.cache:
             cached_time, data = self.cache[cache_key]
             if (datetime.now() - cached_time).seconds < CONFIG['cache_ttl']:
                 return data.copy()
         
-        try:
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            
-            self.cache[cache_key] = (datetime.now(), df.copy())
-            
-            logger.info(f"Fetched {len(df)} candles for {symbol} {timeframe}")
-            return df
+        # Try Binance first
+        df = self.fetch_ohlcv_binance(symbol, timeframe, limit)
         
-        except Exception as e:
-            logger.error(f"Error fetching data for {symbol}: {str(e)}")
-            return pd.DataFrame()
-    
-    def fetch_multiple_timeframes(self, symbol: str, timeframes: List[str]) -> Dict[str, pd.DataFrame]:
-        """Fetch data for multiple timeframes"""
-        result = {}
-        for tf in timeframes:
-            df = self.fetch_ohlcv(symbol, tf, 1000)
-            if not df.empty:
-                result[tf] = df
-        return result
-    
-    def get_order_book(self, symbol: str, limit: int = 20) -> Dict:
-        """Get order book data"""
-        try:
-            order_book = self.exchange.fetch_order_book(symbol, limit)
-            return order_book
-        except Exception as e:
-            logger.error(f"Error fetching order book: {str(e)}")
-            return {}
+        # If empty, try yfinance
+        if df.empty and YFINANCE_AVAILABLE:
+            df = self.fetch_ohlcv_yfinance(symbol, timeframe)
+        
+        # Cache the result
+        if not df.empty:
+            self.cache[cache_key] = (datetime.now(), df.copy())
+        
+        return df
 
 # =========================
-# ADVANCED INDICATOR ENGINE
+# TECHNICAL INDICATOR ENGINE
 # =========================
 class IndicatorEngine:
     @staticmethod
-    def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         """Calculate comprehensive set of technical indicators"""
         df = df.copy()
         
-        # Price-based indicators
+        # Ensure we have enough data
+        if len(df) < 50:
+            return df
+        
+        # Price-based calculations
         df['returns'] = df['close'].pct_change()
-        df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
         
-        # Trend indicators
-        df['sma_20'] = talib.SMA(df['close'], timeperiod=20)
-        df['sma_50'] = talib.SMA(df['close'], timeperiod=50)
-        df['sma_200'] = talib.SMA(df['close'], timeperiod=200)
-        df['ema_12'] = talib.EMA(df['close'], timeperiod=12)
-        df['ema_26'] = talib.EMA(df['close'], timeperiod=26)
-        df['wma'] = talib.WMA(df['close'], timeperiod=20)
-        df['dema'] = talib.DEMA(df['close'], timeperiod=30)
-        df['tema'] = talib.TEMA(df['close'], timeperiod=30)
+        # Simple Moving Averages
+        df['sma_20'] = df['close'].rolling(window=20).mean()
+        df['sma_50'] = df['close'].rolling(window=50).mean()
+        df['sma_200'] = df['close'].rolling(window=200).mean()
         
-        # Momentum indicators
-        df['rsi'] = talib.RSI(df['close'], timeperiod=14)
-        df['stoch_k'], df['stoch_d'] = talib.STOCH(df['high'], df['low'], df['close'])
-        df['macd'], df['macd_signal'], df['macd_hist'] = talib.MACD(df['close'])
-        df['adx'] = talib.ADX(df['high'], df['low'], df['close'], timeperiod=14)
-        df['cci'] = talib.CCI(df['high'], df['low'], df['close'], timeperiod=20)
-        df['mfi'] = talib.MFI(df['high'], df['low'], df['close'], df['volume'], timeperiod=14)
-        df['williams_r'] = talib.WILLR(df['high'], df['low'], df['close'], timeperiod=14)
-        df['momentum'] = talib.MOM(df['close'], timeperiod=10)
+        # Exponential Moving Averages
+        df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
+        df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
         
-        # Volatility indicators
-        df['atr'] = talib.ATR(df['high'], df['low'], df['close'], timeperiod=14)
-        df['natr'] = talib.NATR(df['high'], df['low'], df['close'], timeperiod=14)
-        df['bollinger_upper'], df['bollinger_middle'], df['bollinger_lower'] = talib.BBANDS(
-            df['close'], timeperiod=20, nbdevup=2, nbdevdn=2
-        )
+        # MACD
+        df['macd'] = df['ema_12'] - df['ema_26']
+        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        df['macd_hist'] = df['macd'] - df['macd_signal']
+        
+        # RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        
+        # Bollinger Bands
+        df['bb_middle'] = df['close'].rolling(window=20).mean()
+        bb_std = df['close'].rolling(window=20).std()
+        df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
+        df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+        
+        # Average True Range (ATR)
+        high_low = df['high'] - df['low']
+        high_close = abs(df['high'] - df['close'].shift())
+        low_close = abs(df['low'] - df['close'].shift())
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        df['atr'] = true_range.rolling(window=14).mean()
         
         # Volume indicators
-        df['obv'] = talib.OBV(df['close'], df['volume'])
-        df['volume_sma'] = df['volume'].rolling(20).mean()
+        df['volume_sma'] = df['volume'].rolling(window=20).mean()
         df['volume_ratio'] = df['volume'] / df['volume_sma']
         
-        # Cycle indicators
-        df['ht_dcperiod'] = talib.HT_DCPERIOD(df['close'])
-        df['ht_dcphase'] = talib.HT_DCPHASE(df['close'])
-        df['ht_phasor_inphase'], df['ht_phasor_quadrature'] = talib.HT_PHASOR(df['close'])
-        df['ht_sine'], df['ht_leadsine'] = talib.HT_SINE(df['close'])
-        df['ht_trendmode'] = talib.HT_TRENDMODE(df['close'])
+        # VWAP (daily)
+        df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
         
-        # Pattern recognition
-        df['cdl_doji'] = talib.CDLDOJI(df['open'], df['high'], df['low'], df['close'])
-        df['cdl_hammer'] = talib.CDLHAMMER(df['open'], df['high'], df['low'], df['close'])
-        df['cdl_engulfing'] = talib.CDLENGULFING(df['open'], df['high'], df['low'], df['close'])
-        df['cdl_morningstar'] = talib.CDLMORNINGSTAR(df['open'], df['high'], df['low'], df['close'])
-        df['cdl_eveningstar'] = talib.CDLEVENINGSTAR(df['open'], df['high'], df['low'], df['close'])
+        # Stochastic Oscillator
+        low_14 = df['low'].rolling(window=14).min()
+        high_14 = df['high'].rolling(window=14).max()
+        df['stoch_k'] = 100 * ((df['close'] - low_14) / (high_14 - low_14))
+        df['stoch_d'] = df['stoch_k'].rolling(window=3).mean()
         
-        # Statistical indicators
-        df['z_score'] = (df['close'] - df['close'].rolling(20).mean()) / df['close'].rolling(20).std()
-        df['skew'] = df['returns'].rolling(50).skew()
-        df['kurtosis'] = df['returns'].rolling(50).kurtosis()
+        # Parabolic SAR (simplified)
+        df['sar'] = IndicatorEngine._calculate_sar(df)
+        
+        # ADX (simplified)
+        df['adx'] = IndicatorEngine._calculate_adx(df)
         
         # Custom indicators
         df = IndicatorEngine._calculate_custom_indicators(df)
@@ -377,163 +400,265 @@ class IndicatorEngine:
         return df
     
     @staticmethod
+    def _calculate_sar(df: pd.DataFrame) -> pd.Series:
+        """Calculate Parabolic SAR (simplified)"""
+        sar = pd.Series(np.nan, index=df.index)
+        
+        if len(df) < 2:
+            return sar
+        
+        # Start values
+        sar.iloc[0] = df['low'].iloc[0]
+        trend = 1  # 1 for uptrend, -1 for downtrend
+        af = 0.02  # acceleration factor
+        ep = df['high'].iloc[0]  # extreme point
+        
+        for i in range(1, len(df)):
+            if trend == 1:
+                sar.iloc[i] = sar.iloc[i-1] + af * (ep - sar.iloc[i-1])
+                
+                if df['low'].iloc[i] < sar.iloc[i]:
+                    trend = -1
+                    sar.iloc[i] = ep
+                    af = 0.02
+                    ep = df['low'].iloc[i]
+                else:
+                    if df['high'].iloc[i] > ep:
+                        ep = df['high'].iloc[i]
+                        af = min(af + 0.02, 0.2)
+            
+            else:  # downtrend
+                sar.iloc[i] = sar.iloc[i-1] + af * (ep - sar.iloc[i-1])
+                
+                if df['high'].iloc[i] > sar.iloc[i]:
+                    trend = 1
+                    sar.iloc[i] = ep
+                    af = 0.02
+                    ep = df['high'].iloc[i]
+                else:
+                    if df['low'].iloc[i] < ep:
+                        ep = df['low'].iloc[i]
+                        af = min(af + 0.02, 0.2)
+        
+        return sar
+    
+    @staticmethod
+    def _calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Calculate Average Directional Index (simplified)"""
+        if len(df) < period * 2:
+            return pd.Series(np.nan, index=df.index)
+        
+        # True Range
+        high_low = df['high'] - df['low']
+        high_close = abs(df['high'] - df['close'].shift())
+        low_close = abs(df['low'] - df['close'].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        
+        # Directional Movement
+        up_move = df['high'] - df['high'].shift()
+        down_move = df['low'].shift() - df['low']
+        
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        
+        # Smooth the values
+        tr_smooth = tr.rolling(window=period).mean()
+        plus_di = 100 * (pd.Series(plus_dm).rolling(window=period).mean() / tr_smooth)
+        minus_di = 100 * (pd.Series(minus_dm).rolling(window=period).mean() / tr_smooth)
+        
+        # DX and ADX
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.rolling(window=period).mean()
+        
+        return adx
+    
+    @staticmethod
     def _calculate_custom_indicators(df: pd.DataFrame) -> pd.DataFrame:
         """Calculate custom proprietary indicators"""
-        # SuperTrend
-        df['supertrend'] = ta.supertrend(df['high'], df['low'], df['close'], length=10, multiplier=3)['SUPERT_10_3.0']
+        # Supertrend (simplified)
+        df['hl2'] = (df['high'] + df['low']) / 2
+        df['basic_upper'] = df['hl2'] + (df['atr'] * 2)
+        df['basic_lower'] = df['hl2'] - (df['atr'] * 2)
         
-        # VWAP
-        df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
+        # Trend detection
+        df['trend'] = np.where(df['close'] > df['ema_12'], 1, -1)
         
-        # Volume Profile
-        df['vp_buy_volume'] = np.where(df['close'] > df['open'], df['volume'], 0)
-        df['vp_sell_volume'] = np.where(df['close'] <= df['open'], df['volume'], 0)
+        # Volatility ratio
+        df['volatility'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
         
-        # Market Profile
-        df['tpoc'] = df.groupby(pd.Grouper(freq='D'))['volume'].transform('idxmax')
+        # Price position in Bollinger Band
+        df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
         
-        # Advanced ATR
-        df['atr_pct'] = (df['atr'] / df['close']) * 100
-        df['atr_ratio'] = df['atr'] / df['atr'].rolling(50).mean()
-        
-        # Trend strength composite
-        trend_indicators = ['adx', 'rsi', 'macd_hist', 'momentum']
-        df['trend_strength'] = df[trend_indicators].apply(
-            lambda row: np.mean([(row['adx']/100), (abs(row['rsi']-50)/50), 
-                               abs(row['macd_hist']/row['macd_hist'].std()), 
-                               abs(row['momentum']/row['momentum'].std())]), axis=1
-        )
-        
-        # Support/Resistance levels
-        df['pivot'] = (df['high'] + df['low'] + df['close']) / 3
-        df['r1'] = 2 * df['pivot'] - df['low']
-        df['s1'] = 2 * df['pivot'] - df['high']
+        # RSI momentum
+        df['rsi_momentum'] = df['rsi'].diff(5)
         
         return df
     
     @staticmethod
-    def detect_divergence(df: pd.DataFrame) -> pd.DataFrame:
-        """Detect RSI and MACD divergences"""
+    def detect_divergences(df: pd.DataFrame) -> pd.DataFrame:
+        """Detect bullish and bearish divergences"""
         df = df.copy()
         
-        # RSI divergence
-        df['rsi_high'] = df['rsi'].rolling(5, center=True).max()
-        df['price_high'] = df['close'].rolling(5, center=True).max()
-        df['bearish_divergence'] = (df['price_high'] > df['price_high'].shift(10)) & (df['rsi_high'] < df['rsi_high'].shift(10))
-        df['bullish_divergence'] = (df['price_high'] < df['price_high'].shift(10)) & (df['rsi_high'] > df['rsi_high'].shift(10))
+        # Find peaks and troughs
+        df['peak'] = (df['close'].shift(1) < df['close']) & (df['close'].shift(-1) < df['close'])
+        df['trough'] = (df['close'].shift(1) > df['close']) & (df['close'].shift(-1) > df['close'])
+        
+        # RSI divergences
+        df['rsi_peak'] = (df['rsi'].shift(1) < df['rsi']) & (df['rsi'].shift(-1) < df['rsi'])
+        df['rsi_trough'] = (df['rsi'].shift(1) > df['rsi']) & (df['rsi'].shift(-1) > df['rsi'])
+        
+        # Detect divergences
+        df['bearish_divergence'] = False
+        df['bullish_divergence'] = False
+        
+        for i in range(20, len(df)):
+            # Bearish divergence (price makes higher high, RSI makes lower high)
+            if df['peak'].iloc[i] and df['rsi_peak'].iloc[i-10:i].any():
+                df.loc[df.index[i], 'bearish_divergence'] = True
+            
+            # Bullish divergence (price makes lower low, RSI makes higher low)
+            if df['trough'].iloc[i] and df['rsi_trough'].iloc[i-10:i].any():
+                df.loc[df.index[i], 'bullish_divergence'] = True
         
         return df
 
 # =========================
-# MACHINE LEARNING SIGNAL ENGINE
+# SIGNAL GENERATION ENGINE
 # =========================
-class MLSignalEngine:
+class SignalEngine:
     def __init__(self):
-        self.models = {}
-        self.scaler = StandardScaler()
-        self.feature_columns = []
+        self.signals = []
     
-    def prepare_features(self, df: pd.DataFrame) -> Tuple[np.ndarray, List[str]]:
-        """Prepare features for ML model"""
-        feature_df = df.copy()
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Generate trading signals using multiple strategies"""
+        df = df.copy()
         
-        # Lag features
-        for lag in [1, 2, 3, 5, 10]:
-            feature_df[f'close_lag_{lag}'] = feature_df['close'].shift(lag)
-            feature_df[f'volume_lag_{lag}'] = feature_df['volume'].shift(lag)
-            feature_df[f'rsi_lag_{lag}'] = feature_df['rsi'].shift(lag)
+        # Initialize signal columns
+        df['signal'] = 0
+        df['signal_strength'] = 0
+        df['signal_type'] = 'NEUTRAL'
         
-        # Rolling statistics
-        feature_df['close_ma_ratio'] = feature_df['close'] / feature_df['close'].rolling(20).mean()
-        feature_df['volume_ma_ratio'] = feature_df['volume'] / feature_df['volume'].rolling(20).mean()
-        feature_df['volatility'] = feature_df['returns'].rolling(20).std()
+        # Strategy 1: Trend Following (MACD + EMA)
+        macd_buy = (df['macd'] > df['macd_signal']) & (df['macd'].shift() <= df['macd_signal'].shift())
+        macd_sell = (df['macd'] < df['macd_signal']) & (df['macd'].shift() >= df['macd_signal'].shift())
         
-        # Price action features
-        feature_df['body_size'] = abs(feature_df['close'] - feature_df['open']) / feature_df['atr']
-        feature_df['upper_shadow'] = (feature_df['high'] - feature_df[['open', 'close']].max(axis=1)) / feature_df['atr']
-        feature_df['lower_shadow'] = (feature_df[['open', 'close']].min(axis=1) - feature_df['low']) / feature_df['atr']
+        # Strategy 2: Mean Reversion (RSI + Bollinger)
+        rsi_oversold = (df['rsi'] < 30) & (df['close'] < df['bb_lower'])
+        rsi_overbought = (df['rsi'] > 70) & (df['close'] > df['bb_upper'])
         
-        # Technical indicator features
-        feature_df['macd_signal_diff'] = feature_df['macd'] - feature_df['macd_signal']
-        feature_df['bollinger_position'] = (feature_df['close'] - feature_df['bollinger_lower']) / (feature_df['bollinger_upper'] - feature_df['bollinger_lower'])
+        # Strategy 3: Breakout (ATR based)
+        atr_breakout = df['close'] > (df['high'].rolling(20).max().shift() + df['atr'])
+        atr_breakdown = df['close'] < (df['low'].rolling(20).min().shift() - df['atr'])
         
-        # Drop NaN values
-        feature_df = feature_df.dropna()
+        # Strategy 4: Moving Average Crossover
+        ma_cross_buy = (df['ema_12'] > df['ema_26']) & (df['ema_12'].shift() <= df['ema_26'].shift())
+        ma_cross_sell = (df['ema_12'] < df['ema_26']) & (df['ema_12'].shift() >= df['ema_26'].shift())
         
-        # Select feature columns
-        self.feature_columns = [col for col in feature_df.columns if col not in ['open', 'high', 'low', 'close', 'volume', 'returns', 'timestamp']]
+        # Strategy 5: Volume Confirmation
+        volume_spike = df['volume'] > (df['volume'].rolling(20).mean() * 1.5)
         
-        X = feature_df[self.feature_columns].values
-        X_scaled = self.scaler.fit_transform(X)
-        
-        return X_scaled, self.feature_columns
-    
-    def train_anomaly_detector(self, df: pd.DataFrame):
-        """Train isolation forest for anomaly detection"""
-        X, _ = self.prepare_features(df)
-        
-        # Train isolation forest
-        iso_forest = IsolationForest(
-            n_estimators=100,
-            contamination=0.1,
-            random_state=42
+        # Combine signals with weights
+        buy_signals = (
+            (macd_buy * 0.3) + 
+            (rsi_oversold * 0.2) + 
+            (atr_breakout * 0.2) + 
+            (ma_cross_buy * 0.2) + 
+            (volume_spike * 0.1)
         )
         
-        iso_forest.fit(X)
-        self.models['anomaly_detector'] = iso_forest
+        sell_signals = (
+            (macd_sell * 0.3) + 
+            (rsi_overbought * 0.2) + 
+            (atr_breakdown * 0.2) + 
+            (ma_cross_sell * 0.2) + 
+            (volume_spike * 0.1)
+        )
         
-        logger.info("Anomaly detector trained")
-    
-    def detect_anomalies(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Detect anomalous market conditions"""
-        if 'anomaly_detector' not in self.models:
-            return pd.DataFrame()
+        # Apply divergences as filters
+        df = IndicatorEngine.detect_divergences(df)
+        buy_signals = buy_signals & ~df['bearish_divergence']
+        sell_signals = sell_signals & ~df['bullish_divergence']
         
-        X, _ = self.prepare_features(df)
-        predictions = self.models['anomaly_detector'].predict(X)
+        # Set signals
+        df.loc[buy_signals, 'signal'] = 1
+        df.loc[sell_signals, 'signal'] = -1
         
-        df = df.iloc[-len(predictions):].copy()
-        df['anomaly'] = predictions == -1
-        df['anomaly_score'] = self.models['anomaly_detector'].decision_function(X)
+        # Calculate signal strength
+        df['signal_strength'] = abs(buy_signals.astype(int) * 0.5 + sell_signals.astype(int) * -0.5)
+        
+        # Determine signal type
+        df['signal_type'] = np.where(
+            df['signal'] == 1, 'BUY',
+            np.where(df['signal'] == -1, 'SELL', 'NEUTRAL')
+        )
+        
+        # For strong signals
+        strong_buy = buy_signals & (df['rsi'] < 40) & (df['volume_ratio'] > 1.5)
+        strong_sell = sell_signals & (df['rsi'] > 60) & (df['volume_ratio'] > 1.5)
+        
+        df.loc[strong_buy, 'signal_type'] = 'STRONG_BUY'
+        df.loc[strong_sell, 'signal_type'] = 'STRONG_SELL'
         
         return df
+    
+    def get_current_signal(self, df: pd.DataFrame) -> Dict:
+        """Get the most recent signal"""
+        if len(df) == 0 or 'signal_type' not in df.columns:
+            return {
+                'signal': 'NEUTRAL',
+                'strength': 0,
+                'price': 0,
+                'timestamp': datetime.now()
+            }
+        
+        latest = df.iloc[-1]
+        
+        return {
+            'signal': latest['signal_type'],
+            'strength': latest.get('signal_strength', 0),
+            'price': latest['close'],
+            'timestamp': latest.name if hasattr(latest, 'name') else datetime.now(),
+            'confidence': min(abs(latest.get('rsi', 50) - 50) / 50, 1.0)
+        }
 
 # =========================
-# ADVANCED BACKTESTING ENGINE
+# BACKTESTING ENGINE
 # =========================
 class BacktestingEngine:
     def __init__(self, initial_capital: float = 10000):
         self.initial_capital = initial_capital
-        self.results = {}
         self.trades = []
     
-    def run_backtest(self, df: pd.DataFrame, signals: pd.Series, 
-                    stop_loss_pct: float = 0.02, take_profit_pct: float = 0.04,
-                    commission: float = 0.001) -> Dict:
-        """Run comprehensive backtest"""
+    def run_backtest(self, df: pd.DataFrame, commission: float = 0.001) -> Dict:
+        """Run backtest on historical data"""
+        if 'signal' not in df.columns:
+            return {}
         
         capital = self.initial_capital
         position = 0
         entry_price = 0
-        trade_history = []
-        equity_curve = []
+        trades = []
+        equity_curve = [capital]
         
         for i in range(1, len(df)):
             current_price = df['close'].iloc[i]
-            current_signal = signals.iloc[i]
+            current_signal = df['signal'].iloc[i]
             
-            equity_curve.append(capital + (position * current_price))
+            # Calculate current equity
+            current_equity = capital + (position * current_price)
+            equity_curve.append(current_equity)
             
             # Exit conditions
             if position > 0:  # Long position
-                stop_loss = entry_price * (1 - stop_loss_pct)
-                take_profit = entry_price * (1 + take_profit_pct)
+                # Simple trailing stop (10% from entry)
+                stop_loss = entry_price * 0.9
                 
-                if current_price <= stop_loss or current_price >= take_profit:
+                if current_price <= stop_loss:
                     pnl = (current_price - entry_price) * position
                     capital += pnl - (position * entry_price * commission)
-                    trade_history.append({
-                        'exit': df.index[i],
+                    trades.append({
+                        'entry_time': df.index[i-1],
+                        'exit_time': df.index[i],
                         'side': 'LONG',
                         'entry_price': entry_price,
                         'exit_price': current_price,
@@ -543,14 +668,14 @@ class BacktestingEngine:
                     position = 0
             
             elif position < 0:  # Short position
-                stop_loss = entry_price * (1 + stop_loss_pct)
-                take_profit = entry_price * (1 - take_profit_pct)
+                stop_loss = entry_price * 1.1
                 
-                if current_price >= stop_loss or current_price <= take_profit:
+                if current_price >= stop_loss:
                     pnl = (entry_price - current_price) * abs(position)
                     capital += pnl - (abs(position) * entry_price * commission)
-                    trade_history.append({
-                        'exit': df.index[i],
+                    trades.append({
+                        'entry_time': df.index[i-1],
+                        'exit_time': df.index[i],
                         'side': 'SHORT',
                         'entry_price': entry_price,
                         'exit_price': current_price,
@@ -560,39 +685,33 @@ class BacktestingEngine:
                     position = 0
             
             # Entry conditions
-            if position == 0:
+            if position == 0 and current_signal != 0:
                 if current_signal == 1:  # Buy signal
                     position = capital * 0.1 / current_price  # 10% of capital
                     entry_price = current_price
-                    trade_history.append({
-                        'entry': df.index[i],
-                        'side': 'LONG',
-                        'entry_price': entry_price
-                    })
                 
                 elif current_signal == -1:  # Sell signal
                     position = -capital * 0.1 / current_price  # 10% short
                     entry_price = current_price
-                    trade_history.append({
-                        'entry': df.index[i],
-                        'side': 'SHORT',
-                        'entry_price': entry_price
-                    })
         
-        # Calculate metrics
-        if trade_history:
-            trades_df = pd.DataFrame(trade_history)
-            winning_trades = trades_df[trades_df['pnl'] > 0] if 'pnl' in trades_df.columns else pd.DataFrame()
+        # Calculate performance metrics
+        if trades:
+            trades_df = pd.DataFrame(trades)
+            winning_trades = trades_df[trades_df['pnl'] > 0]
             
-            total_return = (capital - self.initial_capital) / self.initial_capital * 100
-            win_rate = len(winning_trades) / len(trades_df) * 100 if len(trades_df) > 0 else 0
+            total_return_pct = ((capital - self.initial_capital) / self.initial_capital) * 100
+            win_rate = (len(winning_trades) / len(trades_df)) * 100 if len(trades_df) > 0 else 0
             avg_win = winning_trades['pnl_pct'].mean() if len(winning_trades) > 0 else 0
             avg_loss = trades_df[trades_df['pnl'] < 0]['pnl_pct'].mean() if len(trades_df[trades_df['pnl'] < 0]) > 0 else 0
+            
             profit_factor = abs(winning_trades['pnl'].sum() / trades_df[trades_df['pnl'] < 0]['pnl'].sum()) if len(trades_df[trades_df['pnl'] < 0]) > 0 else float('inf')
             
-            # Sharpe Ratio (annualized)
+            # Sharpe Ratio (simplified)
             returns = pd.Series(equity_curve).pct_change().dropna()
-            sharpe_ratio = np.sqrt(252) * returns.mean() / returns.std() if len(returns) > 0 and returns.std() > 0 else 0
+            if len(returns) > 1 and returns.std() > 0:
+                sharpe_ratio = np.sqrt(252) * returns.mean() / returns.std()
+            else:
+                sharpe_ratio = 0
             
             # Maximum Drawdown
             equity_series = pd.Series(equity_curve)
@@ -600,13 +719,10 @@ class BacktestingEngine:
             drawdown = (equity_series - rolling_max) / rolling_max
             max_drawdown = drawdown.min() * 100
             
-            # Calmar Ratio
-            calmar_ratio = total_return / abs(max_drawdown) if max_drawdown != 0 else 0
-            
-            self.results = {
+            return {
                 'initial_capital': self.initial_capital,
                 'final_capital': capital,
-                'total_return_pct': total_return,
+                'total_return_pct': total_return_pct,
                 'total_trades': len(trades_df),
                 'winning_trades': len(winning_trades),
                 'win_rate': win_rate,
@@ -615,29 +731,22 @@ class BacktestingEngine:
                 'profit_factor': profit_factor,
                 'sharpe_ratio': sharpe_ratio,
                 'max_drawdown_pct': max_drawdown,
-                'calmar_ratio': calmar_ratio,
                 'trades': trades_df.to_dict('records')
             }
         
-        return self.results
+        return {}
 
 # =========================
 # RISK MANAGEMENT ENGINE
 # =========================
 class RiskManagementEngine:
-    def __init__(self, max_risk_per_trade: float = 0.02, max_portfolio_risk: float = 0.10):
+    def __init__(self, max_risk_per_trade: float = 0.02):
         self.max_risk_per_trade = max_risk_per_trade
-        self.max_portfolio_risk = max_portfolio_risk
-        self.active_positions = []
-        self.portfolio_value = 10000  # Default
     
-    def calculate_position_size(self, entry_price: float, stop_loss: float, 
-                              risk_percent: float = None) -> Dict:
-        """Calculate optimal position size based on risk parameters"""
-        if risk_percent is None:
-            risk_percent = self.max_risk_per_trade
-        
-        risk_amount = self.portfolio_value * risk_percent
+    def calculate_position_size(self, capital: float, entry_price: float, 
+                              stop_loss: float) -> Dict:
+        """Calculate optimal position size"""
+        risk_amount = capital * self.max_risk_per_trade
         stop_distance = abs(entry_price - stop_loss)
         
         if stop_distance == 0:
@@ -646,171 +755,34 @@ class RiskManagementEngine:
         position_size = risk_amount / stop_distance
         
         # Apply constraints
-        max_position = self.portfolio_value * CONFIG['max_position_size'] / entry_price
-        min_position = self.portfolio_value * CONFIG['min_position_size'] / entry_price
+        max_position = capital * CONFIG['max_position_size'] / entry_price
+        min_position = capital * CONFIG['min_position_size'] / entry_price
         
         position_size = max(min(position_size, max_position), min_position)
         
         # Calculate actual risk
         actual_risk = position_size * stop_distance
-        risk_percent_actual = actual_risk / self.portfolio_value
+        risk_percent = (actual_risk / capital) * 100
         
         return {
             'size': position_size,
             'risk_amount': actual_risk,
-            'risk_percent': risk_percent_actual * 100,
+            'risk_percent': risk_percent,
             'stop_distance': stop_distance,
-            'stop_distance_pct': (stop_distance / entry_price) * 100
+            'stop_percent': (stop_distance / entry_price) * 100
         }
-    
-    def calculate_var(self, returns: pd.Series, confidence_level: float = 0.95) -> float:
-        """Calculate Value at Risk"""
-        if len(returns) == 0:
-            return 0
-        
-        var = np.percentile(returns, (1 - confidence_level) * 100)
-        return var * self.portfolio_value
-    
-    def calculate_cvar(self, returns: pd.Series, confidence_level: float = 0.95) -> float:
-        """Calculate Conditional Value at Risk (Expected Shortfall)"""
-        if len(returns) == 0:
-            return 0
-        
-        var = self.calculate_var(returns, confidence_level) / self.portfolio_value
-        cvar = returns[returns <= var].mean()
-        
-        return cvar * self.portfolio_value if not np.isnan(cvar) else 0
 
 # =========================
-# WEBSOCKET REAL-TIME ENGINE
-# =========================
-class WebSocketManager:
-    def __init__(self):
-        self.ws = None
-        self.thread = None
-        self.running = False
-        self.data_queue = []
-        self.subscriptions = set()
-    
-    def connect(self, symbols: List[str]):
-        """Connect to Binance WebSocket"""
-        stream_names = [f"{symbol.lower()}@kline_1m" for symbol in symbols]
-        stream_names.extend([f"{symbol.lower()}@depth20@100ms" for symbol in symbols])
-        
-        ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(stream_names)}"
-        
-        self.ws = websocket.WebSocketApp(
-            ws_url,
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close
-        )
-        
-        self.running = True
-        self.thread = threading.Thread(target=self.ws.run_forever)
-        self.thread.daemon = True
-        self.thread.start()
-    
-    def _on_open(self, ws):
-        logger.info("WebSocket connection opened")
-    
-    def _on_message(self, ws, message):
-        try:
-            data = json.loads(message)
-            self.data_queue.append(data)
-            
-            # Process data in main thread
-            if hasattr(st, 'session_state'):
-                if 'websocket_data' not in st.session_state:
-                    st.session_state.websocket_data = []
-                st.session_state.websocket_data.append(data)
-                
-                # Keep only last 100 messages
-                if len(st.session_state.websocket_data) > 100:
-                    st.session_state.websocket_data = st.session_state.websocket_data[-100:]
-        
-        except Exception as e:
-            logger.error(f"Error processing WebSocket message: {str(e)}")
-    
-    def _on_error(self, ws, error):
-        logger.error(f"WebSocket error: {str(error)}")
-    
-    def _on_close(self, ws, close_status_code, close_msg):
-        logger.info(f"WebSocket connection closed: {close_status_code} - {close_msg}")
-        self.running = False
-    
-    def disconnect(self):
-        """Disconnect WebSocket"""
-        if self.ws:
-            self.ws.close()
-        self.running = False
-
-# =========================
-# ALERT SYSTEM
-# =========================
-class AlertSystem:
-    def __init__(self):
-        self.alerts = []
-        self.alert_rules = {}
-    
-    def add_alert_rule(self, name: str, condition: Callable, message: str, 
-                      priority: str = "MEDIUM"):
-        """Add alert rule"""
-        self.alert_rules[name] = {
-            'condition': condition,
-            'message': message,
-            'priority': priority,
-            'triggered': False,
-            'last_triggered': None
-        }
-    
-    def check_alerts(self, market_data: Dict) -> List[Dict]:
-        """Check all alert conditions"""
-        triggered_alerts = []
-        
-        for name, rule in self.alert_rules.items():
-            try:
-                if rule['condition'](market_data) and not rule['triggered']:
-                    alert = {
-                        'timestamp': datetime.now(),
-                        'name': name,
-                        'message': rule['message'],
-                        'priority': rule['priority'],
-                        'data': market_data
-                    }
-                    
-                    triggered_alerts.append(alert)
-                    self.alerts.append(alert)
-                    
-                    # Update rule state
-                    rule['triggered'] = True
-                    rule['last_triggered'] = datetime.now()
-                    
-                    # Log alert
-                    logger.info(f"Alert triggered: {name} - {rule['message']}")
-                    
-            except Exception as e:
-                logger.error(f"Error checking alert {name}: {str(e)}")
-        
-        return triggered_alerts
-    
-    def reset_alert(self, name: str):
-        """Reset alert trigger state"""
-        if name in self.alert_rules:
-            self.alert_rules[name]['triggered'] = False
-
-# =========================
-# MAIN APPLICATION CLASS
+# MAIN STREAMLIT APPLICATION
 # =========================
 class TitanTradingApp:
     def __init__(self):
-        self.setup_streamlit()
+        self.setup_page()
         self.init_components()
-        self.load_session_state()
+        self.init_session_state()
     
-    def setup_streamlit(self):
-        """Setup Streamlit configuration"""
+    def setup_page(self):
+        """Setup Streamlit page configuration"""
         st.set_page_config(
             layout="wide",
             page_title="TITAN INTRADAY PRO",
@@ -822,38 +794,29 @@ class TitanTradingApp:
         st.markdown("""
         <style>
         .main-header {
-            font-size: 3rem;
-            background: linear-gradient(45deg, #FF6B6B, #4ECDC4, #45B7D1, #96CEB4, #FFEAA7);
+            font-size: 2.5rem;
+            background: linear-gradient(45deg, #FF6B6B, #4ECDC4, #45B7D1);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             text-align: center;
-            margin-bottom: 2rem;
+            margin-bottom: 1rem;
         }
         .metric-card {
-            background: rgba(25, 25, 35, 0.9);
+            background: rgba(25, 25, 35, 0.8);
             border-radius: 10px;
             padding: 15px;
-            border-left: 5px solid #4CC9F0;
+            border-left: 4px solid #4CC9F0;
             margin-bottom: 10px;
         }
-        .signal-buy {
-            background: rgba(0, 200, 83, 0.2);
-            border-left: 5px solid #00C853;
-        }
-        .signal-sell {
-            background: rgba(255, 61, 0, 0.2);
-            border-left: 5px solid #FF3D00;
-        }
         .stTabs [data-baseweb="tab-list"] {
-            gap: 5px;
+            gap: 2px;
         }
         .stTabs [data-baseweb="tab"] {
-            border-radius: 5px 5px 0px 0px;
-            padding: 10px 20px;
             background: rgba(25, 25, 35, 0.7);
+            border-radius: 4px 4px 0px 0px;
         }
         .stTabs [aria-selected="true"] {
-            background: linear-gradient(45deg, #4361EE, #3A0CA3) !important;
+            background: linear-gradient(45deg, #4361EE, #3A0CA3);
         }
         </style>
         """, unsafe_allow_html=True)
@@ -863,31 +826,29 @@ class TitanTradingApp:
         self.db = DatabaseManager()
         self.market_data = MarketDataManager()
         self.indicators = IndicatorEngine()
-        self.ml_engine = MLSignalEngine()
+        self.signal_engine = SignalEngine()
         self.backtester = BacktestingEngine()
         self.risk_manager = RiskManagementEngine()
-        self.websocket = WebSocketManager()
-        self.alert_system = AlertSystem()
     
-    def load_session_state(self):
+    def init_session_state(self):
         """Initialize session state variables"""
-        if 'initialized' not in st.session_state:
-            st.session_state.initialized = True
-            st.session_state.selected_symbol = "BTCUSDT"
-            st.session_state.selected_timeframe = "5m"
-            st.session_state.market_data = {}
-            st.session_state.signals = []
-            st.session_state.alerts = []
-            st.session_state.websocket_data = []
-            st.session_state.last_update = datetime.now()
+        if 'data_loaded' not in st.session_state:
+            st.session_state.data_loaded = False
+        if 'df' not in st.session_state:
+            st.session_state.df = None
+        if 'signals' not in st.session_state:
+            st.session_state.signals = None
+        if 'performance' not in st.session_state:
+            st.session_state.performance = None
+        if 'symbol' not in st.session_state:
+            st.session_state.symbol = CONFIG['default_symbol']
+        if 'timeframe' not in st.session_state:
+            st.session_state.timeframe = CONFIG['default_timeframe']
     
     def render_header(self):
         """Render application header"""
         st.markdown('<h1 class="main-header">🚀 TITAN INTRADAY PRO</h1>', unsafe_allow_html=True)
-        
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.caption("Advanced AI-Powered Trading Platform • Real-Time Execution • Institutional Grade")
+        st.caption("Advanced Trading Platform • Real-Time Analytics • AI-Powered Signals")
     
     def render_sidebar(self):
         """Render sidebar controls"""
@@ -896,248 +857,177 @@ class TitanTradingApp:
             
             # Market Configuration
             with st.expander("⚙️ Market Configuration", expanded=True):
-                symbol = st.text_input("Symbol", "BTCUSDT").upper()
-                timeframe = st.selectbox("Timeframe", [tf.value for tf in TimeFrame], index=1)
-                candles = st.slider("Historical Candles", 100, 5000, 1000)
+                symbol = st.text_input("Symbol", CONFIG['default_symbol'])
+                timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h", "4h", "1d"], index=1)
+                candles = st.slider("Historical Candles", 100, 2000, 500)
                 
-                if st.button("🔄 Load Market Data", use_container_width=True):
-                    with st.spinner("Loading market data..."):
+                if st.button("📥 Load Market Data", use_container_width=True, type="primary"):
+                    with st.spinner("Loading data..."):
                         self.load_market_data(symbol, timeframe, candles)
             
-            # Strategy Configuration
-            with st.expander("🎯 Strategy Engine", expanded=True):
-                strategy_type = st.selectbox("Strategy Type", [
-                    "Trend Following", 
-                    "Mean Reversion", 
-                    "Breakout",
-                    "Multi-Timeframe",
-                    "ML Ensemble"
-                ])
+            # Strategy Settings
+            with st.expander("🎯 Trading Strategy", expanded=False):
+                strategy_type = st.selectbox(
+                    "Strategy Type",
+                    ["Trend Following", "Mean Reversion", "Breakout", "Multi-Indicator"]
+                )
                 
-                use_ml = st.checkbox("Enable ML Signals", True)
-                use_volume = st.checkbox("Volume Analysis", True)
-                use_market_profile = st.checkbox("Market Profile", False)
+                use_rsi = st.checkbox("Use RSI", True)
+                use_macd = st.checkbox("Use MACD", True)
+                use_volume = st.checkbox("Volume Confirmation", True)
                 
-                # Parameters
-                fast_period = st.slider("Fast Period", 5, 50, 12)
-                slow_period = st.slider("Slow Period", 20, 200, 26)
-                rsi_period = st.slider("RSI Period", 5, 30, 14)
-                atr_period = st.slider("ATR Period", 5, 30, 14)
+                rsi_overbought = st.slider("RSI Overbought", 70, 90, 70)
+                rsi_oversold = st.slider("RSI Oversold", 10, 30, 30)
             
             # Risk Management
-            with st.expander("🛡️ Risk Management", expanded=True):
+            with st.expander("🛡️ Risk Management", expanded=False):
                 risk_per_trade = st.slider("Risk per Trade %", 0.1, 5.0, 1.0, 0.1)
-                max_daily_loss = st.slider("Max Daily Loss %", 1.0, 10.0, 5.0, 0.5)
-                position_size_mode = st.selectbox("Position Sizing", ["Fixed", "Kelly", "Optimal f"])
+                self.risk_manager.max_risk_per_trade = risk_per_trade / 100
                 
-                # Stop Loss/Take Profit
-                sl_type = st.selectbox("Stop Loss Type", ["ATR", "Fixed %", "Trailing", "Dynamic"])
-                tp_type = st.selectbox("Take Profit Type", ["Risk Reward", "Fixed %", "Trailing"])
+                stop_loss_type = st.selectbox("Stop Loss", ["ATR-based", "Fixed %", "Trailing"])
                 
-                if sl_type == "ATR":
+                if stop_loss_type == "ATR-based":
                     atr_multiplier = st.slider("ATR Multiplier", 1.0, 5.0, 2.0, 0.5)
-                elif sl_type == "Fixed %":
-                    sl_percent = st.slider("Stop Loss %", 0.5, 5.0, 2.0, 0.1)
-                
-                if tp_type == "Risk Reward":
-                    rr_ratio = st.slider("Risk:Reward Ratio", 1.0, 5.0, 2.0, 0.5)
-            
-            # Alerts & Notifications
-            with st.expander("🔔 Alert System", expanded=False):
-                enable_alerts = st.checkbox("Enable Alerts", True)
-                alert_types = st.multiselect("Alert Types", [
-                    "Price Breakout",
-                    "Volume Spike",
-                    "RSI Extreme",
-                    "Divergence",
-                    "Pattern Recognition"
-                ])
-                
-                notification_channels = st.multiselect("Notification Channels", [
-                    "In-App", "Email", "Telegram", "SMS"
-                ])
+                elif stop_loss_type == "Fixed %":
+                    stop_loss_pct = st.slider("Stop Loss %", 0.5, 10.0, 2.0, 0.5)
             
             # System Controls
-            with st.expander("⚡ System Controls", expanded=False):
+            with st.expander("⚡ System", expanded=False):
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("▶️ Start Live", use_container_width=True):
-                        self.start_live_trading()
+                    if st.button("🔄 Refresh", use_container_width=True):
+                        st.cache_data.clear()
+                        st.rerun()
                 with col2:
-                    if st.button("⏸️ Pause", use_container_width=True):
-                        self.pause_trading()
-                
-                if st.button("🗑️ Clear Cache", use_container_width=True):
-                    st.cache_data.clear()
-                    st.rerun()
-            
-            # Performance Summary
-            with st.expander("📊 Quick Stats", expanded=False):
-                if 'performance' in st.session_state:
-                    perf = st.session_state.performance
-                    st.metric("Win Rate", f"{perf.get('win_rate', 0):.1f}%")
-                    st.metric("Profit Factor", f"{perf.get('profit_factor', 0):.2f}")
-                    st.metric("Sharpe Ratio", f"{perf.get('sharpe_ratio', 0):.2f}")
-                else:
-                    st.info("No performance data yet")
+                    if st.button("🗑️ Clear", use_container_width=True):
+                        st.session_state.clear()
+                        st.rerun()
     
     def load_market_data(self, symbol: str, timeframe: str, candles: int):
         """Load and process market data"""
         try:
-            with st.spinner(f"Loading {symbol} {timeframe} data..."):
-                # Fetch data
-                df = self.market_data.fetch_ohlcv(symbol, timeframe, candles)
-                
-                if df.empty:
-                    st.error("Failed to load market data")
-                    return
-                
-                # Calculate indicators
-                df = self.indicators.calculate_all_indicators(df)
-                
-                # Detect divergences
-                df = self.indicators.detect_divergence(df)
-                
-                # Train ML model
-                self.ml_engine.train_anomaly_detector(df)
-                
-                # Detect anomalies
-                df = self.ml_engine.detect_anomalies(df)
-                
-                # Generate signals
-                signals = self.generate_signals(df)
-                
-                # Store in session state
-                st.session_state.market_data = {
-                    'df': df,
+            # Fetch data
+            df = self.market_data.fetch_ohlcv(symbol, timeframe, candles)
+            
+            if df.empty:
+                st.error("❌ Failed to load market data. Check symbol and connection.")
+                return
+            
+            # Calculate indicators
+            df = self.indicators.calculate_indicators(df)
+            
+            # Generate signals
+            df = self.signal_engine.generate_signals(df)
+            
+            # Run backtest
+            performance = self.backtester.run_backtest(df)
+            
+            # Store in session state
+            st.session_state.df = df
+            st.session_state.signals = df[df['signal'] != 0]
+            st.session_state.performance = performance
+            st.session_state.symbol = symbol
+            st.session_state.timeframe = timeframe
+            st.session_state.data_loaded = True
+            
+            # Save to database
+            current_signal = self.signal_engine.get_current_signal(df)
+            if current_signal['signal'] != 'NEUTRAL':
+                signal_data = {
+                    'timestamp': current_signal['timestamp'],
                     'symbol': symbol,
-                    'timeframe': timeframe,
-                    'signals': signals,
-                    'last_updated': datetime.now()
+                    'signal_type': current_signal['signal'],
+                    'price': current_signal['price'],
+                    'confidence': current_signal['confidence']
                 }
-                
-                # Run backtest
-                if len(signals) > 0:
-                    backtest_results = self.backtester.run_backtest(
-                        df, signals, 
-                        stop_loss_pct=0.02, 
-                        take_profit_pct=0.04
-                    )
-                    st.session_state.performance = backtest_results
-                
-                st.success(f"Loaded {len(df)} candles for {symbol}")
-        
+                self.db.save_signal(signal_data)
+            
+            st.success(f"✅ Loaded {len(df)} candles for {symbol}")
+            
         except Exception as e:
-            st.error(f"Error loading market data: {str(e)}")
-            logger.exception("Market data loading error")
-    
-    def generate_signals(self, df: pd.DataFrame) -> pd.Series:
-        """Generate trading signals using multi-strategy approach"""
-        signals = pd.Series(0, index=df.index)
-        
-        # Strategy 1: Trend Following (MACD + EMA)
-        macd_buy = (df['macd'] > df['macd_signal']) & (df['macd'].shift() <= df['macd_signal'].shift())
-        macd_sell = (df['macd'] < df['macd_signal']) & (df['macd'].shift() >= df['macd_signal'].shift())
-        
-        # Strategy 2: Mean Reversion (RSI + Bollinger)
-        rsi_oversold = (df['rsi'] < 30) & (df['close'] < df['bollinger_lower'])
-        rsi_overbought = (df['rsi'] > 70) & (df['close'] > df['bollinger_upper'])
-        
-        # Strategy 3: Breakout (ATR based)
-        atr_breakout = df['close'] > (df['high'].rolling(20).max() + df['atr'])
-        atr_breakdown = df['close'] < (df['low'].rolling(20).min() - df['atr'])
-        
-        # Strategy 4: Volume Confirmation
-        volume_spike = df['volume'] > (df['volume'].rolling(20).mean() * 2)
-        volume_confirmation = (macd_buy & volume_spike) | (macd_sell & volume_spike)
-        
-        # Strategy 5: Pattern Recognition
-        bullish_pattern = (df['cdl_hammer'] > 0) | (df['cdl_morningstar'] > 0)
-        bearish_pattern = (df['cdl_doji'] > 0) | (df['cdl_eveningstar'] > 0)
-        
-        # Combine signals with weights
-        signals = (
-            (macd_buy * 0.3) + (rsi_oversold * 0.2) + (atr_breakout * 0.2) + 
-            (bullish_pattern * 0.1) + (volume_confirmation * 0.2)
-        ) - (
-            (macd_sell * 0.3) + (rsi_overbought * 0.2) + (atr_breakdown * 0.2) + 
-            (bearish_pattern * 0.1) + (volume_confirmation * 0.2)
-        )
-        
-        # Apply threshold
-        buy_signals = signals > 0.5
-        sell_signals = signals < -0.5
-        
-        final_signals = pd.Series(0, index=df.index)
-        final_signals[buy_signals] = 1
-        final_signals[sell_signals] = -1
-        
-        return final_signals
+            st.error(f"❌ Error loading data: {str(e)}")
+            logger.error(f"Data loading error: {e}")
     
     def render_dashboard(self):
         """Render main dashboard"""
-        # Performance Metrics Row
+        if not st.session_state.data_loaded or st.session_state.df is None:
+            st.info("👈 Load market data from the sidebar to begin")
+            return
+        
+        df = st.session_state.df
+        signals = st.session_state.signals
+        
+        # Performance Metrics
         st.subheader("📊 Performance Dashboard")
         
-        if 'performance' in st.session_state:
+        if st.session_state.performance:
             perf = st.session_state.performance
-            cols = st.columns(8)
             
+            cols = st.columns(6)
             metrics = [
                 ("💰 Total Return", f"{perf.get('total_return_pct', 0):.2f}%"),
                 ("📈 Win Rate", f"{perf.get('win_rate', 0):.1f}%"),
                 ("⚖️ Profit Factor", f"{perf.get('profit_factor', 0):.2f}"),
                 ("📉 Max Drawdown", f"{perf.get('max_drawdown_pct', 0):.2f}%"),
                 ("🎯 Sharpe Ratio", f"{perf.get('sharpe_ratio', 0):.2f}"),
-                ("📊 Calmar Ratio", f"{perf.get('calmar_ratio', 0):.2f}"),
-                ("🔢 Total Trades", f"{perf.get('total_trades', 0)}"),
-                ("✅ Winning Trades", f"{perf.get('winning_trades', 0)}")
+                ("🔢 Total Trades", f"{perf.get('total_trades', 0)}")
             ]
             
             for col, (label, value) in zip(cols, metrics):
                 with col:
                     st.metric(label, value)
         
+        # Current Market Status
+        st.subheader("📈 Market Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            current_price = df['close'].iloc[-1]
+            price_change = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2]) * 100
+            st.metric("Current Price", f"${current_price:,.2f}", f"{price_change:+.2f}%")
+        
+        with col2:
+            current_signal = self.signal_engine.get_current_signal(df)
+            signal_color = "green" if "BUY" in current_signal['signal'] else "red" if "SELL" in current_signal['signal'] else "gray"
+            st.metric("Current Signal", current_signal['signal'])
+        
+        with col3:
+            volume_ratio = df['volume_ratio'].iloc[-1]
+            st.metric("Volume Ratio", f"{volume_ratio:.2f}x")
+        
+        with col4:
+            rsi_value = df['rsi'].iloc[-1]
+            rsi_status = "Oversold" if rsi_value < 30 else "Overbought" if rsi_value > 70 else "Neutral"
+            st.metric("RSI", f"{rsi_value:.1f}", rsi_status)
+        
         # Main Chart Tabs
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📈 Price Chart", 
-            "📊 Indicators", 
-            "📉 Backtest Results", 
-            "🔍 Market Depth",
-            "⚙️ System Status"
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📊 Price Chart", 
+            "📈 Indicators", 
+            "📉 Backtest", 
+            "📋 Signals"
         ])
         
         with tab1:
-            self.render_price_chart()
+            self.render_price_chart(df, signals)
         
         with tab2:
-            self.render_indicator_panels()
+            self.render_indicator_panels(df)
         
         with tab3:
             self.render_backtest_results()
         
         with tab4:
-            self.render_market_depth()
-        
-        with tab5:
-            self.render_system_status()
+            self.render_signal_history()
     
-    def render_price_chart(self):
+    def render_price_chart(self, df: pd.DataFrame, signals: pd.DataFrame):
         """Render interactive price chart"""
-        if 'market_data' not in st.session_state or st.session_state.market_data.get('df') is None:
-            st.info("Load market data to view charts")
-            return
-        
-        df = st.session_state.market_data['df']
-        signals = st.session_state.market_data.get('signals', pd.Series())
-        
-        # Create subplots
         fig = make_subplots(
-            rows=4, cols=1,
+            rows=3, cols=1,
             shared_xaxes=True,
             vertical_spacing=0.05,
-            row_heights=[0.5, 0.2, 0.15, 0.15],
-            subplot_titles=('Price & Indicators', 'Volume', 'RSI', 'MACD')
+            row_heights=[0.6, 0.2, 0.2],
+            subplot_titles=('Price & Indicators', 'Volume', 'RSI')
         )
         
         # Candlestick
@@ -1169,41 +1059,41 @@ class TitanTradingApp:
         
         # Bollinger Bands
         fig.add_trace(
-            go.Scatter(x=df.index, y=df['bollinger_upper'], line=dict(color='gray', width=1, dash='dash'), 
+            go.Scatter(x=df.index, y=df['bb_upper'], line=dict(color='gray', width=1, dash='dash'), 
                       name='BB Upper', showlegend=False),
             row=1, col=1
         )
         fig.add_trace(
-            go.Scatter(x=df.index, y=df['bollinger_lower'], line=dict(color='gray', width=1, dash='dash'), 
+            go.Scatter(x=df.index, y=df['bb_lower'], line=dict(color='gray', width=1, dash='dash'), 
                       fill='tonexty', name='BB Lower', showlegend=False),
             row=1, col=1
         )
         
         # Buy/Sell signals
-        if len(signals) > 0:
-            buy_signals = df.index[signals == 1]
-            sell_signals = df.index[signals == -1]
+        if not signals.empty:
+            buy_signals = signals[signals['signal'] == 1]
+            sell_signals = signals[signals['signal'] == -1]
             
-            if len(buy_signals) > 0:
+            if not buy_signals.empty:
                 fig.add_trace(
                     go.Scatter(
-                        x=buy_signals,
-                        y=df.loc[buy_signals, 'close'],
+                        x=buy_signals.index,
+                        y=buy_signals['close'],
                         mode='markers',
-                        marker=dict(symbol='triangle-up', size=12, color='green'),
-                        name='Buy Signal'
+                        name='Buy Signal',
+                        marker=dict(symbol='triangle-up', size=10, color='green')
                     ),
                     row=1, col=1
                 )
             
-            if len(sell_signals) > 0:
+            if not sell_signals.empty:
                 fig.add_trace(
                     go.Scatter(
-                        x=sell_signals,
-                        y=df.loc[sell_signals, 'close'],
+                        x=sell_signals.index,
+                        y=sell_signals['close'],
                         mode='markers',
-                        marker=dict(symbol='triangle-down', size=12, color='red'),
-                        name='Sell Signal'
+                        name='Sell Signal',
+                        marker=dict(symbol='triangle-down', size=10, color='red')
                     ),
                     row=1, col=1
                 )
@@ -1230,23 +1120,9 @@ class TitanTradingApp:
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
         fig.add_hline(y=50, line_dash="dot", line_color="gray", row=3, col=1)
         
-        # MACD
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df['macd'], line=dict(color='blue', width=2), name='MACD'),
-            row=4, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df['macd_signal'], line=dict(color='red', width=2), name='Signal'),
-            row=4, col=1
-        )
-        fig.add_trace(
-            go.Bar(x=df.index, y=df['macd_hist'], name='Histogram', marker_color='gray'),
-            row=4, col=1
-        )
-        
         # Update layout
         fig.update_layout(
-            height=900,
+            height=800,
             showlegend=True,
             xaxis_rangeslider_visible=False,
             template="plotly_dark",
@@ -1255,66 +1131,54 @@ class TitanTradingApp:
         
         st.plotly_chart(fig, use_container_width=True)
     
-    def render_indicator_panels(self):
+    def render_indicator_panels(self, df: pd.DataFrame):
         """Render indicator panels"""
-        if 'market_data' not in st.session_state:
-            return
-        
-        df = st.session_state.market_data['df']
-        
         col1, col2 = st.columns(2)
         
         with col1:
             st.subheader("Trend Indicators")
             
-            trend_data = {
-                "ADX": df['adx'].iloc[-1],
-                "DMI+": talib.PLUS_DI(df['high'], df['low'], df['close']).iloc[-1],
-                "DMI-": talib.MINUS_DI(df['high'], df['low'], df['close']).iloc[-1],
-                "Parabolic SAR": talib.SAR(df['high'], df['low']).iloc[-1],
-                "Ichimoku Cloud": "Bullish" if df['close'].iloc[-1] > df['sma_20'].iloc[-1] else "Bearish"
+            trend_indicators = {
+                "MACD": df['macd'].iloc[-1],
+                "MACD Signal": df['macd_signal'].iloc[-1],
+                "MACD Hist": df['macd_hist'].iloc[-1],
+                "ADX": df['adx'].iloc[-1] if 'adx' in df.columns else 0,
+                "Trend": "Bullish" if df['trend'].iloc[-1] == 1 else "Bearish"
             }
             
-            for indicator, value in trend_data.items():
-                st.metric(indicator, f"{value:.2f}" if isinstance(value, (int, float)) else value)
+            for indicator, value in trend_indicators.items():
+                st.metric(indicator, f"{value:.4f}" if isinstance(value, float) else value)
         
         with col2:
             st.subheader("Momentum Indicators")
             
-            momentum_data = {
+            momentum_indicators = {
                 "RSI": df['rsi'].iloc[-1],
                 "Stoch %K": df['stoch_k'].iloc[-1],
                 "Stoch %D": df['stoch_d'].iloc[-1],
-                "Williams %R": df['williams_r'].iloc[-1],
-                "CCI": df['cci'].iloc[-1],
-                "MFI": df['mfi'].iloc[-1]
+                "RSI Momentum": df['rsi_momentum'].iloc[-1] if 'rsi_momentum' in df.columns else 0
             }
             
-            for indicator, value in momentum_data.items():
+            for indicator, value in momentum_indicators.items():
                 st.metric(indicator, f"{value:.2f}")
         
         # Volatility Indicators
-        st.subheader("Volatility Indicators")
-        col3, col4, col5 = st.columns(3)
+        st.subheader("Volatility & Volume")
+        col3, col4 = st.columns(2)
         
         with col3:
             st.metric("ATR", f"{df['atr'].iloc[-1]:.2f}")
-            st.metric("ATR %", f"{df['atr_pct'].iloc[-1]:.2f}%")
+            st.metric("Volatility", f"{df['volatility'].iloc[-1]:.2%}" if 'volatility' in df.columns else "N/A")
         
         with col4:
-            bb_position = ((df['close'].iloc[-1] - df['bollinger_lower'].iloc[-1]) / 
-                          (df['bollinger_upper'].iloc[-1] - df['bollinger_lower'].iloc[-1]))
+            bb_position = df['bb_position'].iloc[-1] if 'bb_position' in df.columns else 0.5
             st.metric("BB Position", f"{bb_position:.2%}")
-            st.metric("BB Width", f"{(df['bollinger_upper'].iloc[-1] - df['bollinger_lower'].iloc[-1]) / df['close'].iloc[-1]:.2%}")
-        
-        with col5:
-            st.metric("Historical Vol", f"{df['returns'].std() * np.sqrt(252):.2%}")
-            st.metric("IV Rank", "N/A")
+            st.metric("Volume Ratio", f"{df['volume_ratio'].iloc[-1]:.2f}x")
     
     def render_backtest_results(self):
         """Render backtest results"""
-        if 'performance' not in st.session_state:
-            st.info("Run backtest to see results")
+        if not st.session_state.performance:
+            st.info("No backtest results available")
             return
         
         perf = st.session_state.performance
@@ -1323,266 +1187,177 @@ class TitanTradingApp:
         if 'trades' in perf and perf['trades']:
             trades_df = pd.DataFrame(perf['trades'])
             
-            fig = go.Figure()
-            
-            # Plot equity curve
-            fig.add_trace(go.Scatter(
-                x=trades_df.get('exit', trades_df.get('entry')),
-                y=trades_df['pnl'].cumsum() if 'pnl' in trades_df.columns else [0],
-                mode='lines',
-                name='Equity Curve',
-                line=dict(color='green', width=2)
-            ))
-            
-            # Plot trades
             if 'pnl' in trades_df.columns:
+                fig = go.Figure()
+                
+                # Cumulative P&L
+                fig.add_trace(go.Scatter(
+                    x=trades_df['exit_time'],
+                    y=trades_df['pnl'].cumsum(),
+                    mode='lines',
+                    name='Cumulative P&L',
+                    line=dict(color='green', width=2)
+                ))
+                
+                # Individual trades
                 winning_trades = trades_df[trades_df['pnl'] > 0]
                 losing_trades = trades_df[trades_df['pnl'] < 0]
                 
-                fig.add_trace(go.Scatter(
-                    x=winning_trades.get('exit', winning_trades.get('entry')),
-                    y=winning_trades['pnl'],
-                    mode='markers',
-                    name='Winning Trades',
-                    marker=dict(color='green', size=8, symbol='circle')
-                ))
+                if not winning_trades.empty:
+                    fig.add_trace(go.Scatter(
+                        x=winning_trades['exit_time'],
+                        y=winning_trades['pnl'].cumsum(),
+                        mode='markers',
+                        name='Winning Trades',
+                        marker=dict(color='green', size=8)
+                    ))
                 
-                fig.add_trace(go.Scatter(
-                    x=losing_trades.get('exit', losing_trades.get('entry')),
-                    y=losing_trades['pnl'],
-                    mode='markers',
-                    name='Losing Trades',
-                    marker=dict(color='red', size=8, symbol='circle')
-                ))
-            
-            fig.update_layout(
-                title='Equity Curve',
-                template='plotly_dark',
-                height=400
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
+                if not losing_trades.empty:
+                    fig.add_trace(go.Scatter(
+                        x=losing_trades['exit_time'],
+                        y=losing_trades['pnl'].cumsum(),
+                        mode='markers',
+                        name='Losing Trades',
+                        marker=dict(color='red', size=8)
+                    ))
+                
+                fig.update_layout(
+                    title='Equity Curve',
+                    template='plotly_dark',
+                    height=400
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
         
-        # Trade Distribution
+        # Trade Statistics
         col1, col2 = st.columns(2)
         
         with col1:
             st.subheader("Trade Statistics")
             
-            stats_data = {
+            trade_stats = {
                 "Total Trades": perf.get('total_trades', 0),
                 "Winning Trades": perf.get('winning_trades', 0),
+                "Losing Trades": perf.get('total_trades', 0) - perf.get('winning_trades', 0),
                 "Win Rate": f"{perf.get('win_rate', 0):.1f}%",
-                "Avg Win": f"{perf.get('avg_win_pct', 0):.2f}%",
-                "Avg Loss": f"{perf.get('avg_loss_pct', 0):.2f}%",
-                "Profit Factor": f"{perf.get('profit_factor', 0):.2f}",
-                "Max Drawdown": f"{perf.get('max_drawdown_pct', 0):.2f}%"
+                "Avg Win %": f"{perf.get('avg_win_pct', 0):.2f}%",
+                "Avg Loss %": f"{perf.get('avg_loss_pct', 0):.2f}%"
             }
             
-            for key, value in stats_data.items():
+            for key, value in trade_stats.items():
                 st.metric(key, value)
         
         with col2:
             st.subheader("Performance Metrics")
             
-            perf_data = {
+            perf_metrics = {
                 "Total Return": f"{perf.get('total_return_pct', 0):.2f}%",
+                "Profit Factor": f"{perf.get('profit_factor', 0):.2f}",
                 "Sharpe Ratio": f"{perf.get('sharpe_ratio', 0):.2f}",
-                "Calmar Ratio": f"{perf.get('calmar_ratio', 0):.2f}",
-                "Sortino Ratio": "N/A",
-                "Omega Ratio": "N/A",
-                "Kelly Criterion": "N/A"
+                "Max Drawdown": f"{perf.get('max_drawdown_pct', 0):.2f}%"
             }
             
-            for key, value in perf_data.items():
+            for key, value in perf_metrics.items():
                 st.metric(key, value)
-    
-    def render_market_depth(self):
-        """Render market depth chart"""
-        if 'market_data' not in st.session_state:
-            return
         
-        symbol = st.session_state.market_data.get('symbol', 'BTCUSDT')
+        # Recent Trades Table
+        if 'trades' in perf and perf['trades']:
+            st.subheader("Recent Trades")
+            trades_df = pd.DataFrame(perf['trades'])
+            st.dataframe(
+                trades_df.tail(10).style.format({
+                    'entry_price': '${:.2f}',
+                    'exit_price': '${:.2f}',
+                    'pnl': '${:.2f}',
+                    'pnl_pct': '{:.2f}%'
+                }),
+                use_container_width=True
+            )
+    
+    def render_signal_history(self):
+        """Render signal history"""
+        # Current signal
+        if st.session_state.df is not None:
+            current_signal = self.signal_engine.get_current_signal(st.session_state.df)
+            
+            st.subheader("Current Signal")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                signal_display = current_signal['signal']
+                if "BUY" in signal_display:
+                    st.success(f"**{signal_display}**")
+                elif "SELL" in signal_display:
+                    st.error(f"**{signal_display}**")
+                else:
+                    st.info(f"**{signal_display}**")
+            
+            with col2:
+                st.metric("Price", f"${current_signal['price']:,.2f}")
+            
+            with col3:
+                st.metric("Confidence", f"{current_signal['confidence']:.0%}")
+        
+        # Signal History from Database
+        st.subheader("Signal History")
         
         try:
-            order_book = self.market_data.get_order_book(symbol)
+            recent_signals = self.db.get_recent_signals(st.session_state.symbol, 20)
             
-            if order_book:
-                bids = pd.DataFrame(order_book['bids'], columns=['price', 'volume']).astype(float)
-                asks = pd.DataFrame(order_book['asks'], columns=['price', 'volume']).astype(float)
+            if recent_signals:
+                signals_df = pd.DataFrame(recent_signals)
+                signals_df['timestamp'] = pd.to_datetime(signals_df['timestamp'])
                 
-                fig = go.Figure()
+                # Color code signals
+                def color_signal(val):
+                    if "BUY" in val:
+                        return 'color: green'
+                    elif "SELL" in val:
+                        return 'color: red'
+                    return 'color: gray'
                 
-                fig.add_trace(go.Bar(
-                    x=bids['volume'],
-                    y=bids['price'],
-                    orientation='h',
-                    name='Bids',
-                    marker_color='green',
-                    opacity=0.7
-                ))
-                
-                fig.add_trace(go.Bar(
-                    x=asks['volume'],
-                    y=asks['price'],
-                    orientation='h',
-                    name='Asks',
-                    marker_color='red',
-                    opacity=0.7
-                ))
-                
-                fig.update_layout(
-                    title='Market Depth',
-                    xaxis_title='Volume',
-                    yaxis_title='Price',
-                    template='plotly_dark',
-                    height=500,
-                    bargap=0.1
+                st.dataframe(
+                    signals_df.style.applymap(color_signal, subset=['signal_type']).format({
+                        'price': '${:.2f}',
+                        'confidence': '{:.0%}'
+                    }),
+                    use_container_width=True,
+                    hide_index=True
                 )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Order book stats
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Bid/Ask Spread", f"{(asks['price'].min() - bids['price'].max()):.2f}")
-                with col2:
-                    st.metric("Total Bid Volume", f"{bids['volume'].sum():.2f}")
-                with col3:
-                    st.metric("Total Ask Volume", f"{asks['volume'].sum():.2f}")
+            else:
+                st.info("No signal history available")
         
         except Exception as e:
-            st.error(f"Error fetching market depth: {str(e)}")
+            st.warning(f"Could not load signal history: {e}")
     
-    def render_system_status(self):
-        """Render system status panel"""
+    def render_footer(self):
+        """Render application footer"""
+        st.divider()
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.subheader("🖥️ System Resources")
-            
-            # CPU Usage
-            cpu_percent = psutil.cpu_percent()
-            st.progress(cpu_percent / 100, text=f"CPU: {cpu_percent}%")
-            
-            # Memory Usage
-            memory = psutil.virtual_memory()
-            st.progress(memory.percent / 100, text=f"Memory: {memory.percent}%")
-            
-            # Disk Usage
-            disk = psutil.disk_usage('/')
-            st.progress(disk.percent / 100, text=f"Disk: {disk.percent}%")
+            st.caption(f"📊 Data: {st.session_state.symbol if st.session_state.data_loaded else 'Not loaded'}")
         
         with col2:
-            st.subheader("📡 Data Connections")
-            
-            connection_status = {
-                "Market Data": "🟢 Connected" if hasattr(self, 'market_data') else "🔴 Disconnected",
-                "WebSocket": "🟢 Connected" if self.websocket.running else "🔴 Disconnected",
-                "Database": "🟢 Connected" if hasattr(self, 'db') else "🔴 Disconnected",
-                "Exchange API": "🟢 Connected" if hasattr(self, 'market_data') else "🔴 Disconnected"
-            }
-            
-            for connection, status in connection_status.items():
-                st.write(f"{connection}: {status}")
+            if st.session_state.df is not None:
+                last_update = st.session_state.df.index[-1].strftime('%Y-%m-%d %H:%M')
+                st.caption(f"⏰ Last Data: {last_update}")
         
         with col3:
-            st.subheader("⚡ Performance")
-            
-            if 'market_data' in st.session_state:
-                df = st.session_state.market_data.get('df', pd.DataFrame())
-                st.metric("Data Points", len(df))
-                st.metric("Indicators", len([col for col in df.columns if col not in ['open', 'high', 'low', 'close', 'volume']]))
-            
-            st.metric("Cache Hits", "N/A")
-            st.metric("Latency", "< 100ms")
-        
-        # Log Viewer
-        st.subheader("📋 System Logs")
-        
-        try:
-            with open(CONFIG['log_path'], 'r') as f:
-                logs = f.readlines()[-50:]  # Last 50 lines
-            
-            log_text = "".join(logs)
-            st.text_area("Recent Logs", log_text, height=200)
-        
-        except:
-            st.info("No logs available")
-    
-    def start_live_trading(self):
-        """Start live trading mode"""
-        try:
-            symbol = st.session_state.selected_symbol
-            self.websocket.connect([symbol])
-            
-            # Start alert system
-            self.setup_alerts()
-            
-            st.success("Live trading started")
-            logger.info(f"Live trading started for {symbol}")
-        
-        except Exception as e:
-            st.error(f"Error starting live trading: {str(e)}")
-            logger.exception("Live trading start error")
-    
-    def pause_trading(self):
-        """Pause trading"""
-        self.websocket.disconnect()
-        st.info("Trading paused")
-    
-    def setup_alerts(self):
-        """Setup alert rules"""
-        # Price breakout alert
-        self.alert_system.add_alert_rule(
-            name="price_breakout",
-            condition=lambda data: False,  # Implement condition
-            message="Price breakout detected",
-            priority="HIGH"
-        )
-        
-        # Volume spike alert
-        self.alert_system.add_alert_rule(
-            name="volume_spike",
-            condition=lambda data: False,
-            message="Volume spike detected",
-            priority="MEDIUM"
-        )
-        
-        # RSI extreme alert
-        self.alert_system.add_alert_rule(
-            name="rsi_extreme",
-            condition=lambda data: False,
-            message="RSI in extreme territory",
-            priority="MEDIUM"
-        )
+            st.caption("⚠️ Educational Use Only • Not Financial Advice")
     
     def run(self):
         """Main application runner"""
         self.render_header()
         self.render_sidebar()
-        
-        # Check for WebSocket updates
-        if hasattr(st, 'session_state') and 'websocket_data' in st.session_state:
-            if len(st.session_state.websocket_data) > 0:
-                self.process_websocket_data()
-        
         self.render_dashboard()
-        
-        # Auto-refresh
-        if st.button("🔄 Refresh Dashboard", use_container_width=True):
-            st.rerun()
+        self.render_footer()
 
 # =========================
-# MAIN EXECUTION
+# RUN THE APPLICATION
 # =========================
 if __name__ == "__main__":
-    # Initialize application
+    # Initialize and run the app
     app = TitanTradingApp()
-    
-    # Run main loop
-    try:
-        app.run()
-    except Exception as e:
-        st.error(f"Application error: {str(e)}")
-        logger.exception("Application crashed")
+    app.run()
