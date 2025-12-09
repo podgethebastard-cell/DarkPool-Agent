@@ -90,7 +90,9 @@ df.drop(['tr1', 'tr2', 'tr3', 'tr'], axis=1, inplace=True)
 # proper WMA for HMA
 def WMA(series, length):
     weights = np.arange(1, length + 1)
-    return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+    return series.rolling(length).apply(
+        lambda x: np.dot(x, weights) / weights.sum(), raw=True
+    )
 
 def HMA(series, length):
     half = int(length / 2)
@@ -201,7 +203,6 @@ tradingview_html = f"""
 <!-- TradingView Widget END -->
 """
 
-# use components.html which handles script tags more reliably
 components.html(tradingview_html, height=650)
 
 # =========================
@@ -220,7 +221,7 @@ elif not sell_signals.empty and sell_signals['time'].iloc[-1] == latest_time:
 st.success(f"Latest Signal: {last_signal}")
 
 # =========================
-# BROADCASTING LOGIC
+# BROADCASTING LOGIC + MANUAL BUTTON
 # =========================
 st.sidebar.subheader("📡 Broadcast Keys")
 tg_token = st.secrets.get("TELEGRAM_TOKEN", "")
@@ -231,10 +232,13 @@ if not tg_token:
 if not tg_chat:
     tg_chat = st.sidebar.text_input("Telegram Chat ID")
 
-if tg_token and tg_chat and last_signal != "NONE":
-    st.sidebar.subheader("📡 Broadcast")
+# ----- AUTO-SIGNAL BROADCAST -----
+st.sidebar.subheader("📡 Auto-Signal Broadcast")
+
+auto_preview = ""
+if last_signal != "NONE":
     if last_signal == "BUY":
-        preview = (
+        auto_preview = (
             f"🚀 BUY Signal for {symbol.upper()} on {timeframe}!\n"
             f"ENTRY: ${price:,.2f}\n"
             f"STOP: ${stop_price:,.2f}\n"
@@ -243,7 +247,7 @@ if tg_token and tg_chat and last_signal != "NONE":
             f"TP3: ${tp3:,.2f}"
         )
     else:
-        preview = (
+        auto_preview = (
             f"🔻 SELL Signal for {symbol.upper()} on {timeframe}!\n"
             f"ENTRY: ${price:,.2f}\n"
             f"STOP: ${stop_price:,.2f}\n"
@@ -252,21 +256,48 @@ if tg_token and tg_chat and last_signal != "NONE":
             f"TP3: ${tp3:,.2f}"
         )
 
-    st.text_area("Preview", preview, height=150)
+    st.sidebar.text_area("Auto Signal Preview", auto_preview, height=150, key="auto_preview")
 
-    if st.button("Send🚀"):
+    if tg_token and tg_chat and st.sidebar.button("Send Auto Signal 🚀"):
         try:
-            url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-            data = {"chat_id": tg_chat, "text": preview}
-            resp = requests.post(url, data=data, timeout=10)
+            resp = requests.post(
+                f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                data={"chat_id": tg_chat, "text": auto_preview},
+                timeout=10,
+            )
             if resp.status_code == 200:
-                st.success("✅ Signal sent to Telegram.")
+                st.sidebar.success("✅ Auto signal sent to Telegram.")
             else:
-                st.error(f"❌ Telegram API error: {resp.status_code} - {resp.text}")
+                st.sidebar.error(f"❌ Telegram API error: {resp.status_code} - {resp.text}")
         except Exception as e:
-            st.error(f"❌ Failed to send Telegram message: {e}")
+            st.sidebar.error(f"❌ Failed to send Telegram message: {e}")
 else:
-    st.sidebar.subheader("📡 Broadcast (No Signal to Send)")
+    st.sidebar.info("No auto signal available yet.")
+
+# ----- MANUAL BROADCAST BUTTON -----
+st.sidebar.subheader("✋ Manual Broadcast")
+
+manual_default = (
+    f"MANUAL BROADCAST for {symbol.upper()} on {timeframe}\n"
+    f"PRICE: ${price:,.2f}\n"
+    f"Add your custom notes here..."
+)
+manual_msg = st.sidebar.text_area("Manual Message", manual_default, height=180, key="manual_msg")
+
+if tg_token and tg_chat and st.sidebar.button("Send Manual Message ✉️"):
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{tg_token}/sendMessage",
+            data={"chat_id": tg_chat, "text": manual_msg},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            st.sidebar.success("✅ Manual message sent.")
+        else:
+            st.sidebar.error(f"❌ Telegram API error: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        st.sidebar.error(f"❌ Failed to send manual Telegram message: {e}")
+elif not (tg_token and tg_chat):
+    st.sidebar.warning("Enter Telegram Bot Token and Chat ID to enable broadcasting.")
 
 st.caption("TITAN Engine Online | REST Feed Active | Cloud Stable")
-
