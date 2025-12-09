@@ -11,7 +11,7 @@ from openai import OpenAI # REQUIRES: pip install openai
 # ==========================================
 # 1. PAGE CONFIG & TERMINAL CSS
 # ==========================================
-st.set_page_config(page_title="🪓Scalper Titan Ultimate", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="🪓Titan Intraday Ultimate", layout="wide", page_icon="⚡")
 
 st.markdown("""
     <style>
@@ -102,13 +102,14 @@ st.markdown("""
 # 2. SIDEBAR CONTROLS
 # ==========================================
 st.sidebar.title("⚡ TITAN ULTIMATE")
-st.sidebar.caption("v8.0 | LADDER & TRAIL SYSTEM")
+st.sidebar.caption("v8.1 | INTRADAY SYSTEM")
 st.sidebar.markdown("---")
 
 # Market Data
 st.sidebar.subheader("MARKET FEED")
 symbol = st.sidebar.text_input("Symbol (Kraken)", value="BTC/USD") 
-timeframe = st.sidebar.selectbox("Timeframe", options=['1m', '5m', '15m'], index=1)
+# CHANGED: Shifted to Intraday Timeframes (15m, 1h, 4h)
+timeframe = st.sidebar.selectbox("Timeframe", options=['15m', '1h', '4h'], index=1)
 limit = st.sidebar.slider("Candles", min_value=200, max_value=1500, value=500)
 
 st.sidebar.markdown("---")
@@ -116,8 +117,10 @@ st.sidebar.markdown("---")
 # Strategies
 st.sidebar.subheader("LOGIC ENGINE")
 with st.sidebar.expander("Apex Engine (Optimized)", expanded=True):
-    amplitude = st.number_input("Sensitivity (Lookback)", min_value=1, value=5, help="Reaction speed for trailing stop.")
-    channel_dev = st.number_input("Stop Deviation", min_value=1.0, value=2.5, step=0.1, help="Distance of the trailing stop (ATR Multiplier).")
+    # CHANGED: Default sensitivity increased to 10 for stronger structure detection
+    amplitude = st.number_input("Sensitivity (Lookback)", min_value=1, value=10, help="Reaction speed for trailing stop.")
+    # CHANGED: Deviation increased to 3.0 to allow for intraday wicks
+    channel_dev = st.number_input("Stop Deviation", min_value=1.0, value=3.0, step=0.1, help="Distance of the trailing stop (ATR Multiplier).")
     
 with st.sidebar.expander("Trend Reference"):
     hma_len = st.number_input("HMA Length", min_value=1, value=50)
@@ -197,7 +200,7 @@ def get_ai_analysis(df_summary, symbol, tf):
     client = OpenAI(api_key=ai_key)
     
     prompt = f"""
-    You are the TITAN SCALPER AI.
+    You are the TITAN INTRADAY AI.
     Analyze this LADDER SETUP for {symbol} ({tf}).
     
     DATA SNAPSHOT:
@@ -219,7 +222,7 @@ def get_ai_analysis(df_summary, symbol, tf):
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "system", "content": "You are a sniper scalper."}, {"role": "user", "content": prompt}]
+            messages=[{"role": "system", "content": "You are a sniper trader."}, {"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -394,8 +397,8 @@ def run_titan_engine(df):
 # --- HEADER ---
 st.markdown("""
 <div class="titan-header">
-    <h1 class="titan-title">TITAN SCALPER <span style="color:#00ffbb">ULTIMATE</span></h1>
-    <div class="titan-subtitle">LADDER EXECUTION + DYNAMIC TRAILING STOP</div>
+    <h1 class="titan-title">TITAN DAYTRADER <span style="color:#00ffbb">ULTIMATE</span></h1>
+    <div class="titan-subtitle">LADDER EXECUTION + INTRADAY TRAILING STOP</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -405,7 +408,7 @@ def render_tv(sym):
     <div class="tradingview-widget-container"><div id="tv"></div>
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
     <script>new TradingView.widget({{
-      "width": "100%", "height": 450, "symbol": "{s}", "interval": "5",
+      "width": "100%", "height": 450, "symbol": "{s}", "interval": "60",
       "timezone": "Etc/UTC", "theme": "dark", "style": "1", "locale": "en",
       "toolbar_bg": "#f1f3f6", "enable_publishing": false, "hide_side_toolbar": false,
       "container_id": "tv"
@@ -428,7 +431,7 @@ if not df.empty:
             icon = "🟢" if is_buy else "🔴"
             
             # --- PROFESSIONAL MANAGEMENT MSG ---
-            msg = f"""🔥 *TITAN ULTIMATE SIGNAL: {symbol} ({timeframe})*
+            msg = f"""🔥 *TITAN INTRADAY SIGNAL: {symbol} ({timeframe})*
 {icon} DIRECTION: *{direction}*
 🚪 ENTRY: `${last['close']:,.2f}`
 🛑 INITIAL STOP: `${last['trend_stop']:,.2f}`
@@ -478,7 +481,7 @@ It calculates `Local Low + ATR` automatically.
             direction = "LONG" if is_bull else "SHORT"
             icon = "🟢" if is_bull else "🔴"
             
-            manual_msg = f"""🔥 *TITAN ULTIMATE SIGNAL: {symbol} ({timeframe})*
+            manual_msg = f"""🔥 *TITAN INTRADAY SIGNAL: {symbol} ({timeframe})*
 {icon} DIRECTION: *{direction}*
 🚪 ENTRY: `${last['close']:,.2f}`
 🛑 INITIAL STOP: `${last['trend_stop']:,.2f}`
