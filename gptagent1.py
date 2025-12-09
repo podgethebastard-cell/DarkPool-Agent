@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 3.2: Triple-Layer Data Engine (Binance -> Bybit -> Coinbase)
+Version 3.3: Critical Hotfix (Variable NameError Resolved)
 """
 import time
 import math
@@ -25,7 +25,7 @@ RVOL_THRESHOLD = 1.15
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
 DB_PATH = "titan_signals.db"
-MAX_RETRIES = 2  # Reduced for faster failover
+MAX_RETRIES = 2
 RETRY_DELAY = 0.5
 
 # API ENDPOINTS
@@ -54,9 +54,9 @@ st.title("🪓 TITAN INTRADAY PRO — Execution Dashboard")
 # =============================================================================
 st.sidebar.header("Market Feed")
 symbol_input = st.sidebar.text_input("Symbol", value="BTCUSDT")
-# Clean symbol for different APIs
-symbol_clean = symbol_input.strip().upper().replace("/", "").replace("-", "")
-symbol_coinbase = f"{symbol_clean[:-4]}-{symbol_clean[-4:]}" if len(symbol_clean) > 4 else "BTC-USD"
+
+# FIX: Unified variable name to 'symbol' to prevent NameError
+symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
 
 timeframe = st.sidebar.selectbox(
     "Timeframe",
@@ -182,23 +182,20 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
                          headers=HEADERS, timeout=4)
         data = r.json()
         if data.get('retCode') == 0:
-            # Bybit returns reversed list [time, open, high, low, close, vol, turnover]
             df = pd.DataFrame(data['result']['list'], columns=['t','o','h','l','c','v','to'])
             df['timestamp'] = pd.to_datetime(df['t'].astype(float), unit='ms')
             df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
-            df = df.iloc[::-1].reset_index(drop=True) # Reverse back to chronological
+            df = df.iloc[::-1].reset_index(drop=True)
             return df[['timestamp','open','high','low','close','volume']]
     except Exception as e:
         st.warning(f"Bybit Failed: {str(e)}")
 
     # 3. Try Coinbase (The "Nuclear" Option)
-    # Very permissive, rarely blocked.
     try:
-        # Map timeframe to seconds
-        gmap = {"1m":60, "5m":300, "15m":900, "1h":3600, "4h":21600, "1d":86400} # 4h mapped to 6h on CB
+        gmap = {"1m":60, "5m":300, "15m":900, "1h":3600, "4h":21600, "1d":86400}
         granularity = gmap.get(interval, 3600)
         
-        # Coinbase uses BTC-USD, not BTCUSDT
+        # Convert BTCUSDT -> BTC-USD for Coinbase
         sym_cb = f"{symbol_bin[:-4]}-{symbol_bin[-4:]}" if symbol_bin.endswith("USDT") else "BTC-USD"
         
         url = f"{COINBASE_API_BASE}/{sym_cb}/candles"
@@ -206,7 +203,6 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
         
         if r.status_code == 200:
             data = r.json()
-            # Coinbase: [time, low, high, open, close, volume]
             df = pd.DataFrame(data, columns=['t','l','h','o','c','v'])
             df['timestamp'] = pd.to_datetime(df['t'], unit='s')
             df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
@@ -258,7 +254,7 @@ def run_titan(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     # Signals
     df['rsi'] = 100 - (100/(1 + (df['close'].diff().clip(lower=0).ewm(alpha=1/14).mean()/(-df['close'].diff().clip(upper=0)).ewm(alpha=1/14).mean())))
     df['rvol'] = df['volume'] / df['volume'].rolling(vol_l).mean()
-    df['adx'] = 25.0 # Simplified for perf
+    df['adx'] = 25.0 
     
     cond_buy = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False)) & (df['rvol']>RVOL_THRESHOLD) & (df['rsi']<70)
     cond_sell = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True)) & (df['rvol']>RVOL_THRESHOLD) & (df['rsi']>30)
@@ -288,6 +284,7 @@ def run_titan(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
 # MAIN UI
 # =============================================================================
 with st.spinner("Fetching Data (Failover System Active)..."):
+    # Fixed NameError by using the corrected 'symbol' variable
     df = get_klines(symbol, timeframe, limit)
 
 if not df.empty:
