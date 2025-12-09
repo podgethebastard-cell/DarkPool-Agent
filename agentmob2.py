@@ -88,6 +88,13 @@ def send_telegram_msg(token, chat, msg):
         return True
     except: return False
 
+# --- NEW: SMART PRICE FORMATTER ---
+def fmt_price(val):
+    """Formats price based on magnitude (High precision for low values)"""
+    if val < 1.0: return f"{val:.6f}"
+    elif val < 10.0: return f"{val:.4f}"
+    else: return f"{val:,.2f}"
+
 def get_ai_analysis(df_summary, symbol, tf, ai_key):
     if not ai_key: return "⚠️ Missing API Key. Check Config Tab."
     
@@ -244,7 +251,6 @@ with tab3:
     with st.expander("🔑 Keys & Alerts", expanded=True):
         tg_on = st.checkbox("Telegram Active", value=True)
         
-        # --- ROBUST KEY HANDLING ---
         try:
             default_bot = st.secrets["TELEGRAM_TOKEN"]
             default_chat = st.secrets["TELEGRAM_CHAT_ID"]
@@ -320,30 +326,31 @@ with tab1:
             # --- SIGNAL CALCULATION ---
             is_bull = last['is_bull']
             direction = "LONG" if is_bull else "SHORT"
-            icon = "🟢" if is_bull else "🔴" # Red for short, Green for long
+            icon = "🟢" if is_bull else "🔴" 
             
-            # Dynamic Calc for Target (1.5x Risk)
             risk = abs(last['close'] - last['trend_stop'])
             if is_bull:
                 target_price = last['close'] + (risk * 1.5)
             else:
                 target_price = last['close'] - (risk * 1.5)
 
-            # Labels
             mom_lbl = "POSITIVE" if last['hyper_wave'] > 0 else "NEGATIVE"
             inst_lbl = "MACRO BULL" if last['close'] > last['hma'] else "MACRO BEAR"
             
-            # Money Flow Label
             if last['money_flow'] > 5: mf_lbl = "INFLOW"
             elif last['money_flow'] < -5: mf_lbl = "OUTFLOW"
             else: mf_lbl = "NEUTRAL"
 
-            # --- SCREENSHOT-MATCHED FORMAT ---
+            # --- PRECISE FORMATTING ---
+            p_entry = fmt_price(last['close'])
+            p_stop = fmt_price(last['trend_stop'])
+            p_target = fmt_price(target_price)
+
             msg = f"""🔥 *TITAN SIGNAL: {symbol} ({timeframe})*
 {icon} DIRECTION: *{direction}*
-🚪 ENTRY: `{last['close']:,.2f}`
-🛑 STOP LOSS: `{last['trend_stop']:,.2f}`
-🎯 TARGET: `{target_price:,.2f}`
+🚪 ENTRY: `{p_entry}`
+🛑 STOP LOSS: `{p_stop}`
+🎯 TARGET: `{p_target}`
 🌊 Trend: {trend_lbl}
 📊 Momentum: {mom_lbl}
 💰 Money Flow: {mf_lbl}
