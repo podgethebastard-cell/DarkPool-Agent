@@ -131,22 +131,33 @@ sell_signals = df[df["signal"] == -2]
 df["trail"] = df["close"] - df["ATR"] * atr_mult
 df["trail"] = df["trail"].cummax() # The stop only moves up (higher) over time
 
-# --- NEW: TAKE PROFIT CALCULATION ---
+# --- NEW: DYNAMIC STOP AND TAKE PROFIT CALCULATION ---
 price = df["close"].iloc[-1]
 atr_val = df["ATR"].iloc[-1]
-take_profits = [price + (mult * atr_val) for mult in tp_levels]
+trend_state = df["trend"].iloc[-1]
+
+if trend_state == 1:  # LONG (BULLISH)
+    stop_price = price - (atr_mult * atr_val)
+    take_profits = [price + (mult * atr_val) for mult in tp_levels]
+elif trend_state == -1: # SHORT (BEARISH)
+    stop_price = price + (atr_mult * atr_val)
+    take_profits = [price - (mult * atr_val) for mult in tp_levels]
+else: # NO TREND
+    stop_price = price
+    take_profits = [price, price, price]
+
+trail_price = df["trail"].iloc[-1] # Keep the trailing stop for display
 tp1, tp2, tp3 = take_profits
 
 # =========================
 # DASHBOARD METRICS
 # =========================
-trail_price = df["trail"].iloc[-1]
-trend_state = "BULLISH" if df["trend"].iloc[-1] == 1 else "BEARISH"
+trend_label = "BULLISH" if trend_state == 1 else "BEARISH" if trend_state == -1 else "NEUTRAL"
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("Price", f"${price:,.2f}")
 col2.metric("Trailing Stop", f"${trail_price:,.2f}")
-col3.metric("Trend", trend_state)
+col3.metric("Trend", trend_label)
 col4.metric("TP1", f"${tp1:,.2f}")
 col5.metric("TP2", f"${tp2:,.2f}")
 col6.metric("TP3", f"${tp3:,.2f}")
@@ -203,10 +214,8 @@ st.subheader("Live Execution Feed")
 last_signal = "NONE"
 if not buy_signals.empty and buy_signals['time'].iloc[-1] == df['time'].iloc[-1]:
     last_signal = "BUY"
-    signal_message = f"🚀 BUY Signal for {symbol} on {timeframe}! Price: ${price:,.2f}"
 elif not sell_signals.empty and sell_signals['time'].iloc[-1] == df['time'].iloc[-1]:
     last_signal = "SELL"
-    signal_message = f"🔻 SELL Signal for {symbol} on {timeframe}! Price: ${price:,.2f}"
 
 st.success(f"Latest Signal: {last_signal}")
 
@@ -226,15 +235,24 @@ if not tg_chat:
 
 # --- BROADCASTING LOGIC ---
 if tg_token and tg_chat:
-    # Create a preview similar to the Equity Titan code
-    preview = f"TITAN SIGNAL: {symbol} ({timeframe})\nDIRECTION: {last_signal}\nENTRY: ${price:,.2f}\nSTOP: ${trail_price:,.2f}\nTP1: ${tp1:,.2f}\nTP2: ${tp2:,.2f}\nTP3: ${tp3:,.2f}"
-    st.text_area("Preview", preview, height=150)
-    
-    if st.button("Send🚀"):
-        try:
-            requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id":tg_chat, "text":preview})
-            st.success("✅ Signal sent to Telegram.")
-        except Exception as e:
-            st.error(f"❌ Failed to send Telegram message: {e}")
+    # Only show broadcast section if a signal was generated
+    if last_signal != "NONE":
+        st.sidebar.subheader("📡 Broadcast")
+        # Create a preview based on the signal direction
+        if last_signal == "BUY":
+            preview = f"🚀 BUY Signal for {symbol} on {timeframe}!\nENTRY: ${price:,.2f}\nSTOP: ${stop_price:,.2f}\nTP1: ${tp1:,.2f}\nTP2: ${tp2:,.2f}\nTP3: ${tp3:,.2f}"
+        else: # SELL
+            preview = f"🔻 SELL Signal for {symbol} on {timeframe}!\nENTRY: ${price:,.2f}\nSTOP: ${stop_price:,.2f}\nTP1: ${tp1:,.2f}\nTP2: ${tp2:,.2f}\nTP3: ${tp3:,.2f}"
+        
+        st.text_area("Preview", preview, height=150)
+        
+        if st.button("Send🚀"):
+            try:
+                requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id":tg_chat, "text":preview})
+                st.success("✅ Signal sent to Telegram.")
+            except Exception as e:
+                st.error(f"❌ Failed to send Telegram message: {e}")
+    else:
+        st.sidebar.subheader("📡 Broadcast (No Signal to Send)")
 
 st.caption("TITAN Engine Online | REST Feed Active | Cloud Stable")
