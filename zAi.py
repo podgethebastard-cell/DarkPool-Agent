@@ -152,7 +152,7 @@ col5.metric("TP2", f"${tp2:,.2f}")
 col6.metric("TP3", f"${tp3:,.2f}")
 
 # =========================
-# TRADINGVIEW CHART INTEGRATION
+# TRADINGVIEW CHART INTEGRATION (FIXED)
 # =========================
 # --- NEW: Map Binance timeframes to TradingView intervals ---
 timeframe_map = {
@@ -162,35 +162,38 @@ timeframe_map = {
     "4h": "240"
 }
 
-# --- NEW: Construct the TradingView widget HTML ---
+# --- NEW: Construct the TradingView widget HTML with a delay for script loading ---
 tradingview_interval = timeframe_map.get(timeframe, "60") # Default to 1h if not found
-tradingview_symbol = symbol.upper().replace("USDT", "") # TradingView often uses the base symbol
+tradingview_symbol = symbol.upper() # TradingView uses the full symbol, e.g., "BTCUSDT"
 
 tradingview_html = f"""
 <div id="tradingview_chart"></div>
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script type="text/javascript">
-new TradingView.widget({
-  "width": "100%",
-  "height": 610,
-  "symbol": "BINANCE:{tradingview_symbol}",
-  "interval": "{tradingview_interval}",
-  "timezone": "Etc/UTC",
-  "theme": "dark",
-  "style": "1",
-  "locale": "en",
-  "toolbar_bg": "#f1f3f6",
-  "enable_publishing": false,
-  "allow_symbol_change": true,
-  "container_id": "tradingview_chart",
-  "hide_side_toolbar": false,
-  "save_image": true
-});
+  // Initialize the widget after a short delay to ensure tv.js is loaded
+  setTimeout(function() {{
+    new TradingView.widget({{
+      "width": "100%",
+      "height": 610,
+      "symbol": "BINANCE:{tradingview_symbol}",
+      "interval": "{tradingview_interval}",
+      "timezone": "Etc/UTC",
+      "theme": "dark",
+      "style": "1",
+      "locale": "en",
+      "toolbar_bg": "#f1f3f6",
+      "enable_publishing": false,
+      "allow_symbol_change": true,
+      "container_id": "tradingview_chart",
+      "hide_side_toolbar": false,
+      "save_image": true
+    }});
+  }}, 500); // 500ms delay
 </script>
 """
 
-# --- NEW: Render the TradingView widget ---
-st.components.v1.html(tradingview_html, height=610)
+# --- NEW: Render the TradingView widget using st.markdown for better script handling ---
+st.markdown(tradingview_html, unsafe_allow_html=True)
 
 # =========================
 # LIVE SIGNAL FEED
