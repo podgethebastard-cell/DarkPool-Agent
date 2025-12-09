@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 5.0: Final Fix (Scaling, Action Center, 3-Layer Data)
+Version 6.0: Stable Layout (Actions Above Chart + Scaling Fix)
 """
 import time
 import math
@@ -285,7 +285,7 @@ with st.spinner("Fetching Data..."):
     df = get_klines(symbol, timeframe, limit)
 
 if not df.empty:
-    # Remove NaNs for clean plotting
+    # Filter NaNs for clean plotting
     df = df.dropna(subset=['close'])
     
     with st.spinner("Calculating Logic..."):
@@ -293,42 +293,23 @@ if not df.empty:
     
     last = df.iloc[-1]
     
-    # --- PLOTLY CHART ---
-    fig = go.Figure()
-    
-    # Price
-    fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
-    
-    # HMA
-    if 'hma' in df.columns:
-        fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='cyan', width=1)))
-    
-    # Trailing Stop (Now with NaNs, so it won't plot 0s)
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['stop'], mode='lines', name='Trailing Stop', line=dict(color='orange', width=1)))
-    
-    # Markers
-    buys = df[df['buy']]
-    if not buys.empty:
-        fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.999, mode='markers', marker=dict(symbol='triangle-up', size=12, color='#00ff00'), name='BUY'))
-    
-    sells = df[df['sell']]
-    if not sells.empty:
-        fig.add_trace(go.Scatter(x=sells['timestamp'], y=sells['high']*1.001, mode='markers', marker=dict(symbol='triangle-down', size=12, color='#ff0000'), name='SELL'))
-    
-    # FIX: Autoscaling to handle range properly
-    fig.update_layout(height=650, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False, yaxis=dict(autorange=True))
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # --- ACTION CENTER ---
+    # --- METRICS & ACTION CENTER (MOVED ABOVE CHART) ---
+    st.markdown("### 📈 Live Market Metrics")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Price", f"{last['close']:.2f}", f"{'BULL' if last['is_bull'] else 'BEAR'}")
+    m2.metric("Entry", f"{last['entry']:.2f}")
+    m3.metric("Stop", f"{last['entry_stop']:.2f}")
+    m4.metric("TP3", f"{last['tp3']:.2f}")
+
     st.markdown("### ⚡ Action Center")
     c1, c2, c3 = st.columns(3)
     
-    # MANUAL BROADCAST BUTTON RESTORED
+    # MANUAL BROADCAST (ALWAYS VISIBLE NOW)
     with c1:
-        if st.button("🔥 Manual Broadcast", use_container_width=True):
+        if st.button("🔥 Manual Broadcast", key="btn_broadcast", use_container_width=True):
             if tg_token and tg_chat:
                 txt = f"🔥 TITAN MANUAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'} @ {last['close']:.2f}\nStop: {last['entry_stop']:.2f}"
-                if send_telegram_msg(tg_token, tg_chat, txt, 0): # 0 cooldown for manual
+                if send_telegram_msg(tg_token, tg_chat, txt, 0):
                     st.success("✅ Broadcast Sent!")
                     if persist: journal_signal(st.session_state.db_conn, {
                         "ts":str(last['timestamp']), "symbol":symbol, "timeframe":timeframe,
@@ -343,7 +324,33 @@ if not df.empty:
         
     with c3:
         if st.button("🧮 Run Backtest", use_container_width=True):
-            st.info("Backtest results would appear here (Logic in previous versions)")
+            st.info("Backtest logic placeholder")
+
+    # --- PLOTLY CHART ---
+    fig = go.Figure()
+    
+    # Candles
+    fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
+    
+    # HMA
+    if 'hma' in df.columns:
+        fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='cyan', width=1)))
+    
+    # Trailing Stop
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['stop'], mode='lines', name='Trailing Stop', line=dict(color='orange', width=1)))
+    
+    # Markers
+    buys = df[df['buy']]
+    if not buys.empty:
+        fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.999, mode='markers', marker=dict(symbol='triangle-up', size=12, color='#00ff00'), name='BUY'))
+    
+    sells = df[df['sell']]
+    if not sells.empty:
+        fig.add_trace(go.Scatter(x=sells['timestamp'], y=sells['high']*1.001, mode='markers', marker=dict(symbol='triangle-down', size=12, color='#ff0000'), name='SELL'))
+    
+    # SCALING FIX: Autoscaling
+    fig.update_layout(height=650, template='plotly_dark', margin=dict(l=0,r=0,t=20,b=0), xaxis_rangeslider_visible=False, yaxis=dict(autorange=True))
+    st.plotly_chart(fig, use_container_width=True)
 
     # --- AUTO BROADCAST ---
     if tg_on and (last['buy'] or last['sell']):
@@ -360,7 +367,7 @@ if not df.empty:
                     "adx":0, "rvol":last['rvol'], "notes":"Auto"
                 })
 
-    # --- TRADINGVIEW & LOGS ---
+    # --- TRADINGVIEW ---
     st.markdown("---")
     html = f"""
     <div id="tv" style="height:500px"></div>
