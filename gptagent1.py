@@ -1,12 +1,12 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 3.0: Fixed Sync, Layout Optimized, Full Telegram Integration
+Version 3.1: Fixed Lag (Switched to Bybit Live Feed)
 """
 import time
 import math
 import sqlite3
 import atexit
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 from contextlib import contextmanager
 
 import streamlit as st
@@ -28,9 +28,11 @@ DB_PATH = "titan_signals.db"
 MAX_RETRIES = 3
 RETRY_DELAY = 0.5
 
-# CRITICAL FIX: Use Binance US API for real-time data without 451 blocks
-# Binance Vision is historical/stale. Binance.com is geo-blocked.
-BINANCE_API_BASE = "https://api.binance.us/api/v3"
+# API CONFIGURATION
+# Primary: Binance (Often blocked)
+# Fallback: Bybit V5 (Reliable, Real-time, No Geo-block)
+BINANCE_API_BASE = "https://api.binance.com/api/v3"
+BYBIT_API_BASE = "https://api.bybit.com/v5/market/kline"
 
 # =============================================================================
 # PAGE CONFIG
@@ -46,7 +48,7 @@ st.title("🪓 TITAN INTRADAY PRO — Execution Dashboard")
 # SIDEBAR CONTROLS
 # =============================================================================
 st.sidebar.header("Market Feed")
-symbol_input = st.sidebar.text_input("Symbol (Binance format)", value="BTCUSDT")
+symbol_input = st.sidebar.text_input("Symbol", value="BTCUSDT")
 symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
 timeframe = st.sidebar.selectbox(
     "Timeframe",
@@ -56,8 +58,8 @@ timeframe = st.sidebar.selectbox(
 limit = st.sidebar.slider(
     "Candles",
     min_value=100,
-    max_value=2000,
-    value=600,
+    max_value=1000,
+    value=200, # Lower default for speed
     step=50
 )
 
@@ -141,20 +143,17 @@ telegram_cooldown_s = st.sidebar.number_input(
 )
 
 # =============================================================================
-# DATABASE MANAGEMENT (FULL IMPLEMENTATION)
+# DATABASE MANAGEMENT
 # =============================================================================
 @contextmanager
 def get_db_connection(path: str = DB_PATH):
-    """Context manager for database connections with timeout safety"""
     conn = sqlite3.connect(path, check_same_thread=False, timeout=30)
     try:
         yield conn
     finally:
         conn.close()
 
-
 def init_db(path: str = DB_PATH) -> Optional[sqlite3.Connection]:
-    """Initialize database with proper schema"""
     if not persist:
         return None
     
@@ -178,39 +177,29 @@ def init_db(path: str = DB_PATH) -> Optional[sqlite3.Connection]:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
-    # Create index for faster queries
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_signals_symbol_ts 
         ON signals(symbol, ts DESC)
     """)
-    
     conn.commit()
     return conn
 
-
 def cleanup_db():
-    """Cleanup function to close DB on exit"""
     if 'db_conn' in st.session_state and st.session_state.db_conn:
         try:
             st.session_state.db_conn.close()
         except Exception:
             pass
 
-
-# Initialize DB and register cleanup
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = init_db()
     atexit.register(cleanup_db)
 
 db_conn = st.session_state.db_conn
 
-
 def journal_signal(conn: Optional[sqlite3.Connection], payload: Dict) -> bool:
-    """Journal signal to database with proper error handling"""
     if conn is None:
         return False
-    
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -239,29 +228,17 @@ def journal_signal(conn: Optional[sqlite3.Connection], payload: Dict) -> bool:
         st.error(f"Database error: {str(e)}")
         return False
 
-
 # =============================================================================
-# TELEGRAM INTEGRATION (FULL IMPLEMENTATION)
+# TELEGRAM INTEGRATION
 # =============================================================================
 def escape_markdown_v2(text: str) -> str:
-    """Escape Telegram MarkdownV2 special characters"""
     special_chars = r'_*[]()~`>#+-=|{}.!'
     return ''.join('\\' + c if c in special_chars else c for c in text)
 
-
-def send_telegram_msg(
-    token: str,
-    chat: str,
-    msg: str,
-    cooldown_s: int = 30
-) -> bool:
-    """
-    Send Telegram message with cooldown and retry logic
-    """
+def send_telegram_msg(token: str, chat: str, msg: str, cooldown_s: int = 30) -> bool:
     if not token or not chat:
         return False
     
-    # Check cooldown
     last_ts = st.session_state.get("last_telegram_ts", 0)
     if time.time() - last_ts < cooldown_s:
         return False
@@ -279,24 +256,17 @@ def send_telegram_msg(
             if r.status_code in (200, 201):
                 st.session_state["last_telegram_ts"] = time.time()
                 return True
-            elif r.status_code == 429:  # Rate limited
+            elif r.status_code == 429:
                 retry_after = int(r.headers.get('Retry-After', RETRY_DELAY))
                 time.sleep(retry_after)
             else:
                 time.sleep(RETRY_DELAY * (attempt + 1))
-        except requests.exceptions.Timeout:
+        except Exception:
             time.sleep(RETRY_DELAY * (attempt + 1))
-        except Exception as e:
-            st.warning(f"Telegram error (attempt {attempt + 1}): {str(e)}")
-            time.sleep(RETRY_DELAY * (attempt + 1))
-    
     return False
 
-
 def make_signal_text(row: pd.Series, symbol: str, timeframe: str) -> str:
-    """Generate professional signal text for Telegram"""
     dir_txt = "LONG" if row['is_bull'] else "SHORT"
-    
     entry = row['entry_price'] if not pd.isna(row['entry_price']) else 0
     stop = row['entry_stop'] if not pd.isna(row['entry_stop']) else 0
     tp1 = row['tp1'] if not pd.isna(row['tp1']) else 0
@@ -319,167 +289,133 @@ def make_signal_text(row: pd.Series, symbol: str, timeframe: str) -> str:
         f"⚠️ Not financial advice. Trade at your own risk."
     )
 
-
 def make_signal_id(row: pd.Series) -> str:
-    """Generate unique signal ID for deduplication"""
     ts = row['timestamp']
     dir_flag = "L" if row['is_bull'] else "S"
     entry = row['entry_price'] if not pd.isna(row['entry_price']) else 0.0
     return f"{ts.isoformat()}_{dir_flag}_{entry:.8f}"
 
-
 # =============================================================================
-# BINANCE API (REAL-TIME DATA)
+# DATA ENGINE (HYBRID: BINANCE -> FALLBACK TO BYBIT)
 # =============================================================================
 @st.cache_data(ttl=5)
-def get_klines(
-    symbol: str,
-    interval: str,
-    limit: int = 500
-) -> pd.DataFrame:
-    """Fetch klines from Binance US (Real-Time & Public)"""
-    url = f"{BINANCE_API_BASE}/klines"
-    params = {
+def get_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
+    """
+    Attempts to fetch data from Binance. If blocked (451), fails over to Bybit.
+    Bybit is public, real-time, and rarely geo-blocked.
+    """
+    
+    # --- STRATEGY 1: BINANCE (Standard) ---
+    url_binance = f"{BINANCE_API_BASE}/klines"
+    params_binance = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
+    
+    try:
+        r = requests.get(url_binance, params=params_binance, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0:
+                cols = ['open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'q', 't', 'tb', 'tq', 'i']
+                df = pd.DataFrame(data, columns=cols)
+                df['timestamp'] = pd.to_datetime(df['open_time'], unit='ms')
+                df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].copy()
+    except Exception:
+        pass # Silently fail to fallback
+    
+    # --- STRATEGY 2: BYBIT (Live Fallback) ---
+    # Mapping intervals: 1m, 5m, 15m, 1h=60, 4h=240, 1d=D
+    interval_map = {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D"}
+    bybit_interval = interval_map.get(interval, "60")
+    
+    params_bybit = {
+        "category": "spot",
         "symbol": symbol.upper(),
-        "interval": interval,
+        "interval": bybit_interval,
         "limit": limit
     }
     
-    for attempt in range(MAX_RETRIES):
-        try:
-            r = requests.get(url, params=params, timeout=10)
-            r.raise_for_status()
-            data = r.json()
+    try:
+        r = requests.get(BYBIT_API_BASE, params=params_bybit, timeout=8)
+        data = r.json()
+        
+        # Bybit returns data in 'result' -> 'list'. 
+        # Format: [startTime, open, high, low, close, volume, turnover]
+        # Important: Bybit returns Newest -> Oldest. We must reverse it.
+        if data['retCode'] == 0 and 'result' in data and 'list' in data['result']:
+            raw_list = data['result']['list']
+            df = pd.DataFrame(raw_list, columns=['open_time', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
             
-            if not data or isinstance(data, dict):
-                # Fallback check
-                if isinstance(data, dict) and 'msg' in data:
-                    st.error(f"API Error: {data['msg']}")
-                return pd.DataFrame()
+            # Convert types
+            df['timestamp'] = pd.to_datetime(df['open_time'].astype(float), unit='ms')
+            df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
             
-            cols = [
-                'open_time', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_volume', 'trades', 'taker_buy_base',
-                'taker_buy_quote', 'ignore'
-            ]
-            df = pd.DataFrame(data, columns=cols)
-            df['timestamp'] = pd.to_datetime(df['open_time'], unit='ms')
-            df[['open', 'high', 'low', 'close', 'volume']] = \
-                df[['open', 'high', 'low', 'close', 'volume']].astype(float)
-            
-            # Ensure sort order
-            df = df.sort_values('timestamp').reset_index(drop=True)
+            # Reverse to Oldest -> Newest for technical analysis
+            df = df.iloc[::-1].reset_index(drop=True)
             
             return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].copy()
             
-        except Exception as e:
-            if attempt == MAX_RETRIES - 1:
-                st.error(f"API Error: {str(e)}")
-            time.sleep(RETRY_DELAY)
+    except Exception as e:
+        st.error(f"Data Feed Error (All Sources Failed): {str(e)}")
     
     return pd.DataFrame()
-
 
 # =============================================================================
 # TECHNICAL INDICATORS & ENGINE
 # =============================================================================
 def calculate_atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
-    high = df['high']
-    low = df['low']
-    close = df['close']
-    
+    high, low, close = df['high'], df['low'], df['close']
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
-    
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.ewm(alpha=1/length, adjust=False).mean()
 
-
 def calculate_adx(df: pd.DataFrame, length: int = 14) -> pd.Series:
-    high = df['high']
-    low = df['low']
-    close = df['close']
-    
-    up = high.diff()
-    down = -low.diff()
-    
+    high, low = df['high'], df['low']
+    up, down = high.diff(), -low.diff()
     plus_dm = np.where((up > down) & (up > 0), up, 0.0)
     minus_dm = np.where((down > up) & (down > 0), down, 0.0)
-    
     atr = calculate_atr(df, length)
-    
     plus_di = 100 * pd.Series(plus_dm).ewm(alpha=1/length, adjust=False).mean() / atr
     minus_di = 100 * pd.Series(minus_dm).ewm(alpha=1/length, adjust=False).mean() / atr
-    
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
     return dx.ewm(alpha=1/length, adjust=False).mean().fillna(0)
-
 
 def calculate_rsi(series: pd.Series, length: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    
     avg_gain = gain.ewm(alpha=1/length, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1/length, adjust=False).mean()
-    
     rs = avg_gain / avg_loss
     return (100 - (100 / (1 + rs))).fillna(50)
-
 
 def calculate_hma(series: pd.Series, length: int = 50) -> pd.Series:
     half_len = int(length / 2)
     sqrt_len = int(math.sqrt(length))
-    
     wma_half = series.rolling(window=half_len, min_periods=half_len).mean()
     wma_full = series.rolling(window=length, min_periods=length).mean()
-    
     diff = 2 * wma_half - wma_full
-    hma = diff.rolling(window=sqrt_len, min_periods=sqrt_len).mean()
-    
-    return hma
-
+    return diff.rolling(window=sqrt_len, min_periods=sqrt_len).mean()
 
 def calculate_mfi(df: pd.DataFrame, length: int = 14) -> pd.Series:
     tp = (df['high'] + df['low'] + df['close']) / 3
     rmf = tp * df['volume']
-    
     pos = rmf.where(tp > tp.shift(1), 0.0).rolling(length, min_periods=length).sum()
     neg = rmf.where(tp < tp.shift(1), 0.0).rolling(length, min_periods=length).sum()
-    
-    mfi = 100 - (100 / (1 + (pos / neg)))
-    
-    return mfi.fillna(50)
+    return (100 - (100 / (1 + (pos / neg)))).fillna(50)
 
-
-def run_titan_engine(
-    df: pd.DataFrame,
-    amplitude: int,
-    channel_dev: float,
-    hma_len: int,
-    use_hma_filter: bool,
-    tp1_r: float,
-    tp2_r: float,
-    tp3_r: float,
-    mf_len: int,
-    vol_len: int
-) -> pd.DataFrame:
-    """Core trading engine with non-repainting signal generation"""
-    if df.empty:
-        return df
-    
+def run_titan_engine(df, amplitude, channel_dev, hma_len, use_hma_filter, tp1_r, tp2_r, tp3_r, mf_len, vol_len):
+    if df.empty: return df
     df = df.copy().reset_index(drop=True)
     N = len(df)
     
-    # Base Indicators
     df['atr'] = calculate_atr(df, 14)
     df['dev'] = df['atr'] * channel_dev
     df['hma'] = calculate_hma(df['close'], int(hma_len))
     df['ll'] = df['low'].rolling(window=amplitude, min_periods=amplitude).min()
     df['hh'] = df['high'].rolling(window=amplitude, min_periods=amplitude).max()
     
-    # Logic Engine (Trailing Stop State Machine)
     trend = np.zeros(N, dtype=int)
     stop = np.full(N, np.nan)
     curr_trend = 0
@@ -491,19 +427,18 @@ def run_titan_engine(
         close = df.at[i, 'close']
         dev = df.at[i, 'dev'] if not pd.isna(df.at[i, 'dev']) else 0.0
         
-        if curr_trend == 0:  # Bull trend
+        if curr_trend == 0:  # Bull
             s = local_low + dev
             curr_stop = s if np.isnan(curr_stop) else max(curr_stop, s)
             if close < curr_stop:
                 curr_trend = 1
                 curr_stop = local_high - dev
-        else:  # Bear trend
+        else:  # Bear
             s = local_high - dev
             curr_stop = s if np.isnan(curr_stop) else min(curr_stop, s)
             if close > curr_stop:
                 curr_trend = 0
                 curr_stop = local_low + dev
-        
         trend[i] = curr_trend
         stop[i] = curr_stop
     
@@ -511,13 +446,11 @@ def run_titan_engine(
     df['trend_stop'] = stop
     df['is_bull'] = df['trend'] == 0
     
-    # Filters
     df['rsi'] = calculate_rsi(df['close'], 14)
     df['adx'] = calculate_adx(df, 14)
     df['rvol'] = (df['volume'] / df['volume'].rolling(vol_len, min_periods=vol_len).mean()).fillna(1.0)
     df['mfi'] = calculate_mfi(df, mf_len)
     
-    # Signal Logic
     df['bull_flip'] = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False).astype(bool))
     df['bear_flip'] = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True).astype(bool))
     
@@ -525,81 +458,34 @@ def run_titan_engine(
     df['hma_buy'] = (~use_hma_filter) | (df['close'] > df['hma'])
     df['hma_sell'] = (~use_hma_filter) | (df['close'] < df['hma'])
     
-    df['buy_signal'] = (
-        df['bull_flip'] &
-        df['regime'] &
-        df['hma_buy'] &
-        (df['rsi'] < RSI_OVERBOUGHT)
-    )
-    df['sell_signal'] = (
-        df['bear_flip'] &
-        df['regime'] &
-        df['hma_sell'] &
-        (df['rsi'] > RSI_OVERSOLD)
-    )
+    df['buy_signal'] = df['bull_flip'] & df['regime'] & df['hma_buy'] & (df['rsi'] < RSI_OVERBOUGHT)
+    df['sell_signal'] = df['bear_flip'] & df['regime'] & df['hma_sell'] & (df['rsi'] > RSI_OVERSOLD)
     
-    # State-Locking (Freezing Entry/Stop/TPs at signal bar)
+    # State Locking
     df['signal_bar'] = (df['buy_signal'] | df['sell_signal']).astype(int).cumsum()
     df['signal_bar'] = df['signal_bar'].where(df['buy_signal'] | df['sell_signal'])
     df['active_signal'] = df['signal_bar'].ffill()
     
-    df['entry_price'] = np.where(
-        df['buy_signal'] | df['sell_signal'],
-        df['close'],
-        np.nan
-    )
-    df['entry_stop'] = np.where(
-        df['buy_signal'] | df['sell_signal'],
-        df['trend_stop'],
-        np.nan
-    )
+    df['entry_price'] = np.where(df['buy_signal'] | df['sell_signal'], df['close'], np.nan)
+    df['entry_stop'] = np.where(df['buy_signal'] | df['sell_signal'], df['trend_stop'], np.nan)
     
-    # Forward-fill entry params
     df['entry_price'] = df.groupby('active_signal')['entry_price'].ffill()
     df['entry_stop'] = df.groupby('active_signal')['entry_stop'].ffill()
     
-    df['risk'] = np.where(
-        (~df['entry_price'].isna()) & (~df['entry_stop'].isna()),
-        (df['entry_price'] - df['entry_stop']).abs(),
-        np.nan
-    )
+    df['risk'] = np.where((~df['entry_price'].isna()) & (~df['entry_stop'].isna()),
+                          (df['entry_price'] - df['entry_stop']).abs(), np.nan)
     
-    # Calculate TPs once
-    df['tp1'] = np.where(
-        df['is_bull'],
-        df['entry_price'] + df['risk'] * tp1_r,
-        df['entry_price'] - df['risk'] * tp1_r
-    )
-    df['tp2'] = np.where(
-        df['is_bull'],
-        df['entry_price'] + df['risk'] * tp2_r,
-        df['entry_price'] - df['risk'] * tp2_r
-    )
-    df['tp3'] = np.where(
-        df['is_bull'],
-        df['entry_price'] + df['risk'] * tp3_r,
-        df['entry_price'] - df['risk'] * tp3_r
-    )
+    df['tp1'] = np.where(df['is_bull'], df['entry_price'] + df['risk']*tp1_r, df['entry_price'] - df['risk']*tp1_r)
+    df['tp2'] = np.where(df['is_bull'], df['entry_price'] + df['risk']*tp2_r, df['entry_price'] - df['risk']*tp2_r)
+    df['tp3'] = np.where(df['is_bull'], df['entry_price'] + df['risk']*tp3_r, df['entry_price'] - df['risk']*tp3_r)
     
     return df
-
 
 # =============================================================================
 # BACKTEST ENGINE
 # =============================================================================
-def backtest_engine(
-    df: pd.DataFrame,
-    risk_pct: float = 1.0,
-    starting_balance: float = 10000.0
-) -> Dict:
-    if df.empty:
-        return {
-            "final_balance": starting_balance,
-            "profit": 0.0,
-            "num_trades": 0,
-            "win_rate": 0.0,
-            "trades": []
-        }
+def backtest_engine(df, risk_pct=1.0, starting_balance=10000.0):
+    if df.empty: return {"final_balance": starting_balance, "profit": 0, "num_trades": 0, "win_rate": 0, "trades": []}
     
     df = df.reset_index(drop=True).copy()
     balance = starting_balance
@@ -610,380 +496,176 @@ def backtest_engine(
     for i in range(len(df)):
         row = df.iloc[i]
         
-        # Entry Logic
         if (row['buy_signal'] or row['sell_signal']) and not pos_open:
-            entry = row['entry_price']
-            stop = row['entry_stop']
+            entry, stop = row['entry_price'], row['entry_stop']
+            if pd.isna(entry) or pd.isna(stop) or entry == stop: continue
             
-            if pd.isna(entry) or pd.isna(stop) or entry == stop:
-                continue
-            
-            per_unit_risk = abs(entry - stop)
-            if per_unit_risk == 0:
-                continue
-            
-            risk_amount = balance * (risk_pct / 100.0)
-            size = risk_amount / per_unit_risk
+            risk_amt = balance * (risk_pct / 100.0)
+            size = risk_amt / abs(entry - stop)
             
             pos_open = True
             pos = {
                 "side": "long" if row['buy_signal'] else "short",
-                "entry": entry,
-                "stop": stop,
-                "size": size,
-                "tp1": row['tp1'],
-                "tp2": row['tp2'],
-                "tp3": row['tp3'],
-                "remaining": 1.0
+                "entry": entry, "stop": stop, "size": size,
+                "tp1": row['tp1'], "tp2": row['tp2'], "tp3": row['tp3'], "remaining": 1.0
             }
             continue
         
-        # Position Management
         if pos_open:
-            high = row['high']
-            low = row['low']
-            
+            high, low = row['high'], row['low']
             if pos['side'] == 'long':
-                # Stop hit check first
                 if low <= pos['stop']:
                     loss = (pos['entry'] - pos['stop']) * pos['size'] * pos['remaining']
                     balance -= loss
-                    trades.append({
-                        "entry": pos['entry'],
-                        "exit": pos['stop'],
-                        "pnl": -loss,
-                        "outcome": "stopped"
-                    })
-                    pos_open = False
-                    pos = {}
-                    continue
+                    trades.append({"entry": pos['entry'], "exit": pos['stop'], "pnl": -loss, "outcome": "stopped"})
+                    pos_open = False; continue
                 
-                # TP check
-                for tp_label, frac in [('tp1', 0.3), ('tp2', 0.4), ('tp3', 1.0)]:
-                    tp_val = pos.get(tp_label)
-                    if pd.isna(tp_val) or pos['remaining'] <= 0:
-                        continue
-                    
-                    if high >= tp_val:
-                        take_frac = frac if tp_label != 'tp3' else pos['remaining']
-                        profit = (tp_val - pos['entry']) * pos['size'] * take_frac
+                for tp, frac in [('tp1', 0.3), ('tp2', 0.4), ('tp3', 1.0)]:
+                    if high >= pos.get(tp, 0) and pos['remaining'] > 0:
+                        take_frac = frac if tp != 'tp3' else pos['remaining']
+                        profit = (pos[tp] - pos['entry']) * pos['size'] * take_frac
                         balance += profit
                         pos['remaining'] -= take_frac
-                        
                         if pos['remaining'] <= 0.01:
-                            trades.append({
-                                "entry": pos['entry'],
-                                "exit": tp_val,
-                                "pnl": profit,
-                                "outcome": tp_label
-                            })
-                            pos_open = False
-                            pos = {}
-                            break
-                            
-            else:  # Short
-                # Stop hit check first
+                            trades.append({"entry": pos['entry'], "exit": pos[tp], "pnl": profit, "outcome": tp})
+                            pos_open = False; break
+            else: # Short
                 if high >= pos['stop']:
                     loss = (pos['stop'] - pos['entry']) * pos['size'] * pos['remaining']
                     balance -= loss
-                    trades.append({
-                        "entry": pos['entry'],
-                        "exit": pos['stop'],
-                        "pnl": -loss,
-                        "outcome": "stopped"
-                    })
-                    pos_open = False
-                    pos = {}
-                    continue
+                    trades.append({"entry": pos['entry'], "exit": pos['stop'], "pnl": -loss, "outcome": "stopped"})
+                    pos_open = False; continue
                 
-                # TP check
-                for tp_label, frac in [('tp1', 0.3), ('tp2', 0.4), ('tp3', 1.0)]:
-                    tp_val = pos.get(tp_label)
-                    if pd.isna(tp_val) or pos['remaining'] <= 0:
-                        continue
-                    
-                    if low <= tp_val:
-                        take_frac = frac if tp_label != 'tp3' else pos['remaining']
-                        profit = (pos['entry'] - tp_val) * pos['size'] * take_frac
+                for tp, frac in [('tp1', 0.3), ('tp2', 0.4), ('tp3', 1.0)]:
+                    if low <= pos.get(tp, 999999) and pos['remaining'] > 0:
+                        take_frac = frac if tp != 'tp3' else pos['remaining']
+                        profit = (pos['entry'] - pos[tp]) * pos['size'] * take_frac
                         balance += profit
                         pos['remaining'] -= take_frac
-                        
                         if pos['remaining'] <= 0.01:
-                            trades.append({
-                                "entry": pos['entry'],
-                                "exit": tp_val,
-                                "pnl": profit,
-                                "outcome": tp_label
-                            })
-                            pos_open = False
-                            pos = {}
-                            break
+                            trades.append({"entry": pos['entry'], "exit": pos[tp], "pnl": profit, "outcome": tp})
+                            pos_open = False; break
     
-    num_trades = len(trades)
-    win_rate = (sum(1 for t in trades if t['pnl'] > 0) / num_trades * 100) if num_trades > 0 else 0.0
-    
-    return {
-        "final_balance": balance,
-        "profit": balance - starting_balance,
-        "num_trades": num_trades,
-        "win_rate": win_rate,
-        "trades": trades
-    }
-
+    num = len(trades)
+    win_rate = (sum(1 for t in trades if t['pnl'] > 0)/num * 100) if num > 0 else 0
+    return {"final_balance": balance, "profit": balance - starting_balance, "num_trades": num, "win_rate": win_rate, "trades": trades}
 
 # =============================================================================
-# TRADINGVIEW WIDGET
+# TRADINGVIEW
 # =============================================================================
-def tradingview_widget(symbol_tv: str = "BINANCE:BTCUSDT", interval: str = "60") -> str:
-    """Generate TradingView embed HTML"""
-    interval_map = {
-        "1m": "1", "5m": "5", "15m": "15",
-        "1h": "60", "4h": "240", "1d": "D"
-    }
-    iv = interval_map.get(interval, "60")
-    
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    </head>
+def tradingview_widget(symbol_tv: str, interval: str) -> str:
+    iv = {"1m":"1", "5m":"5", "15m":"15", "1h":"60", "4h":"240", "1d":"D"}.get(interval, "60")
+    html = f"""
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
     <body style="margin:0;background:#0e0e0e;">
-        <div id="tv-widget" style="width:100%;height:640px;"></div>
-        <script src="https://s3.tradingview.com/tv.js"></script>
-        <script>
-        new TradingView.widget({{
-            "autosize": true,
-            "symbol": "{symbol_tv}",
-            "interval": "{iv}",
-            "timezone": "Etc/UTC",
-            "theme": "dark",
-            "style": "1",
-            "container_id": "tv-widget",
-            "hide_side_toolbar": false,
-            "allow_symbol_change": true,
-            "save_image": false
-        }});
-        </script>
-    </body>
-    </html>
-    """
-    return html_content
-
+    <div id="tv-widget" style="width:100%;height:640px;"></div>
+    <script src="https://s3.tradingview.com/tv.js"></script>
+    <script>
+    new TradingView.widget({{
+        "autosize": true, "symbol": "{symbol_tv}", "interval": "{iv}", "timezone": "Etc/UTC",
+        "theme": "dark", "style": "1", "container_id": "tv-widget", "hide_side_toolbar": false,
+        "allow_symbol_change": true, "save_image": false
+    }});
+    </script></body></html>"""
+    return html
 
 # =============================================================================
-# MAIN LAYOUT & EXECUTION
+# MAIN LAYOUT
 # =============================================================================
-# 1. Main Execution Chart (Full Width - Top)
-st.subheader("📊 Execution Chart — TITAN Engine")
+st.subheader("📊 Execution Chart — TITAN Engine (Live Feed)")
 
-with st.spinner("Fetching data (Binance US Real-Time)..."):
+with st.spinner("Fetching Live Data (Binance/Bybit Hybrid)..."):
     df = get_klines(symbol, timeframe, limit)
 
 if not df.empty:
-    with st.spinner("Running TITAN engine..."):
-        df = run_titan_engine(
-            df,
-            amplitude=int(amplitude),
-            channel_dev=float(channel_dev),
-            hma_len=int(hma_len),
-            use_hma_filter=bool(use_hma_filter),
-            tp1_r=float(tp1_r),
-            tp2_r=float(tp2_r),
-            tp3_r=float(tp3_r),
-            mf_len=int(mf_len),
-            vol_len=int(vol_len)
-        )
+    with st.spinner("Running TITAN Engine..."):
+        df = run_titan_engine(df, amplitude, float(channel_dev), int(hma_len), bool(use_hma_filter),
+                              float(tp1_r), float(tp2_r), float(tp3_r), int(mf_len), int(vol_len))
     
     last = df.iloc[-1]
     
-    # --- PLOTLY CHART ---
+    # --- PLOTLY ---
     fig = go.Figure()
+    fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+                        name='Price', increasing_line_color='#00ffbb', decreasing_line_color='#ff1155')
     
-    # Candles
-    fig.add_candlestick(
-        x=df['timestamp'],
-        open=df['open'], high=df['high'],
-        low=df['low'], close=df['close'],
-        name='Price',
-        increasing_line_color='#00ffbb',
-        decreasing_line_color='#ff1155'
-    )
-    
-    # HMA
     if 'hma' in df.columns:
-        fig.add_trace(go.Scatter(
-            x=df['timestamp'], y=df['hma'],
-            mode='lines', name='HMA',
-            line=dict(color='rgba(0, 179, 255, 0.4)', width=1)
-        ))
+        fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='rgba(0,179,255,0.4)', width=1)))
     
-    # Trailing Stops (No gaps - Fixed)
     bull_stop = df['trend_stop'].where(df['is_bull'], np.nan)
     bear_stop = df['trend_stop'].where(~df['is_bull'], np.nan)
     
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=bull_stop,
-        mode='lines', name='Bull Stop', connectgaps=False,
-        line=dict(color='#00ffbb', width=1.5)
-    ))
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=bear_stop,
-        mode='lines', name='Bear Stop', connectgaps=False,
-        line=dict(color='#ff1155', width=1.5)
-    ))
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=bull_stop, mode='lines', name='Bull Stop', connectgaps=False, line=dict(color='#00ffbb', width=1.5)))
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=bear_stop, mode='lines', name='Bear Stop', connectgaps=False, line=dict(color='#ff1155', width=1.5)))
     
-    # Markers
     buys = df[df['buy_signal']]
     sells = df[df['sell_signal']]
     
     if not buys.empty:
-        fig.add_trace(go.Scatter(
-            x=buys['timestamp'], y=buys['low']*0.995,
-            mode='markers', name='BUY',
-            marker=dict(symbol='triangle-up', size=12, color='#00ffbb', line=dict(color='white', width=1)),
-            text=[f"Entry: {e:.2f}" for e in buys['entry_price']],
-            hoverinfo='text+x'
-        ))
-    
+        fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.995, mode='markers', name='BUY', 
+                                 marker=dict(symbol='triangle-up', size=12, color='#00ffbb', line=dict(color='white', width=1)),
+                                 text=[f"Entry: {e:.2f}" for e in buys['entry_price']], hoverinfo='text+x'))
     if not sells.empty:
-        fig.add_trace(go.Scatter(
-            x=sells['timestamp'], y=sells['high']*1.005,
-            mode='markers', name='SELL',
-            marker=dict(symbol='triangle-down', size=12, color='#ff1155', line=dict(color='white', width=1)),
-            text=[f"Entry: {e:.2f}" for e in sells['entry_price']],
-            hoverinfo='text+x'
-        ))
-    
-    fig.update_layout(
-        height=700,
-        template="plotly_dark",
-        xaxis_rangeslider_visible=False,
-        hovermode='x unified',
-        margin=dict(l=0, r=0, t=20, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    fig.update_xaxes(gridcolor="#222")
-    fig.update_yaxes(gridcolor="#222")
-    
+        fig.add_trace(go.Scatter(x=sells['timestamp'], y=sells['high']*1.005, mode='markers', name='SELL', 
+                                 marker=dict(symbol='triangle-down', size=12, color='#ff1155', line=dict(color='white', width=1)),
+                                 text=[f"Entry: {e:.2f}" for e in sells['entry_price']], hoverinfo='text+x'))
+
+    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode='x unified',
+                      margin=dict(l=0,r=0,t=20,b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig, use_container_width=True)
     
-    # --- METRICS & TELEGRAM LOGIC ---
+    # --- METRICS & BROADCAST ---
     st.markdown("### 📈 Live Market Metrics")
     m1, m2, m3, m4, m5 = st.columns(5)
-    
     m1.metric("Trend", "🟢 BULL" if last['is_bull'] else "🔴 BEAR")
     m2.metric("Price", f"${last['close']:.2f}")
     m3.metric("Entry", f"${last['entry_price']:.2f}" if not pd.isna(last['entry_price']) else "-")
     m4.metric("Stop", f"${last['trend_stop']:.2f}" if not pd.isna(last['trend_stop']) else "-")
     m5.metric("ADX / RVOL", f"{last['adx']:.0f} / {last['rvol']:.1f}x")
     
-    # Auto Broadcast
     if tg_on and tg_token and tg_chat:
         if last['buy_signal'] or last['sell_signal']:
             sid = make_signal_id(last)
-            last_sid = st.session_state.get("last_signal_id", "")
-            
-            if sid != last_sid:
-                # 1. Journal
+            if sid != st.session_state.get("last_signal_id", ""):
                 if db_conn:
                     journal_signal(db_conn, {
-                        "ts": str(last['timestamp']),
-                        "symbol": symbol,
-                        "timeframe": timeframe,
-                        "direction": "LONG" if last['is_bull'] else "SHORT",
-                        "entry": float(last['entry_price']),
-                        "stop": float(last['entry_stop']),
-                        "tp1": float(last['tp1']),
-                        "tp2": float(last['tp2']),
-                        "tp3": float(last['tp3']),
-                        "adx": float(last['adx']),
-                        "rvol": float(last['rvol']),
-                        "notes": "Auto-broadcast"
+                        "ts": str(last['timestamp']), "symbol": symbol, "timeframe": timeframe,
+                        "direction": "LONG" if last['is_bull'] else "SHORT", "entry": float(last['entry_price']),
+                        "stop": float(last['entry_stop']), "tp1": float(last['tp1']), "tp2": float(last['tp2']),
+                        "tp3": float(last['tp3']), "adx": float(last['adx']), "rvol": float(last['rvol']), "notes": "Auto"
                     })
-                
-                # 2. Send
-                txt = make_signal_text(last, symbol, timeframe)
-                sent = send_telegram_msg(tg_token, tg_chat, txt, int(telegram_cooldown_s))
-                
-                if sent:
+                if send_telegram_msg(tg_token, tg_chat, make_signal_text(last, symbol, timeframe), int(telegram_cooldown_s)):
                     st.success("✅ Auto-broadcast sent!")
                     st.session_state["last_signal_id"] = sid
                 else:
-                    st.info("ℹ️ Telegram cooldown/error")
-
-    # --- ACTION CENTER ---
+                    st.info("ℹ️ Telegram cooldown")
+    
     st.markdown("---")
     st.markdown("### ⚡ Action Center")
-    c_btn1, c_btn2, c_btn3 = st.columns(3)
-    
-    with c_btn1:
+    b1, b2, b3 = st.columns(3)
+    with b1:
         if st.button("🔥 Manual Broadcast", use_container_width=True):
             if tg_token and tg_chat:
-                txt = make_signal_text(last, symbol, timeframe)
-                if send_telegram_msg(tg_token, tg_chat, txt, int(telegram_cooldown_s)):
-                    st.success("✅ Signal Sent")
-                    if db_conn:
-                         journal_signal(db_conn, {
-                            "ts": str(last['timestamp']),
-                            "symbol": symbol,
-                            "timeframe": timeframe,
-                            "direction": "LONG" if last['is_bull'] else "SHORT",
-                            "entry": float(last['entry_price']),
-                            "stop": float(last['entry_stop']),
-                            "tp1": float(last['tp1']),
-                            "tp2": float(last['tp2']),
-                            "tp3": float(last['tp3']),
-                            "adx": float(last['adx']),
-                            "rvol": float(last['rvol']),
-                            "notes": "Manual"
-                        })
-                else:
-                    st.error("❌ Send failed (check creds or cooldown)")
-            else:
-                st.error("❌ Missing Telegram Credentials")
-                
-    with c_btn2:
+                if send_telegram_msg(tg_token, tg_chat, make_signal_text(last, symbol, timeframe), int(telegram_cooldown_s)):
+                    st.success("Sent!")
+                    if db_conn: journal_signal(db_conn, {"ts":str(last['timestamp']), "symbol":symbol, "timeframe":timeframe, "direction":"LONG" if last['is_bull'] else "SHORT", "entry":float(last['entry_price']), "stop":float(last['entry_stop']), "tp1":0,"tp2":0,"tp3":0,"adx":0,"rvol":0,"notes":"Manual"})
+                else: st.error("Failed")
+            else: st.error("No Creds")
+    with b2:
         if st.button("📥 Export CSV", use_container_width=True):
-            st.download_button(
-                "⬇️ Download",
-                df.to_csv(),
-                f"titan_{symbol}_{datetime.now().strftime('%Y%m%d')}.csv",
-                "text/csv",
-                use_container_width=True
-            )
-            
-    with c_btn3:
+            st.download_button("Download", df.to_csv(), "data.csv", "text/csv")
+    with b3:
         if st.button("🧮 Run Backtest", use_container_width=True):
             res = backtest_engine(df, float(backtest_risk))
-            st.success(f"PnL: ${res['profit']:.2f} | Win Rate: {res['win_rate']:.1f}% ({res['num_trades']} trades)")
-            if res['trades']:
-                st.dataframe(pd.DataFrame(res['trades'][-5:]), use_container_width=True)
+            st.success(f"PnL: ${res['profit']:.2f} | Win Rate: {res['win_rate']:.1f}%")
 
-    # --- LOWER SECTION: TRADINGVIEW & LOGS ---
     st.markdown("---")
     st.subheader("📉 Manual Charting & Logs")
+    components.html(tradingview_widget(f"BINANCE:{symbol}", timeframe), height=700)
     
-    # TradingView Full Width at Bottom
-    tv_symbol = f"BINANCE:{symbol}"
-    tv_html = tradingview_widget(tv_symbol, timeframe)
-    components.html(tv_html, height=700)
-    
-    # Signal Log
     if persist and db_conn:
         st.markdown("#### Signal Journal")
         try:
-            cur = db_conn.cursor()
-            cur.execute("""
-                SELECT ts, symbol, timeframe, direction, entry, stop, tp1, tp2, tp3, adx, rvol, notes 
-                FROM signals ORDER BY id DESC LIMIT 50
-            """)
-            rows = cur.fetchall()
-            if rows:
-                cols = ["TS", "Sym", "TF", "Dir", "Ent", "Stop", "TP1", "TP2", "TP3", "ADX", "RVOL", "Note"]
-                st.dataframe(pd.DataFrame(rows, columns=cols), use_container_width=True, hide_index=True)
-            else:
-                st.info("No signals recorded yet.")
-        except Exception as e:
-            st.error(f"DB Read Error: {e}")
+            df_log = pd.read_sql("SELECT ts, symbol, timeframe, direction, entry, stop, tp1, tp2, tp3, adx, rvol, notes FROM signals ORDER BY id DESC LIMIT 50", db_conn)
+            st.dataframe(df_log, use_container_width=True, hide_index=True)
+        except: pass
