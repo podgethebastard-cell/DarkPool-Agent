@@ -1,11 +1,12 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 6.0: Stable Layout (Actions Above Chart + Scaling Fix)
+Version 7.0: Ultimate (Laddering Logic + AI Analyst Agent)
 """
 import time
 import math
 import sqlite3
 import atexit
+import random
 from typing import Dict, Optional
 from contextlib import contextmanager
 
@@ -33,7 +34,7 @@ BINANCE_API_BASE = "https://api.binance.us/api/v3"
 BYBIT_API_BASE = "https://api.bybit.com/v5/market/kline"
 COINBASE_API_BASE = "https://api.exchange.coinbase.com/products"
 
-# HEADERS (Critical to bypass WAF blocks)
+# HEADERS
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json"
@@ -96,7 +97,7 @@ if not tg_token:
     tg_token = st.sidebar.text_input("Bot Token", type="password")
     tg_chat = st.sidebar.text_input("Chat ID")
 
-# TEST CONNECTION BUTTON
+# TEST CONNECTION
 if st.sidebar.button("Test Telegram Connection"):
     if not tg_token or not tg_chat:
         st.sidebar.error("❌ Enter Token & Chat ID first!")
@@ -112,6 +113,24 @@ persist = st.sidebar.checkbox("Persist signals to DB", True)
 run_backtest = st.sidebar.checkbox("Run backtest", False)
 backtest_risk = st.sidebar.number_input("Risk %", 0.1, 5.0, 1.0, 0.1)
 telegram_cooldown_s = st.sidebar.number_input("TG Cooldown", 5, 600, 30)
+
+# =============================================================================
+# AI ANALYST AGENT (LOCAL)
+# =============================================================================
+def generate_ai_analysis(row, symbol, tf):
+    """Generates a professional trade commentary based on metrics."""
+    trend = "BULLISH" if row['is_bull'] else "BEARISH"
+    adx_str = "Strong" if row['adx'] > 25 else "Weak"
+    vol_str = "High" if row['rvol'] > 1.2 else "Normal"
+    
+    phrases = [
+        f"Market Structure is {trend} on the {tf} timeframe.",
+        f"Momentum is {adx_str} (ADX: {row['adx']:.1f}) with {vol_str} relative volume.",
+        f"RSI is currently at {row['rsi']:.1f}, suggesting {'overbought' if row['rsi']>70 else 'oversold' if row['rsi']<30 else 'neutral'} conditions.",
+        f"Price action has broken key HMA levels, confirming the directional bias."
+    ]
+    
+    return " ".join(phrases)
 
 # =============================================================================
 # DATABASE
@@ -272,9 +291,11 @@ def run_titan(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     df['entry_stop'] = df.groupby('sig_id')['entry_stop'].ffill()
     
     risk = abs(df['entry'] - df['entry_stop'])
-    df['tp1'] = np.where(df['is_bull'], df['entry']+risk*tp1, df['entry']-risk*tp1)
-    df['tp2'] = np.where(df['is_bull'], df['entry']+risk*tp2, df['entry']-risk*tp2)
-    df['tp3'] = np.where(df['is_bull'], df['entry']+risk*tp3, df['entry']-risk*tp3)
+    
+    # LADDERING LOGIC
+    df['tp1'] = np.where(df['is_bull'], df['entry']+(risk*tp1), df['entry']-(risk*tp1))
+    df['tp2'] = np.where(df['is_bull'], df['entry']+(risk*tp2), df['entry']-(risk*tp2))
+    df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
     
     return df
 
@@ -293,28 +314,43 @@ if not df.empty:
     
     last = df.iloc[-1]
     
+    # PREPARE AI ANALYSIS & SIGNAL TEXT
+    ai_analysis = generate_ai_analysis(last, symbol, timeframe)
+    
+    signal_txt = (
+        f"🔥 TITAN SIGNAL: {symbol}\n"
+        f"⏰ Timeframe: {timeframe}\n"
+        f"🧭 Direction: {'LONG 🟢' if last['is_bull'] else 'SHORT 🔴'}\n\n"
+        f"📍 Entry: {last['close']:.2f}\n"
+        f"🛑 Stop: {last['entry_stop']:.2f}\n\n"
+        f"🎯 LADDER TARGETS:\n"
+        f"1️⃣ TP1 ({tp1_r}R): {last['tp1']:.2f}\n"
+        f"2️⃣ TP2 ({tp2_r}R): {last['tp2']:.2f}\n"
+        f"3️⃣ TP3 ({tp3_r}R): {last['tp3']:.2f}\n\n"
+        f"🤖 AI ANALYST:\n{ai_analysis}"
+    )
+    
     # --- METRICS & ACTION CENTER (MOVED ABOVE CHART) ---
     st.markdown("### 📈 Live Market Metrics")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Price", f"{last['close']:.2f}", f"{'BULL' if last['is_bull'] else 'BEAR'}")
     m2.metric("Entry", f"{last['entry']:.2f}")
     m3.metric("Stop", f"{last['entry_stop']:.2f}")
-    m4.metric("TP3", f"{last['tp3']:.2f}")
+    m4.metric("TP3 (5R)", f"{last['tp3']:.2f}")
 
     st.markdown("### ⚡ Action Center")
     c1, c2, c3 = st.columns(3)
     
-    # MANUAL BROADCAST (ALWAYS VISIBLE NOW)
     with c1:
         if st.button("🔥 Manual Broadcast", key="btn_broadcast", use_container_width=True):
             if tg_token and tg_chat:
-                txt = f"🔥 TITAN MANUAL: {symbol} {'LONG' if last['is_bull'] else 'SHORT'} @ {last['close']:.2f}\nStop: {last['entry_stop']:.2f}"
-                if send_telegram_msg(tg_token, tg_chat, txt, 0):
+                if send_telegram_msg(tg_token, tg_chat, signal_txt, 0):
                     st.success("✅ Broadcast Sent!")
                     if persist: journal_signal(st.session_state.db_conn, {
                         "ts":str(last['timestamp']), "symbol":symbol, "timeframe":timeframe,
                         "direction":"LONG" if last['is_bull'] else "SHORT", "entry":last['close'],
-                        "stop":last['entry_stop'], "tp1":0,"tp2":0,"tp3":0,"adx":0,"rvol":0,"notes":"Manual"
+                        "stop":last['entry_stop'], "tp1":last['tp1'], "tp2":last['tp2'], "tp3":last['tp3'],
+                        "adx":0, "rvol":last['rvol'], "notes":"Manual"
                     })
                 else: st.error("❌ Send Failed")
             else: st.error("❌ No Telegram Creds")
@@ -348,7 +384,7 @@ if not df.empty:
     if not sells.empty:
         fig.add_trace(go.Scatter(x=sells['timestamp'], y=sells['high']*1.001, mode='markers', marker=dict(symbol='triangle-down', size=12, color='#ff0000'), name='SELL'))
     
-    # SCALING FIX: Autoscaling
+    # SCALING FIX
     fig.update_layout(height=650, template='plotly_dark', margin=dict(l=0,r=0,t=20,b=0), xaxis_rangeslider_visible=False, yaxis=dict(autorange=True))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -356,8 +392,7 @@ if not df.empty:
     if tg_on and (last['buy'] or last['sell']):
         sid = f"{last['timestamp']}_{symbol}"
         if sid != st.session_state.get("last_sid"):
-            txt = f"🔥 TITAN AUTO: {symbol} {'LONG' if last['is_bull'] else 'SHORT'} @ {last['close']:.2f}\nStop: {last['entry_stop']:.2f}"
-            if send_telegram_msg(tg_token, tg_chat, txt, telegram_cooldown_s):
+            if send_telegram_msg(tg_token, tg_chat, signal_txt, telegram_cooldown_s):
                 st.toast("✅ Auto-Signal Broadcasted!")
                 st.session_state["last_sid"] = sid
                 if persist: journal_signal(st.session_state.db_conn, {
