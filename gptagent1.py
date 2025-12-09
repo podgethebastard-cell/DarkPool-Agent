@@ -29,6 +29,10 @@ DB_PATH = "titan_signals.db"
 MAX_RETRIES = 2
 RETRY_DELAY = 0.5
 
+# --- TELEGRAM CONFIG (ENTER YOUR CREDS HERE TO FIX ERROR) ---
+TELEGRAM_TOKEN = ""  # Paste your Bot Token here, e.g., "123456:ABC-DEF..."
+TELEGRAM_CHAT_ID = "" # Paste your Chat ID here, e.g., "-100123456..."
+
 # SAFE DEFAULTS
 mf_len = 14
 vol_len = 20
@@ -212,8 +216,10 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🤖 TELEGRAM")
     tg_on = st.checkbox("Auto-Broadcast", False)
-    tg_token = st.text_input("Token", type="password")
-    tg_chat = st.text_input("Chat ID")
+    
+    # --- UPDATED: Use defaults from Constants if available ---
+    tg_token = st.text_input("Token", value=TELEGRAM_TOKEN, type="password")
+    tg_chat = st.text_input("Chat ID", value=TELEGRAM_CHAT_ID)
 
     if st.button("Test Link"):
         if not tg_token or not tg_chat: st.error("Missing Creds")
