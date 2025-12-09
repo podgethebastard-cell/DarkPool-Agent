@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 17.8: Neon Clock Color Fix (Iframe Injection)
+Version 17.9: Live TradingView Price Pane + Neon Clock
 """
 import time
 import math
@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # =============================================================================
-# CUSTOM CSS (Global Page Styles)
+# CUSTOM CSS & JS ASSETS (LIVE CLOCK)
 # =============================================================================
 st.markdown("""
 <style>
@@ -102,7 +102,7 @@ components.html(
 # HEADER with JS Clock (FIXED COLOR INJECTION)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1:
-    st.title("💠 TITAN TERMINAL v17.8")
+    st.title("💠 TITAN TERMINAL v17.9")
     st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
 with c_head2:
     # JavaScript Clock (Updates every second client-side)
@@ -580,7 +580,28 @@ if not df.empty:
 
     # --- METRICS ---
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("PRICE", f"{last['close']:.2f}", f"{'BULL' if last['is_bull'] else 'BEAR'}")
+    
+    # ----------------------------------------------------
+    # LIVE TRADINGVIEW PRICE WIDGET (REPLACES STATIC METRIC)
+    # ----------------------------------------------------
+    with m1:
+        # Generate TradingView Widget Symbol string (e.g., BINANCE:BTCUSDT)
+        tv_symbol = f"BINANCE:{symbol}" 
+        components.html(f"""
+        <div class="tradingview-widget-container">
+          <div class="tradingview-widget-container__widget"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js" async>
+          {{
+          "symbol": "{tv_symbol}",
+          "width": "100%",
+          "colorTheme": "dark",
+          "isTransparent": true,
+          "locale": "en"
+        }}
+          </script>
+        </div>
+        """, height=120)
+
     m2.metric("GANN TREND", "BULL" if last['gann_trend']==1 else "BEAR")
     m3.metric("SMART STOP", f"{smart_stop:.2f}") 
     m4.metric("TP3 (5R)", f"{last['tp3']:.2f}")
