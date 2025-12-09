@@ -54,9 +54,8 @@ class KrakenDataFetcher:
         """Map common symbols to Kraken format"""
         symbol = symbol.upper().strip()
         
-        # If it's already a Kraken symbol (starts with X or ends with USD)
-        if symbol in ["XBTUSD", "ETHUSD", "SOLUSD", "ADAUSD", "DOTUSD", 
-                     "XDGUSD", "LTCUSD", "XRPUSD", "MATICUSD", "AVAXUSD", "LINKUSD"]:
+        # If it's already a Kraken symbol
+        if symbol in Config.SYMBOL_MAP.values():
             return symbol
         
         # Map common symbols
@@ -66,7 +65,6 @@ class KrakenDataFetcher:
         # Try to parse common formats
         if symbol.endswith("USD"):
             base = symbol[:-3]
-            # Add X prefix for Bitcoin
             if base == "BTC":
                 return "XBTUSD"
             return symbol
@@ -77,7 +75,7 @@ class KrakenDataFetcher:
         elif symbol in ["ETH", "SOL", "ADA", "DOT", "DOGE", "LTC", "XRP", "MATIC", "AVAX", "LINK"]:
             return f"{symbol}USD"
         
-        return symbol  # Return as-is, will fail if invalid
+        return symbol
     
     @staticmethod
     def map_timeframe_to_kraken(tf: str) -> str:
@@ -93,7 +91,7 @@ class KrakenDataFetcher:
             "1w": "10080",
             "2w": "21600"
         }
-        return tf_map.get(tf, "5")  # Default to 5 minutes
+        return tf_map.get(tf, "5")
     
     @staticmethod
     def fetch_ohlcv(symbol: str, timeframe: str = "5", limit: int = 720) -> pd.DataFrame:
@@ -107,8 +105,7 @@ class KrakenDataFetcher:
             url = f"{Config.KRAKEN_BASE_URL}/OHLC"
             params = {
                 "pair": kraken_symbol,
-                "interval": kraken_interval,
-                "since": int((datetime.now() - timedelta(days=30)).timestamp())  # Last 30 days
+                "interval": kraken_interval
             }
             
             # Make request
@@ -123,23 +120,22 @@ class KrakenDataFetcher:
             if data.get("error"):
                 error_msg = data["error"][0] if data["error"] else "Unknown error"
                 st.error(f"Kraken API error: {error_msg}")
-                st.info(f"Available Kraken USD pairs: XBTUSD, ETHUSD, SOLUSD, ADAUSD, DOTUSD, XDGUSD (DOGE), LTCUSD, XRPUSD, MATICUSD, AVAXUSD, LINKUSD")
                 return pd.DataFrame()
             
             # Extract the data
-            result_key = list(data["result"].keys())[0] if data["result"] else None
-            if not result_key or result_key == "last":
+            result_keys = list(data["result"].keys())
+            if not result_keys or result_keys[0] == "last":
                 st.error("No data returned from Kraken")
                 return pd.DataFrame()
             
+            result_key = result_keys[0]
             ohlc_data = data["result"][result_key]
             
             if not ohlc_data:
                 st.error("Empty data from Kraken")
                 return pd.DataFrame()
             
-            # Parse Kraken OHLC format
-            # Kraken returns: [time, open, high, low, close, vwap, volume, count]
+            # Parse Kraken OHLC format: [time, open, high, low, close, vwap, volume, count]
             df = pd.DataFrame(ohlc_data, columns=[
                 "timestamp", "open", "high", "low", "close", 
                 "vwap", "volume", "count"
@@ -154,59 +150,48 @@ class KrakenDataFetcher:
             
             # Limit to requested number of candles
             df = df.tail(min(limit, len(df)))
-            
-            # Sort by timestamp (just in case)
             df.sort_index(inplace=True)
             
             return df[["open", "high", "low", "close", "volume"]].dropna()
             
         except Exception as e:
-            st.error(f"Error fetching from Kraken: {str(e)[:200]}")
+            st.error(f"Error fetching from Kraken: {str(e)}")
             return pd.DataFrame()
-    
-    @staticmethod
-    def get_ticker_info(symbol: str) -> Dict:
-        """Get current ticker information"""
-        try:
-            kraken_symbol = KrakenDataFetcher.map_symbol_to_kraken(symbol)
-            
-            url = f"{Config.KRAKEN_BASE_URL}/Ticker"
-            params = {"pair": kraken_symbol}
-            
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
-            
-            if data.get("error"):
-                return {}
-            
-            result_key = list(data["result"].keys())[0]
-            ticker_data = data["result"][result_key]
-            
-            return {
-                "bid": float(ticker_data.get("b", [0])[0]),
-                "ask": float(ticker_data.get("a", [0])[0]),
-                "last": float(ticker_data.get("c", [0])[0]),
-                "volume": float(ticker_data.get("v", [0])[0]),
-                "high": float(ticker_data.get("h", [0])[0]),
-                "low": float(ticker_data.get("l", [0])[0]),
-                "open": float(ticker_data.get("o", 0))
-            }
-            
-        except:
-            return {}
 
 # =========================
-# INDICATOR CALCULATOR
+# INDICATOR CALCULATOR (FIXED)
 # =========================
 class IndicatorCalculator:
     """Calculate technical indicators"""
     
     @staticmethod
     def calculate_all(df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate all indicators"""
+        """Calculate all indicators - FIXED VERSION"""
         df = df.copy()
         
         if len(df) < 20:
+            # Still create basic columns but with NaN
+            df['returns'] = np.nan
+            df['sma_20'] = np.nan
+            df['sma_50'] = np.nan
+            df['ema_12'] = np.nan
+            df['ema_26'] = np.nan
+            df['macd'] = np.nan
+            df['macd_signal'] = np.nan
+            df['macd_hist'] = np.nan
+            df['rsi'] = np.nan
+            df['bb_middle'] = np.nan
+            df['bb_upper'] = np.nan
+            df['bb_lower'] = np.nan
+            df['atr'] = np.nan
+            df['volume_sma'] = np.nan
+            df['volume_ratio'] = np.nan
+            df['vwap'] = np.nan
+            df['stoch_k'] = np.nan
+            df['stoch_d'] = np.nan
+            df['volatility'] = np.nan
+            df['trend'] = 0
+            df['momentum'] = np.nan  # ADDED THIS LINE
             return df
         
         # Price returns
@@ -245,41 +230,51 @@ class IndicatorCalculator:
         
         # Volume indicators
         df['volume_sma'] = df['volume'].rolling(20).mean()
-        df['volume_ratio'] = df['volume'] / df['volume_sma']
+        df['volume_ratio'] = df['volume'] / df['volume_sma'].replace(0, np.nan)
         
-        # VWAP (using Kraken's vwap if available, otherwise calculate)
-        if 'vwap' in df.columns:
-            df['vwap'] = df['vwap'].astype(float)
-        else:
-            df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
+        # VWAP
+        df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum().replace(0, np.nan)
         
         # Stochastic Oscillator
         low_14 = df['low'].rolling(14).min()
         high_14 = df['high'].rolling(14).max()
-        df['stoch_k'] = 100 * ((df['close'] - low_14) / (high_14 - low_14))
+        range_14 = high_14 - low_14
+        df['stoch_k'] = 100 * ((df['close'] - low_14) / range_14.replace(0, np.nan))
         df['stoch_d'] = df['stoch_k'].rolling(3).mean()
         
-        # Additional indicators
+        # Additional indicators - FIXED: All columns must be created
         df['volatility'] = df['returns'].rolling(20).std() * np.sqrt(252)
         df['trend'] = np.where(df['close'] > df['ema_12'], 1, -1)
-        df['momentum'] = df['close'].pct_change(10)
+        df['momentum'] = df['close'].pct_change(10)  # This was missing!
         
         return df
 
 # =========================
-# SIGNAL GENERATOR
+# SIGNAL GENERATOR (FIXED)
 # =========================
 class SignalGenerator:
     """Generate trading signals"""
     
     @staticmethod
     def generate(df: pd.DataFrame) -> pd.DataFrame:
-        """Generate buy/sell signals"""
+        """Generate buy/sell signals - FIXED VERSION"""
         df = df.copy()
         
-        # Initialize signals
+        # Initialize signals - always create these columns
         df['signal'] = 0
         df['signal_type'] = 'NEUTRAL'
+        
+        # Check if we have enough data for indicators
+        if len(df) < 20:
+            return df
+        
+        # Check if required columns exist
+        required_cols = ['macd', 'macd_signal', 'rsi', 'bb_lower', 'bb_upper', 'ema_12', 'ema_26', 'volume_ratio']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            # If columns are missing, return with neutral signals
+            return df
         
         # MACD Crossover
         macd_buy = (df['macd'] > df['macd_signal']) & (df['macd'].shift() <= df['macd_signal'].shift())
@@ -323,7 +318,7 @@ class SignalGenerator:
         return df
 
 # =========================
-# BACKTESTING ENGINE
+# BACKTESTING ENGINE (FIXED)
 # =========================
 class Backtester:
     """Simple backtesting engine"""
@@ -332,9 +327,19 @@ class Backtester:
         self.initial_capital = initial_capital
     
     def run(self, df: pd.DataFrame) -> Dict:
-        """Run backtest"""
-        if 'signal' not in df.columns:
-            return {}
+        """Run backtest - FIXED VERSION"""
+        if 'signal' not in df.columns or len(df) < 20:
+            return {
+                'initial_capital': self.initial_capital,
+                'final_capital': self.initial_capital,
+                'total_return': 0,
+                'total_trades': 0,
+                'winning_trades': 0,
+                'total_pnl': 0,
+                'win_rate': 0,
+                'sharpe_ratio': 0,
+                'trades': []
+            }
         
         capital = self.initial_capital
         position = 0
@@ -362,7 +367,7 @@ class Backtester:
                         'entry': entry_price,
                         'exit': price,
                         'pnl': pnl,
-                        'pnl_pct': (price / entry_price - 1) * 100
+                        'pnl_pct': (price / entry_price - 1) * 100 if entry_price > 0 else 0
                     })
                     position = 0
             
@@ -377,17 +382,17 @@ class Backtester:
                         'entry': entry_price,
                         'exit': price,
                         'pnl': pnl,
-                        'pnl_pct': (entry_price / price - 1) * 100
+                        'pnl_pct': (entry_price / price - 1) * 100 if price > 0 else 0
                     })
                     position = 0
             
             # Entry conditions
             if position == 0 and signal != 0:
                 if signal == 1:  # Buy
-                    position = capital * 0.1 / price  # 10% position
+                    position = capital * 0.1 / price if price > 0 else 0  # 10% position
                     entry_price = price
                 elif signal == -1:  # Sell
-                    position = -capital * 0.1 / price  # 10% short
+                    position = -capital * 0.1 / price if price > 0 else 0  # 10% short
                     entry_price = price
         
         # Calculate metrics
@@ -406,16 +411,18 @@ class Backtester:
         else:
             sharpe = 0
         
+        total_return = ((capital - self.initial_capital) / self.initial_capital) * 100 if self.initial_capital > 0 else 0
+        
         return {
             'initial_capital': self.initial_capital,
             'final_capital': capital,
-            'total_return': ((capital - self.initial_capital) / self.initial_capital) * 100,
+            'total_return': total_return,
             'total_trades': total_trades,
             'winning_trades': winning_trades,
             'total_pnl': total_pnl,
             'win_rate': win_rate,
             'sharpe_ratio': sharpe,
-            'trades': trades[-10:] if trades else []  # Last 10 trades
+            'trades': trades[-10:] if trades else []
         }
 
 # =========================
@@ -588,6 +595,9 @@ def load_market_data(symbol: str, timeframe: str, candles: int):
             st.error(f"❌ No data returned for {symbol}. Please try a different symbol.")
             return
         
+        if len(df) < 20:
+            st.warning(f"⚠️ Only {len(df)} candles loaded. Some indicators may not work properly.")
+        
         status_text.info("Calculating indicators...")
         
         # Calculate indicators
@@ -613,11 +623,6 @@ def load_market_data(symbol: str, timeframe: str, candles: int):
         status_text.empty()
         st.success(f"✅ Successfully loaded {len(df)} candles for {symbol}")
         
-        # Also get current ticker info
-        ticker_info = KrakenDataFetcher.get_ticker_info(symbol)
-        if ticker_info:
-            st.session_state.ticker_info = ticker_info
-        
     except Exception as e:
         st.error(f"❌ Error loading data: {str(e)}")
         st.info("Try using XBTUSD or ETHUSD as the symbol")
@@ -633,16 +638,20 @@ def display_market_data():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        current_price = df['close'].iloc[-1]
-        price_change = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2]) * 100
-        st.metric(
-            "Current Price", 
-            f"${current_price:,.2f}", 
-            f"{price_change:+.2f}%"
-        )
+        if len(df) > 1:
+            current_price = df['close'].iloc[-1]
+            prev_price = df['close'].iloc[-2]
+            price_change = ((current_price - prev_price) / prev_price) * 100
+            st.metric(
+                "Current Price", 
+                f"${current_price:,.2f}", 
+                f"{price_change:+.2f}%"
+            )
+        else:
+            st.metric("Current Price", f"${df['close'].iloc[-1]:,.2f}" if len(df) > 0 else "$0.00")
     
     with col2:
-        current_signal = df['signal_type'].iloc[-1]
+        current_signal = df['signal_type'].iloc[-1] if 'signal_type' in df.columns else 'NEUTRAL'
         signal_color = "green" if "BUY" in current_signal else "red" if "SELL" in current_signal else "gray"
         st.markdown(f"""
         <div style='background: rgba({'0, 200, 83' if 'BUY' in current_signal else '255, 61, 0' if 'SELL' in current_signal else '100, 100, 100'}, 0.2); 
@@ -652,15 +661,20 @@ def display_market_data():
         """, unsafe_allow_html=True)
     
     with col3:
-        rsi_value = df['rsi'].iloc[-1]
-        rsi_status = "Oversold" if rsi_value < 30 else "Overbought" if rsi_value > 70 else "Neutral"
-        rsi_color = "green" if rsi_value < 30 else "red" if rsi_value > 70 else "gray"
-        st.metric("RSI", f"{rsi_value:.1f}", rsi_status)
+        if 'rsi' in df.columns and not pd.isna(df['rsi'].iloc[-1]):
+            rsi_value = df['rsi'].iloc[-1]
+            rsi_status = "Oversold" if rsi_value < 30 else "Overbought" if rsi_value > 70 else "Neutral"
+            st.metric("RSI", f"{rsi_value:.1f}", rsi_status)
+        else:
+            st.metric("RSI", "N/A")
     
     with col4:
-        volume_ratio = df['volume_ratio'].iloc[-1]
-        volume_status = "High" if volume_ratio > 1.5 else "Normal" if volume_ratio > 0.5 else "Low"
-        st.metric("Volume", f"{volume_ratio:.2f}x", volume_status)
+        if 'volume_ratio' in df.columns and not pd.isna(df['volume_ratio'].iloc[-1]):
+            volume_ratio = df['volume_ratio'].iloc[-1]
+            volume_status = "High" if volume_ratio > 1.5 else "Normal" if volume_ratio > 0.5 else "Low"
+            st.metric("Volume", f"{volume_ratio:.2f}x", volume_status)
+        else:
+            st.metric("Volume", "N/A")
     
     # Performance Metrics
     if st.session_state.performance:
@@ -712,30 +726,33 @@ def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
         row=1, col=1
     )
     
-    # Moving Averages
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df['ema_12'], line=dict(color='orange', width=1), name='EMA 12'),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df['ema_26'], line=dict(color='red', width=1), name='EMA 26'),
-        row=1, col=1
-    )
+    # Moving Averages (only if they exist)
+    if 'ema_12' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['ema_12'], line=dict(color='orange', width=1), name='EMA 12'),
+            row=1, col=1
+        )
+    if 'ema_26' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['ema_26'], line=dict(color='red', width=1), name='EMA 26'),
+            row=1, col=1
+        )
     
-    # Bollinger Bands
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df['bb_upper'], line=dict(color='gray', width=1, dash='dash'), 
-                  name='BB Upper', showlegend=False),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df['bb_lower'], line=dict(color='gray', width=1, dash='dash'), 
-                  fill='tonexty', name='BB Lower', showlegend=False),
-        row=1, col=1
-    )
+    # Bollinger Bands (only if they exist)
+    if 'bb_upper' in df.columns and 'bb_lower' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['bb_upper'], line=dict(color='gray', width=1, dash='dash'), 
+                      name='BB Upper', showlegend=False),
+            row=1, col=1
+        )
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['bb_lower'], line=dict(color='gray', width=1, dash='dash'), 
+                      fill='tonexty', name='BB Lower', showlegend=False),
+            row=1, col=1
+        )
     
     # Signals
-    if not signals.empty:
+    if signals is not None and not signals.empty:
         buy_signals = signals[signals['signal'] == 1]
         sell_signals = signals[signals['signal'] == -1]
         
@@ -770,29 +787,32 @@ def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
         row=2, col=1
     )
     
-    # Volume SMA
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df['volume_sma'], line=dict(color='yellow', width=1), name='Volume MA'),
-        row=2, col=1
-    )
+    # Volume SMA (if exists)
+    if 'volume_sma' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['volume_sma'], line=dict(color='yellow', width=1), name='Volume MA'),
+            row=2, col=1
+        )
     
-    # RSI
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df['rsi'], line=dict(color='purple', width=2), name='RSI'),
-        row=3, col=1
-    )
-    fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
+    # RSI (if exists)
+    if 'rsi' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['rsi'], line=dict(color='purple', width=2), name='RSI'),
+            row=3, col=1
+        )
+        fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
     
-    # MACD
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df['macd'], line=dict(color='blue', width=2), name='MACD'),
-        row=3, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df['macd_signal'], line=dict(color='orange', width=2), name='Signal'),
-        row=3, col=1
-    )
+    # MACD (if exists)
+    if 'macd' in df.columns and 'macd_signal' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['macd'], line=dict(color='blue', width=2), name='MACD'),
+            row=3, col=1
+        )
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['macd_signal'], line=dict(color='orange', width=2), name='Signal'),
+            row=3, col=1
+        )
     
     # Update layout
     fig.update_layout(
@@ -806,18 +826,24 @@ def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 def display_indicators(df: pd.DataFrame):
-    """Display technical indicators"""
+    """Display technical indicators - FIXED VERSION"""
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("📊 Trend Indicators")
         
+        # Helper function to safely get values
+        def get_value(col, default="N/A", formatter=lambda x: f"{x:.4f}"):
+            if col in df.columns and not pd.isna(df[col].iloc[-1]):
+                return formatter(df[col].iloc[-1])
+            return default
+        
         indicators = {
-            "MACD": f"{df['macd'].iloc[-1]:.4f}",
-            "MACD Signal": f"{df['macd_signal'].iloc[-1]:.4f}",
-            "MACD Histogram": f"{df['macd_hist'].iloc[-1]:.4f}",
+            "MACD": get_value('macd'),
+            "MACD Signal": get_value('macd_signal'),
+            "MACD Histogram": get_value('macd_hist'),
             "ADX": "N/A",  # Not calculated in simple version
-            "Trend": "Bullish" if df['trend'].iloc[-1] > 0 else "Bearish"
+            "Trend": "Bullish" if ('trend' in df.columns and df['trend'].iloc[-1] > 0) else "Bearish" if ('trend' in df.columns and df['trend'].iloc[-1] < 0) else "N/A"
         }
         
         for name, value in indicators.items():
@@ -827,11 +853,11 @@ def display_indicators(df: pd.DataFrame):
         st.subheader("📈 Momentum Indicators")
         
         indicators = {
-            "RSI": f"{df['rsi'].iloc[-1]:.1f}",
-            "Stochastic %K": f"{df['stoch_k'].iloc[-1]:.1f}",
-            "Stochastic %D": f"{df['stoch_d'].iloc[-1]:.1f}",
-            "Momentum (10)": f"{df['momentum'].iloc[-1]:.2%}",
-            "Volatility": f"{df['volatility'].iloc[-1]:.2%}"
+            "RSI": get_value('rsi', formatter=lambda x: f"{x:.1f}"),
+            "Stochastic %K": get_value('stoch_k', formatter=lambda x: f"{x:.1f}"),
+            "Stochastic %D": get_value('stoch_d', formatter=lambda x: f"{x:.1f}"),
+            "Momentum (10)": get_value('momentum', formatter=lambda x: f"{x:.2%}"),  # FIXED
+            "Volatility": get_value('volatility', formatter=lambda x: f"{x:.2%}")
         }
         
         for name, value in indicators.items():
@@ -842,14 +868,18 @@ def display_indicators(df: pd.DataFrame):
     col3, col4 = st.columns(2)
     
     with col3:
-        bb_position = (df['close'].iloc[-1] - df['bb_lower'].iloc[-1]) / \
-                     (df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1])
-        st.metric("BB Position", f"{bb_position:.2%}")
-        st.metric("ATR", f"{df['atr'].iloc[-1]:.2f}")
+        if 'bb_lower' in df.columns and 'bb_upper' in df.columns and 'close' in df.columns:
+            bb_position = (df['close'].iloc[-1] - df['bb_lower'].iloc[-1]) / \
+                         (df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1])
+            st.metric("BB Position", f"{bb_position:.2%}")
+        else:
+            st.metric("BB Position", "N/A")
+        
+        st.metric("ATR", get_value('atr', formatter=lambda x: f"{x:.2f}"))
     
     with col4:
-        st.metric("Upper Band", f"${df['bb_upper'].iloc[-1]:,.2f}")
-        st.metric("Lower Band", f"${df['bb_lower'].iloc[-1]:,.2f}")
+        st.metric("Upper Band", get_value('bb_upper', formatter=lambda x: f"${x:,.2f}"))
+        st.metric("Lower Band", get_value('bb_lower', formatter=lambda x: f"${x:,.2f}"))
 
 def display_data_and_signals(df: pd.DataFrame):
     """Display recent data and signals"""
@@ -862,17 +892,27 @@ def display_data_and_signals(df: pd.DataFrame):
         display_df = df.tail(10).copy()
         display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
         
-        format_dict = {
-            'open': '${:,.2f}',
-            'high': '${:,.2f}',
-            'low': '${:,.2f}',
-            'close': '${:,.2f}',
-            'volume': '{:,.0f}',
-            'rsi': '{:.1f}'
-        }
+        # Create format dictionary
+        format_dict = {}
+        if 'open' in display_df.columns:
+            format_dict['open'] = '${:,.2f}'
+        if 'high' in display_df.columns:
+            format_dict['high'] = '${:,.2f}'
+        if 'low' in display_df.columns:
+            format_dict['low'] = '${:,.2f}'
+        if 'close' in display_df.columns:
+            format_dict['close'] = '${:,.2f}'
+        if 'volume' in display_df.columns:
+            format_dict['volume'] = '{:,.0f}'
+        if 'rsi' in display_df.columns:
+            format_dict['rsi'] = '{:.1f}'
+        
+        # Select columns that exist
+        columns_to_show = ['open', 'high', 'low', 'close', 'volume', 'rsi', 'signal_type']
+        existing_cols = [col for col in columns_to_show if col in display_df.columns]
         
         st.dataframe(
-            display_df[['open', 'high', 'low', 'close', 'volume', 'rsi', 'signal_type']]
+            display_df[existing_cols]
             .style.format(format_dict),
             use_container_width=True,
             height=400
@@ -882,28 +922,31 @@ def display_data_and_signals(df: pd.DataFrame):
         st.subheader("🎯 Recent Trading Signals")
         
         # Get recent signals
-        signals_df = df[df['signal'] != 0].tail(10).copy()
-        
-        if not signals_df.empty:
-            signals_df.index = signals_df.index.strftime('%Y-%m-%d %H:%M')
+        if 'signal' in df.columns:
+            signals_df = df[df['signal'] != 0].tail(10).copy()
             
-            # Color function for signals
-            def color_signal(val):
-                if 'BUY' in val:
-                    return 'color: green; font-weight: bold'
-                elif 'SELL' in val:
-                    return 'color: red; font-weight: bold'
-                return 'color: gray'
-            
-            st.dataframe(
-                signals_df[['close', 'rsi', 'signal_type']]
-                .style.format({'close': '${:,.2f}', 'rsi': '{:.1f}'})
-                .applymap(color_signal, subset=['signal_type']),
-                use_container_width=True,
-                height=400
-            )
+            if not signals_df.empty:
+                signals_df.index = signals_df.index.strftime('%Y-%m-%d %H:%M')
+                
+                # Color function for signals
+                def color_signal(val):
+                    if 'BUY' in val:
+                        return 'color: green; font-weight: bold'
+                    elif 'SELL' in val:
+                        return 'color: red; font-weight: bold'
+                    return 'color: gray'
+                
+                st.dataframe(
+                    signals_df[['close', 'rsi', 'signal_type']]
+                    .style.format({'close': '${:,.2f}', 'rsi': '{:.1f}'})
+                    .applymap(color_signal, subset=['signal_type']),
+                    use_container_width=True,
+                    height=400
+                )
+            else:
+                st.info("No trading signals generated yet")
         else:
-            st.info("No trading signals generated yet")
+            st.info("Signal column not available")
         
         # Performance summary
         if st.session_state.performance:
