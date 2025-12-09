@@ -196,7 +196,7 @@ with st.sidebar:
     amplitude = st.number_input("Amplitude", 2, 200, 10)
     channel_dev = st.number_input("ATR Dev", 0.5, 10.0, 3.0, 0.1)
     hma_len = st.number_input("HMA Len", 2, 400, 50)
-    gann_len = st.number_input("Gann Len", 1, 50, 3) # NEW
+    gann_len = st.number_input("Gann Len", 1, 50, 3) 
     
     with st.expander("🎯 Targets (R)"):
         tp1_r = st.number_input("TP1", value=1.5, step=0.1)
@@ -213,15 +213,13 @@ with st.sidebar:
     st.subheader("🤖 TELEGRAM")
     tg_on = st.checkbox("Auto-Broadcast", False)
     
-    # --- FIXED: LOAD FROM SECRETS ---
-    # Try loading from secrets.toml first
+    # --- SECRETS LOADING ---
     try: sec_token = st.secrets["TELEGRAM_TOKEN"]
     except: sec_token = ""
     
     try: sec_chat = st.secrets["TELEGRAM_CHAT_ID"]
     except: sec_chat = ""
 
-    # Use secrets as default value
     tg_token = st.text_input("Token", value=sec_token, type="password")
     tg_chat = st.text_input("Chat ID", value=sec_chat)
 
@@ -350,7 +348,6 @@ def journal_signal(conn, payload):
 
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
-    # Strip whitespace
     token = token.strip()
     chat = chat.strip()
     
