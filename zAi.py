@@ -1,4 +1,3 @@
-
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -27,14 +26,13 @@ atr_mult = st.sidebar.number_input("Stop Deviation (ATR x)", 0.5, 10.0, 3.0)
 hma_len = st.sidebar.number_input("HMA Length", 10, 200, 50)
 
 # =========================
-# DATA FETCHER (BINANCE) - WITH FALLBACK ENDPOINT
+# DATA FETCHER (BINANCE) - OPTIMIZED FOR RESTRICTED REGIONS
 # =========================
 @st.cache_data(ttl=30)
 def fetch_data(symbol, tf, limit):
-    # Primary Binance API endpoint
-    url_primary = "https://api.binance.com/api/v3/klines"
-    # Fallback US-based Binance API endpoint
-    url_fallback = "https://api.binance.us/api/v3/klines"
+    # OPTIMIZED: Prioritize the US endpoint for users in restricted regions like the UK
+    url_primary = "https://api.binance.us/api/v3/klines"
+    url_fallback = "https://api.binance.com/api/v3/klines"
     
     params = {"symbol": symbol, "interval": tf, "limit": limit}
     url_to_try = url_primary
