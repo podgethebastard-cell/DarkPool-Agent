@@ -6,59 +6,12 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import requests
 import json
-import threading
-import time
 import sqlite3
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any, Callable
+from typing import Dict, List, Optional, Tuple, Any
 import warnings
 warnings.filterwarnings('ignore')
-
-# =========================
-# FALLBACK IMPORTS WITH GRACEFUL DEGRADATION
-# =========================
-try:
-    import yfinance as yf
-    YFINANCE_AVAILABLE = True
-except ImportError:
-    YFINANCE_AVAILABLE = False
-    st.warning("yfinance not installed. Using alternative data source.")
-
-try:
-    import pandas_ta as ta
-    PANDAS_TA_AVAILABLE = True
-except ImportError:
-    PANDAS_TA_AVAILABLE = False
-    st.warning("pandas_ta not installed. Some indicators may be limited.")
-
-try:
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.ensemble import IsolationForest
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
-    st.warning("scikit-learn not installed. ML features disabled.")
-
-try:
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
-
-try:
-    import joblib
-    JOBLIB_AVAILABLE = True
-except ImportError:
-    JOBLIB_AVAILABLE = False
-
-# Try to import websocket but provide fallback
-try:
-    import websocket
-    WEBSOCKET_AVAILABLE = True
-except ImportError:
-    WEBSOCKET_AVAILABLE = False
-    st.info("WebSocket not available. Real-time features will use polling.")
 
 # =========================
 # CONFIGURATION
@@ -68,7 +21,7 @@ CONFIG = {
     'cache_ttl': 30,
     'max_candles': 2000,
     'db_path': 'titan_trading.db',
-    'default_symbol': 'BTC-USD',
+    'default_symbol': 'BTCUSDT',
     'default_timeframe': '5m',
     'initial_capital': 10000,
     'max_position_size': 0.1,
@@ -85,28 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =========================
-# ENUMS & DATA CLASSES
-# =========================
-from enum import Enum
-
-class TimeFrame(Enum):
-    M1 = "1m"
-    M5 = "5m"
-    M15 = "15m"
-    M30 = "30m"
-    H1 = "1h"
-    H4 = "4h"
-    D1 = "1d"
-
-class SignalType(Enum):
-    STRONG_BUY = "STRONG_BUY"
-    BUY = "BUY"
-    NEUTRAL = "NEUTRAL"
-    SELL = "SELL"
-    STRONG_SELL = "STRONG_SELL"
-
-# =========================
-# DATABASE MANAGER (SIMPLIFIED)
+# DATABASE MANAGER
 # =========================
 class DatabaseManager:
     def __init__(self, db_path: str = CONFIG['db_path']):
@@ -118,7 +50,6 @@ class DatabaseManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Signals table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,7 +62,6 @@ class DatabaseManager:
             )
         ''')
         
-        # Trades table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS trades (
                 id TEXT PRIMARY KEY,
@@ -191,74 +121,19 @@ class DatabaseManager:
         return signals
 
 # =========================
-# MARKET DATA MANAGER (WITH YFINANCE FALLBACK)
+# MARKET DATA MANAGER
 # =========================
 class MarketDataManager:
     def __init__(self):
         self.cache = {}
     
-    def fetch_ohlcv_yfinance(self, symbol: str, interval: str, period: str = "60d") -> pd.DataFrame:
-        """Fetch OHLCV data using yfinance"""
-        if not YFINANCE_AVAILABLE:
-            raise ImportError("yfinance not available")
-        
-        # Map intervals
-        interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "1h", "4h": "4h", "1d": "1d"
-        }
-        
-        yf_interval = interval_map.get(interval, "5m")
-        
-        # Adjust period based on interval
-        if yf_interval in ["1m", "5m"]:
-            period = "7d"
-        elif yf_interval in ["15m", "30m"]:
-            period = "60d"
-        elif yf_interval == "1h":
-            period = "730d"
-        else:
-            period = "max"
-        
-        try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period, interval=yf_interval)
-            
-            if df.empty:
-                # Try alternative symbol format
-                if "-" in symbol:
-                    alt_symbol = symbol.replace("-", "")
-                else:
-                    alt_symbol = f"{symbol}-USD"
-                
-                ticker = yf.Ticker(alt_symbol)
-                df = ticker.history(period=period, interval=yf_interval)
-            
-            # Rename columns to standard format
-            df = df.rename(columns={
-                'Open': 'open',
-                'High': 'high',
-                'Low': 'low',
-                'Close': 'close',
-                'Volume': 'volume'
-            })
-            
-            df.index.name = 'timestamp'
-            df = df[['open', 'high', 'low', 'close', 'volume']].dropna()
-            
-            return df
-        
-        except Exception as e:
-            logger.error(f"Error fetching data with yfinance: {e}")
-            return pd.DataFrame()
-    
     def fetch_ohlcv_binance(self, symbol: str, interval: str, limit: int = 1000) -> pd.DataFrame:
         """Fetch OHLCV data from Binance API"""
         try:
-            # Convert symbol format
-            binance_symbol = symbol.replace("-", "")
-            if not binance_symbol.endswith("USDT"):
-                binance_symbol += "USDT"
+            # Clean symbol format
+            symbol = symbol.upper().replace("-", "").replace("/", "")
+            if not symbol.endswith("USDT"):
+                symbol += "USDT"
             
             # Map intervals
             interval_map = {
@@ -270,9 +145,9 @@ class MarketDataManager:
             
             url = "https://api.binance.com/api/v3/klines"
             params = {
-                "symbol": binance_symbol,
+                "symbol": symbol,
                 "interval": binance_interval,
-                "limit": limit
+                "limit": min(limit, 1000)
             }
             
             response = requests.get(url, params=params, timeout=10)
@@ -291,19 +166,16 @@ class MarketDataManager:
             
             # Convert to float
             for col in ["open", "high", "low", "close", "volume"]:
-                df[col] = df[col].astype(float)
+                df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            return df[["open", "high", "low", "close", "volume"]]
+            return df[["open", "high", "low", "close", "volume"]].dropna()
         
         except Exception as e:
             logger.error(f"Error fetching data from Binance: {e}")
-            # Fallback to yfinance
-            if YFINANCE_AVAILABLE:
-                return self.fetch_ohlcv_yfinance(symbol, interval)
             return pd.DataFrame()
     
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 1000) -> pd.DataFrame:
-        """Main method to fetch OHLCV data with fallbacks"""
+        """Main method to fetch OHLCV data"""
         cache_key = f"{symbol}_{timeframe}_{limit}"
         
         # Check cache
@@ -312,12 +184,8 @@ class MarketDataManager:
             if (datetime.now() - cached_time).seconds < CONFIG['cache_ttl']:
                 return data.copy()
         
-        # Try Binance first
+        # Fetch from Binance
         df = self.fetch_ohlcv_binance(symbol, timeframe, limit)
-        
-        # If empty, try yfinance
-        if df.empty and YFINANCE_AVAILABLE:
-            df = self.fetch_ohlcv_yfinance(symbol, timeframe)
         
         # Cache the result
         if not df.empty:
@@ -326,7 +194,7 @@ class MarketDataManager:
         return df
 
 # =========================
-# TECHNICAL INDICATOR ENGINE
+# TECHNICAL INDICATOR ENGINE (PURE PYTHON)
 # =========================
 class IndicatorEngine:
     @staticmethod
@@ -377,15 +245,15 @@ class IndicatorEngine:
         
         # Volume indicators
         df['volume_sma'] = df['volume'].rolling(window=20).mean()
-        df['volume_ratio'] = df['volume'] / df['volume_sma']
+        df['volume_ratio'] = df['volume'] / df['volume_sma'].replace(0, 1)
         
-        # VWAP (daily)
-        df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
+        # VWAP
+        df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum().replace(0, 1)
         
         # Stochastic Oscillator
         low_14 = df['low'].rolling(window=14).min()
         high_14 = df['high'].rolling(window=14).max()
-        df['stoch_k'] = 100 * ((df['close'] - low_14) / (high_14 - low_14))
+        df['stoch_k'] = 100 * ((df['close'] - low_14) / (high_14 - low_14).replace(0, 1))
         df['stoch_d'] = df['stoch_k'].rolling(window=3).mean()
         
         # Parabolic SAR (simplified)
@@ -394,59 +262,59 @@ class IndicatorEngine:
         # ADX (simplified)
         df['adx'] = IndicatorEngine._calculate_adx(df)
         
-        # Custom indicators
-        df = IndicatorEngine._calculate_custom_indicators(df)
+        # Additional indicators
+        df = IndicatorEngine._calculate_additional_indicators(df)
         
         return df
     
     @staticmethod
     def _calculate_sar(df: pd.DataFrame) -> pd.Series:
         """Calculate Parabolic SAR (simplified)"""
-        sar = pd.Series(np.nan, index=df.index)
-        
         if len(df) < 2:
-            return sar
+            return pd.Series(np.nan, index=df.index)
         
-        # Start values
-        sar.iloc[0] = df['low'].iloc[0]
-        trend = 1  # 1 for uptrend, -1 for downtrend
-        af = 0.02  # acceleration factor
+        sar = np.zeros(len(df))
+        trend = np.ones(len(df))  # 1 for uptrend, -1 for downtrend
+        af = 0.02
         ep = df['high'].iloc[0]  # extreme point
         
+        sar[0] = df['low'].iloc[0]
+        
         for i in range(1, len(df)):
-            if trend == 1:
-                sar.iloc[i] = sar.iloc[i-1] + af * (ep - sar.iloc[i-1])
+            if trend[i-1] == 1:
+                sar[i] = sar[i-1] + af * (ep - sar[i-1])
                 
-                if df['low'].iloc[i] < sar.iloc[i]:
-                    trend = -1
-                    sar.iloc[i] = ep
+                if df['low'].iloc[i] < sar[i]:
+                    trend[i] = -1
+                    sar[i] = ep
                     af = 0.02
                     ep = df['low'].iloc[i]
                 else:
+                    trend[i] = 1
                     if df['high'].iloc[i] > ep:
                         ep = df['high'].iloc[i]
                         af = min(af + 0.02, 0.2)
-            
-            else:  # downtrend
-                sar.iloc[i] = sar.iloc[i-1] + af * (ep - sar.iloc[i-1])
+            else:
+                sar[i] = sar[i-1] + af * (ep - sar[i-1])
                 
-                if df['high'].iloc[i] > sar.iloc[i]:
-                    trend = 1
-                    sar.iloc[i] = ep
+                if df['high'].iloc[i] > sar[i]:
+                    trend[i] = 1
+                    sar[i] = ep
                     af = 0.02
                     ep = df['high'].iloc[i]
                 else:
+                    trend[i] = -1
                     if df['low'].iloc[i] < ep:
                         ep = df['low'].iloc[i]
                         af = min(af + 0.02, 0.2)
         
-        return sar
+        return pd.Series(sar, index=df.index)
     
     @staticmethod
     def _calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
         """Calculate Average Directional Index (simplified)"""
         if len(df) < period * 2:
-            return pd.Series(np.nan, index=df.index)
+            return pd.Series(np.zeros(len(df)), index=df.index)
         
         # True Range
         high_low = df['high'] - df['low']
@@ -463,62 +331,37 @@ class IndicatorEngine:
         
         # Smooth the values
         tr_smooth = tr.rolling(window=period).mean()
-        plus_di = 100 * (pd.Series(plus_dm).rolling(window=period).mean() / tr_smooth)
-        minus_di = 100 * (pd.Series(minus_dm).rolling(window=period).mean() / tr_smooth)
+        plus_di = 100 * (pd.Series(plus_dm).rolling(window=period).mean() / tr_smooth.replace(0, 1))
+        minus_di = 100 * (pd.Series(minus_dm).rolling(window=period).mean() / tr_smooth.replace(0, 1))
         
         # DX and ADX
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, 1)
         adx = dx.rolling(window=period).mean()
         
-        return adx
+        return adx.fillna(0)
     
     @staticmethod
-    def _calculate_custom_indicators(df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate custom proprietary indicators"""
-        # Supertrend (simplified)
-        df['hl2'] = (df['high'] + df['low']) / 2
-        df['basic_upper'] = df['hl2'] + (df['atr'] * 2)
-        df['basic_lower'] = df['hl2'] - (df['atr'] * 2)
+    def _calculate_additional_indicators(df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate additional indicators"""
+        # Price position
+        df['price_position'] = (df['close'] - df['low'].rolling(20).min()) / \
+                               (df['high'].rolling(20).max() - df['low'].rolling(20).min()).replace(0, 1)
         
         # Trend detection
         df['trend'] = np.where(df['close'] > df['ema_12'], 1, -1)
         
-        # Volatility ratio
+        # Volatility
         df['volatility'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
         
-        # Price position in Bollinger Band
-        df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        # Price momentum
+        df['momentum'] = df['close'].pct_change(periods=10)
         
-        # RSI momentum
-        df['rsi_momentum'] = df['rsi'].diff(5)
+        # Volume momentum
+        df['volume_momentum'] = df['volume'].pct_change(periods=5)
         
-        return df
-    
-    @staticmethod
-    def detect_divergences(df: pd.DataFrame) -> pd.DataFrame:
-        """Detect bullish and bearish divergences"""
-        df = df.copy()
-        
-        # Find peaks and troughs
-        df['peak'] = (df['close'].shift(1) < df['close']) & (df['close'].shift(-1) < df['close'])
-        df['trough'] = (df['close'].shift(1) > df['close']) & (df['close'].shift(-1) > df['close'])
-        
-        # RSI divergences
-        df['rsi_peak'] = (df['rsi'].shift(1) < df['rsi']) & (df['rsi'].shift(-1) < df['rsi'])
-        df['rsi_trough'] = (df['rsi'].shift(1) > df['rsi']) & (df['rsi'].shift(-1) > df['rsi'])
-        
-        # Detect divergences
-        df['bearish_divergence'] = False
-        df['bullish_divergence'] = False
-        
-        for i in range(20, len(df)):
-            # Bearish divergence (price makes higher high, RSI makes lower high)
-            if df['peak'].iloc[i] and df['rsi_peak'].iloc[i-10:i].any():
-                df.loc[df.index[i], 'bearish_divergence'] = True
-            
-            # Bullish divergence (price makes lower low, RSI makes higher low)
-            if df['trough'].iloc[i] and df['rsi_trough'].iloc[i-10:i].any():
-                df.loc[df.index[i], 'bullish_divergence'] = True
+        # Support/Resistance levels (simplified)
+        df['support'] = df['low'].rolling(window=20).min()
+        df['resistance'] = df['high'].rolling(window=20).max()
         
         return df
 
@@ -538,63 +381,69 @@ class SignalEngine:
         df['signal_strength'] = 0
         df['signal_type'] = 'NEUTRAL'
         
-        # Strategy 1: Trend Following (MACD + EMA)
+        # Strategy 1: MACD Crossover
         macd_buy = (df['macd'] > df['macd_signal']) & (df['macd'].shift() <= df['macd_signal'].shift())
         macd_sell = (df['macd'] < df['macd_signal']) & (df['macd'].shift() >= df['macd_signal'].shift())
         
-        # Strategy 2: Mean Reversion (RSI + Bollinger)
+        # Strategy 2: RSI Oversold/Overbought
         rsi_oversold = (df['rsi'] < 30) & (df['close'] < df['bb_lower'])
         rsi_overbought = (df['rsi'] > 70) & (df['close'] > df['bb_upper'])
         
-        # Strategy 3: Breakout (ATR based)
-        atr_breakout = df['close'] > (df['high'].rolling(20).max().shift() + df['atr'])
-        atr_breakdown = df['close'] < (df['low'].rolling(20).min().shift() - df['atr'])
-        
-        # Strategy 4: Moving Average Crossover
+        # Strategy 3: Moving Average Crossover
         ma_cross_buy = (df['ema_12'] > df['ema_26']) & (df['ema_12'].shift() <= df['ema_26'].shift())
         ma_cross_sell = (df['ema_12'] < df['ema_26']) & (df['ema_12'].shift() >= df['ema_26'].shift())
         
-        # Strategy 5: Volume Confirmation
-        volume_spike = df['volume'] > (df['volume'].rolling(20).mean() * 1.5)
+        # Strategy 4: Bollinger Band Bounce
+        bb_bounce_buy = (df['close'] < df['bb_lower']) & (df['close'].shift() >= df['bb_lower'].shift())
+        bb_bounce_sell = (df['close'] > df['bb_upper']) & (df['close'].shift() <= df['bb_upper'].shift())
         
-        # Combine signals with weights
-        buy_signals = (
-            (macd_buy * 0.3) + 
-            (rsi_oversold * 0.2) + 
-            (atr_breakout * 0.2) + 
-            (ma_cross_buy * 0.2) + 
-            (volume_spike * 0.1)
+        # Strategy 5: Volume Spike
+        volume_spike = df['volume'] > (df['volume_sma'] * 1.5)
+        
+        # Strategy 6: Price Breakout
+        price_breakout = df['close'] > df['resistance'].shift()
+        price_breakdown = df['close'] < df['support'].shift()
+        
+        # Combine signals
+        buy_conditions = (
+            (macd_buy * 0.25) + 
+            (rsi_oversold * 0.20) + 
+            (ma_cross_buy * 0.20) + 
+            (bb_bounce_buy * 0.15) + 
+            (volume_spike * 0.10) +
+            (price_breakout * 0.10)
         )
         
-        sell_signals = (
-            (macd_sell * 0.3) + 
-            (rsi_overbought * 0.2) + 
-            (atr_breakdown * 0.2) + 
-            (ma_cross_sell * 0.2) + 
-            (volume_spike * 0.1)
+        sell_conditions = (
+            (macd_sell * 0.25) + 
+            (rsi_overbought * 0.20) + 
+            (ma_cross_sell * 0.20) + 
+            (bb_bounce_sell * 0.15) + 
+            (volume_spike * 0.10) +
+            (price_breakdown * 0.10)
         )
         
-        # Apply divergences as filters
-        df = IndicatorEngine.detect_divergences(df)
-        buy_signals = buy_signals & ~df['bearish_divergence']
-        sell_signals = sell_signals & ~df['bullish_divergence']
+        # Generate final signals
+        df['signal'] = np.where(
+            buy_conditions > 0.4, 1,
+            np.where(sell_conditions > 0.4, -1, 0)
+        )
         
-        # Set signals
-        df.loc[buy_signals, 'signal'] = 1
-        df.loc[sell_signals, 'signal'] = -1
+        # Signal strength
+        df['signal_strength'] = np.where(
+            df['signal'] == 1, buy_conditions,
+            np.where(df['signal'] == -1, sell_conditions, 0)
+        )
         
-        # Calculate signal strength
-        df['signal_strength'] = abs(buy_signals.astype(int) * 0.5 + sell_signals.astype(int) * -0.5)
-        
-        # Determine signal type
+        # Signal type
         df['signal_type'] = np.where(
             df['signal'] == 1, 'BUY',
             np.where(df['signal'] == -1, 'SELL', 'NEUTRAL')
         )
         
-        # For strong signals
-        strong_buy = buy_signals & (df['rsi'] < 40) & (df['volume_ratio'] > 1.5)
-        strong_sell = sell_signals & (df['rsi'] > 60) & (df['volume_ratio'] > 1.5)
+        # Strong signals
+        strong_buy = (df['signal'] == 1) & (df['signal_strength'] > 0.6)
+        strong_sell = (df['signal'] == -1) & (df['signal_strength'] > 0.6)
         
         df.loc[strong_buy, 'signal_type'] = 'STRONG_BUY'
         df.loc[strong_sell, 'signal_type'] = 'STRONG_SELL'
@@ -608,7 +457,8 @@ class SignalEngine:
                 'signal': 'NEUTRAL',
                 'strength': 0,
                 'price': 0,
-                'timestamp': datetime.now()
+                'timestamp': datetime.now(),
+                'confidence': 0
             }
         
         latest = df.iloc[-1]
@@ -617,7 +467,7 @@ class SignalEngine:
             'signal': latest['signal_type'],
             'strength': latest.get('signal_strength', 0),
             'price': latest['close'],
-            'timestamp': latest.name if hasattr(latest, 'name') else datetime.now(),
+            'timestamp': latest.name,
             'confidence': min(abs(latest.get('rsi', 50) - 50) / 50, 1.0)
         }
 
@@ -627,7 +477,6 @@ class SignalEngine:
 class BacktestingEngine:
     def __init__(self, initial_capital: float = 10000):
         self.initial_capital = initial_capital
-        self.trades = []
     
     def run_backtest(self, df: pd.DataFrame, commission: float = 0.001) -> Dict:
         """Run backtest on historical data"""
@@ -648,10 +497,9 @@ class BacktestingEngine:
             current_equity = capital + (position * current_price)
             equity_curve.append(current_equity)
             
-            # Exit conditions
+            # Exit conditions (simple trailing stop)
             if position > 0:  # Long position
-                # Simple trailing stop (10% from entry)
-                stop_loss = entry_price * 0.9
+                stop_loss = entry_price * 0.95  # 5% stop loss
                 
                 if current_price <= stop_loss:
                     pnl = (current_price - entry_price) * position
@@ -666,9 +514,10 @@ class BacktestingEngine:
                         'pnl_pct': (current_price / entry_price - 1) * 100
                     })
                     position = 0
+                    entry_price = 0
             
             elif position < 0:  # Short position
-                stop_loss = entry_price * 1.1
+                stop_loss = entry_price * 1.05  # 5% stop loss
                 
                 if current_price >= stop_loss:
                     pnl = (entry_price - current_price) * abs(position)
@@ -683,58 +532,77 @@ class BacktestingEngine:
                         'pnl_pct': (entry_price / current_price - 1) * 100
                     })
                     position = 0
+                    entry_price = 0
             
             # Entry conditions
             if position == 0 and current_signal != 0:
                 if current_signal == 1:  # Buy signal
                     position = capital * 0.1 / current_price  # 10% of capital
                     entry_price = current_price
-                
                 elif current_signal == -1:  # Sell signal
                     position = -capital * 0.1 / current_price  # 10% short
                     entry_price = current_price
         
         # Calculate performance metrics
-        if trades:
-            trades_df = pd.DataFrame(trades)
-            winning_trades = trades_df[trades_df['pnl'] > 0]
-            
-            total_return_pct = ((capital - self.initial_capital) / self.initial_capital) * 100
-            win_rate = (len(winning_trades) / len(trades_df)) * 100 if len(trades_df) > 0 else 0
-            avg_win = winning_trades['pnl_pct'].mean() if len(winning_trades) > 0 else 0
-            avg_loss = trades_df[trades_df['pnl'] < 0]['pnl_pct'].mean() if len(trades_df[trades_df['pnl'] < 0]) > 0 else 0
-            
-            profit_factor = abs(winning_trades['pnl'].sum() / trades_df[trades_df['pnl'] < 0]['pnl'].sum()) if len(trades_df[trades_df['pnl'] < 0]) > 0 else float('inf')
-            
-            # Sharpe Ratio (simplified)
-            returns = pd.Series(equity_curve).pct_change().dropna()
-            if len(returns) > 1 and returns.std() > 0:
-                sharpe_ratio = np.sqrt(252) * returns.mean() / returns.std()
-            else:
-                sharpe_ratio = 0
-            
-            # Maximum Drawdown
-            equity_series = pd.Series(equity_curve)
-            rolling_max = equity_series.expanding().max()
-            drawdown = (equity_series - rolling_max) / rolling_max
-            max_drawdown = drawdown.min() * 100
-            
+        results = self._calculate_performance(capital, trades, equity_curve)
+        results['trades'] = trades
+        
+        return results
+    
+    def _calculate_performance(self, final_capital: float, trades: List, equity_curve: List) -> Dict:
+        """Calculate performance metrics"""
+        if not trades:
             return {
                 'initial_capital': self.initial_capital,
-                'final_capital': capital,
-                'total_return_pct': total_return_pct,
-                'total_trades': len(trades_df),
-                'winning_trades': len(winning_trades),
-                'win_rate': win_rate,
-                'avg_win_pct': avg_win,
-                'avg_loss_pct': avg_loss,
-                'profit_factor': profit_factor,
-                'sharpe_ratio': sharpe_ratio,
-                'max_drawdown_pct': max_drawdown,
-                'trades': trades_df.to_dict('records')
+                'final_capital': final_capital,
+                'total_return_pct': 0,
+                'total_trades': 0,
+                'winning_trades': 0,
+                'win_rate': 0,
+                'profit_factor': 0,
+                'sharpe_ratio': 0,
+                'max_drawdown_pct': 0,
+                'avg_win_pct': 0,
+                'avg_loss_pct': 0
             }
         
-        return {}
+        trades_df = pd.DataFrame(trades)
+        winning_trades = trades_df[trades_df['pnl'] > 0]
+        
+        total_return_pct = ((final_capital - self.initial_capital) / self.initial_capital) * 100
+        win_rate = (len(winning_trades) / len(trades_df)) * 100
+        avg_win = winning_trades['pnl_pct'].mean() if len(winning_trades) > 0 else 0
+        avg_loss = trades_df[trades_df['pnl'] < 0]['pnl_pct'].mean() if len(trades_df[trades_df['pnl'] < 0]) > 0 else 0
+        
+        profit_factor = abs(winning_trades['pnl'].sum() / trades_df[trades_df['pnl'] < 0]['pnl'].sum()) \
+            if len(trades_df[trades_df['pnl'] < 0]) > 0 and trades_df[trades_df['pnl'] < 0]['pnl'].sum() != 0 else 0
+        
+        # Sharpe Ratio
+        returns = pd.Series(equity_curve).pct_change().dropna()
+        if len(returns) > 1 and returns.std() > 0:
+            sharpe_ratio = np.sqrt(252) * returns.mean() / returns.std()
+        else:
+            sharpe_ratio = 0
+        
+        # Maximum Drawdown
+        equity_series = pd.Series(equity_curve)
+        rolling_max = equity_series.expanding().max()
+        drawdown = (equity_series - rolling_max) / rolling_max.replace(0, 1)
+        max_drawdown = drawdown.min() * 100
+        
+        return {
+            'initial_capital': self.initial_capital,
+            'final_capital': final_capital,
+            'total_return_pct': total_return_pct,
+            'total_trades': len(trades_df),
+            'winning_trades': len(winning_trades),
+            'win_rate': win_rate,
+            'avg_win_pct': avg_win,
+            'avg_loss_pct': avg_loss,
+            'profit_factor': profit_factor,
+            'sharpe_ratio': sharpe_ratio,
+            'max_drawdown_pct': max_drawdown
+        }
 
 # =========================
 # RISK MANAGEMENT ENGINE
@@ -746,6 +614,9 @@ class RiskManagementEngine:
     def calculate_position_size(self, capital: float, entry_price: float, 
                               stop_loss: float) -> Dict:
         """Calculate optimal position size"""
+        if capital <= 0 or entry_price <= 0:
+            return {'size': 0, 'risk_amount': 0}
+        
         risk_amount = capital * self.max_risk_per_trade
         stop_distance = abs(entry_price - stop_loss)
         
@@ -773,7 +644,7 @@ class RiskManagementEngine:
         }
 
 # =========================
-# MAIN STREAMLIT APPLICATION
+# STREAMLIT APPLICATION
 # =========================
 class TitanTradingApp:
     def __init__(self):
@@ -808,6 +679,14 @@ class TitanTradingApp:
             border-left: 4px solid #4CC9F0;
             margin-bottom: 10px;
         }
+        .signal-buy {
+            background: rgba(0, 200, 83, 0.2);
+            border-left: 4px solid #00C853;
+        }
+        .signal-sell {
+            background: rgba(255, 61, 0, 0.2);
+            border-left: 4px solid #FF3D00;
+        }
         .stTabs [data-baseweb="tab-list"] {
             gap: 2px;
         }
@@ -817,6 +696,17 @@ class TitanTradingApp:
         }
         .stTabs [aria-selected="true"] {
             background: linear-gradient(45deg, #4361EE, #3A0CA3);
+        }
+        .stButton > button {
+            background: linear-gradient(45deg, #4361EE, #3A0CA3);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .stButton > button:hover {
+            background: linear-gradient(45deg, #3A0CA3, #4361EE);
         }
         </style>
         """, unsafe_allow_html=True)
@@ -844,6 +734,8 @@ class TitanTradingApp:
             st.session_state.symbol = CONFIG['default_symbol']
         if 'timeframe' not in st.session_state:
             st.session_state.timeframe = CONFIG['default_timeframe']
+        if 'candles' not in st.session_state:
+            st.session_state.candles = 500
     
     def render_header(self):
         """Render application header"""
@@ -857,39 +749,72 @@ class TitanTradingApp:
             
             # Market Configuration
             with st.expander("⚙️ Market Configuration", expanded=True):
-                symbol = st.text_input("Symbol", CONFIG['default_symbol'])
-                timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h", "4h", "1d"], index=1)
-                candles = st.slider("Historical Candles", 100, 2000, 500)
+                # Symbol input with common examples
+                symbol = st.text_input(
+                    "Symbol (e.g., BTCUSDT, ETHUSDT)",
+                    value=CONFIG['default_symbol'],
+                    help="Use Binance format without dashes or slashes"
+                )
                 
+                # Timeframe selector
+                timeframe = st.selectbox(
+                    "Timeframe",
+                    ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
+                    index=1,
+                    help="Select chart timeframe"
+                )
+                
+                # Candles slider
+                candles = st.slider(
+                    "Historical Candles",
+                    50, 2000, 500,
+                    help="Number of historical candles to fetch"
+                )
+                
+                # Load button with better styling
                 if st.button("📥 Load Market Data", use_container_width=True, type="primary"):
-                    with st.spinner("Loading data..."):
-                        self.load_market_data(symbol, timeframe, candles)
+                    with st.spinner("Loading market data..."):
+                        try:
+                            self.load_market_data(symbol, timeframe, candles)
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
+                            logger.error(f"Load error: {e}")
             
             # Strategy Settings
             with st.expander("🎯 Trading Strategy", expanded=False):
-                strategy_type = st.selectbox(
+                strategy = st.selectbox(
                     "Strategy Type",
-                    ["Trend Following", "Mean Reversion", "Breakout", "Multi-Indicator"]
+                    ["Multi-Indicator", "Trend Following", "Mean Reversion", "Breakout"]
                 )
                 
+                # Indicator toggles
                 use_rsi = st.checkbox("Use RSI", True)
                 use_macd = st.checkbox("Use MACD", True)
+                use_bb = st.checkbox("Use Bollinger Bands", True)
                 use_volume = st.checkbox("Volume Confirmation", True)
                 
-                rsi_overbought = st.slider("RSI Overbought", 70, 90, 70)
-                rsi_oversold = st.slider("RSI Oversold", 10, 30, 30)
+                # RSI thresholds
+                rsi_overbought = st.slider("RSI Overbought", 65, 85, 70)
+                rsi_oversold = st.slider("RSI Oversold", 15, 35, 30)
             
             # Risk Management
             with st.expander("🛡️ Risk Management", expanded=False):
-                risk_per_trade = st.slider("Risk per Trade %", 0.1, 5.0, 1.0, 0.1)
+                risk_per_trade = st.slider(
+                    "Risk per Trade %",
+                    0.1, 5.0, 2.0, 0.1,
+                    help="Percentage of capital to risk per trade"
+                )
                 self.risk_manager.max_risk_per_trade = risk_per_trade / 100
                 
-                stop_loss_type = st.selectbox("Stop Loss", ["ATR-based", "Fixed %", "Trailing"])
+                stop_loss_type = st.selectbox(
+                    "Stop Loss Type",
+                    ["Fixed %", "ATR-based", "Trailing"]
+                )
                 
-                if stop_loss_type == "ATR-based":
-                    atr_multiplier = st.slider("ATR Multiplier", 1.0, 5.0, 2.0, 0.5)
-                elif stop_loss_type == "Fixed %":
+                if stop_loss_type == "Fixed %":
                     stop_loss_pct = st.slider("Stop Loss %", 0.5, 10.0, 2.0, 0.5)
+                elif stop_loss_type == "ATR-based":
+                    atr_multiplier = st.slider("ATR Multiplier", 1.0, 5.0, 2.0, 0.5)
             
             # System Controls
             with st.expander("⚡ System", expanded=False):
@@ -897,21 +822,48 @@ class TitanTradingApp:
                 with col1:
                     if st.button("🔄 Refresh", use_container_width=True):
                         st.cache_data.clear()
-                        st.rerun()
+                        if st.session_state.data_loaded:
+                            self.load_market_data(
+                                st.session_state.symbol,
+                                st.session_state.timeframe,
+                                st.session_state.candles
+                            )
+                        else:
+                            st.rerun()
+                
                 with col2:
-                    if st.button("🗑️ Clear", use_container_width=True):
+                    if st.button("🗑️ Clear Cache", use_container_width=True):
                         st.session_state.clear()
+                        st.cache_data.clear()
                         st.rerun()
+                
+                # Debug toggle
+                debug_mode = st.checkbox("Debug Mode", False)
+                if debug_mode:
+                    st.info("Debug mode enabled")
     
     def load_market_data(self, symbol: str, timeframe: str, candles: int):
         """Load and process market data"""
         try:
+            # Validate symbol
+            symbol = symbol.strip().upper()
+            if not symbol:
+                st.error("Please enter a symbol")
+                return
+            
+            # Remove any invalid characters
+            symbol = ''.join(c for c in symbol if c.isalnum())
+            
             # Fetch data
             df = self.market_data.fetch_ohlcv(symbol, timeframe, candles)
             
             if df.empty:
-                st.error("❌ Failed to load market data. Check symbol and connection.")
+                st.error(f"❌ No data returned for {symbol}. Please check the symbol format.")
+                logger.error(f"No data for symbol: {symbol}")
                 return
+            
+            if len(df) < 50:
+                st.warning(f"⚠️ Only {len(df)} candles loaded. Some indicators may not work properly.")
             
             # Calculate indicators
             df = self.indicators.calculate_indicators(df)
@@ -928,9 +880,10 @@ class TitanTradingApp:
             st.session_state.performance = performance
             st.session_state.symbol = symbol
             st.session_state.timeframe = timeframe
+            st.session_state.candles = candles
             st.session_state.data_loaded = True
             
-            # Save to database
+            # Save current signal to database
             current_signal = self.signal_engine.get_current_signal(df)
             if current_signal['signal'] != 'NEUTRAL':
                 signal_data = {
@@ -940,24 +893,79 @@ class TitanTradingApp:
                     'price': current_signal['price'],
                     'confidence': current_signal['confidence']
                 }
-                self.db.save_signal(signal_data)
+                try:
+                    self.db.save_signal(signal_data)
+                except Exception as e:
+                    logger.error(f"Failed to save signal: {e}")
             
             st.success(f"✅ Loaded {len(df)} candles for {symbol}")
             
         except Exception as e:
             st.error(f"❌ Error loading data: {str(e)}")
-            logger.error(f"Data loading error: {e}")
+            logger.error(f"Data loading error: {e}", exc_info=True)
     
     def render_dashboard(self):
         """Render main dashboard"""
         if not st.session_state.data_loaded or st.session_state.df is None:
-            st.info("👈 Load market data from the sidebar to begin")
+            self.render_welcome_screen()
             return
         
         df = st.session_state.df
-        signals = st.session_state.signals
         
         # Performance Metrics
+        self.render_performance_metrics()
+        
+        # Current Market Status
+        self.render_market_overview(df)
+        
+        # Main Chart Tabs
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📊 Price Chart", 
+            "📈 Indicators", 
+            "📉 Backtest Results", 
+            "📋 Signal History"
+        ])
+        
+        with tab1:
+            self.render_price_chart(df)
+        
+        with tab2:
+            self.render_indicator_panels(df)
+        
+        with tab3:
+            self.render_backtest_results()
+        
+        with tab4:
+            self.render_signal_history()
+    
+    def render_welcome_screen(self):
+        """Render welcome screen when no data loaded"""
+        col1, col2, col3 = st.columns([1, 2, 1])
+        
+        with col2:
+            st.markdown("""
+            <div style='text-align: center; padding: 50px 0;'>
+                <h2>🚀 Welcome to TITAN INTRADAY PRO</h2>
+                <p style='font-size: 18px; color: #888; margin: 20px 0;'>
+                    Advanced Trading Platform with Real-Time Analytics
+                </p>
+                <div style='background: rgba(25, 25, 35, 0.8); padding: 30px; border-radius: 10px; margin: 20px 0;'>
+                    <h3>📊 Get Started:</h3>
+                    <ol style='text-align: left; margin-left: 20px;'>
+                        <li>Enter a symbol (e.g., BTCUSDT, ETHUSDT)</li>
+                        <li>Select a timeframe</li>
+                        <li>Choose number of historical candles</li>
+                        <li>Click "Load Market Data"</li>
+                    </ol>
+                </div>
+                <p style='color: #666; margin-top: 30px;'>
+                    Supported symbols: BTCUSDT, ETHUSDT, BNBUSDT, ADAUSDT, etc.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    def render_performance_metrics(self):
+        """Render performance metrics"""
         st.subheader("📊 Performance Dashboard")
         
         if st.session_state.performance:
@@ -976,20 +984,33 @@ class TitanTradingApp:
             for col, (label, value) in zip(cols, metrics):
                 with col:
                     st.metric(label, value)
-        
-        # Current Market Status
+    
+    def render_market_overview(self, df: pd.DataFrame):
+        """Render market overview metrics"""
         st.subheader("📈 Market Overview")
+        
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             current_price = df['close'].iloc[-1]
-            price_change = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2]) * 100
-            st.metric("Current Price", f"${current_price:,.2f}", f"{price_change:+.2f}%")
+            prev_price = df['close'].iloc[-2] if len(df) > 1 else current_price
+            price_change = ((current_price - prev_price) / prev_price) * 100
+            st.metric(
+                "Current Price",
+                f"${current_price:,.2f}",
+                f"{price_change:+.2f}%"
+            )
         
         with col2:
             current_signal = self.signal_engine.get_current_signal(df)
-            signal_color = "green" if "BUY" in current_signal['signal'] else "red" if "SELL" in current_signal['signal'] else "gray"
-            st.metric("Current Signal", current_signal['signal'])
+            signal_display = current_signal['signal']
+            
+            if "BUY" in signal_display:
+                st.success(f"**{signal_display}**")
+            elif "SELL" in signal_display:
+                st.error(f"**{signal_display}**")
+            else:
+                st.info(f"**{signal_display}**")
         
         with col3:
             volume_ratio = df['volume_ratio'].iloc[-1]
@@ -999,28 +1020,8 @@ class TitanTradingApp:
             rsi_value = df['rsi'].iloc[-1]
             rsi_status = "Oversold" if rsi_value < 30 else "Overbought" if rsi_value > 70 else "Neutral"
             st.metric("RSI", f"{rsi_value:.1f}", rsi_status)
-        
-        # Main Chart Tabs
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "📊 Price Chart", 
-            "📈 Indicators", 
-            "📉 Backtest", 
-            "📋 Signals"
-        ])
-        
-        with tab1:
-            self.render_price_chart(df, signals)
-        
-        with tab2:
-            self.render_indicator_panels(df)
-        
-        with tab3:
-            self.render_backtest_results()
-        
-        with tab4:
-            self.render_signal_history()
     
-    def render_price_chart(self, df: pd.DataFrame, signals: pd.DataFrame):
+    def render_price_chart(self, df: pd.DataFrame):
         """Render interactive price chart"""
         fig = make_subplots(
             rows=3, cols=1,
@@ -1052,10 +1053,6 @@ class TitanTradingApp:
             go.Scatter(x=df.index, y=df['ema_26'], line=dict(color='red', width=1), name='EMA 26'),
             row=1, col=1
         )
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df['sma_50'], line=dict(color='blue', width=1), name='SMA 50'),
-            row=1, col=1
-        )
         
         # Bollinger Bands
         fig.add_trace(
@@ -1069,7 +1066,8 @@ class TitanTradingApp:
             row=1, col=1
         )
         
-        # Buy/Sell signals
+        # Signals
+        signals = st.session_state.signals
         if not signals.empty:
             buy_signals = signals[signals['signal'] == 1]
             sell_signals = signals[signals['signal'] == -1]
@@ -1105,12 +1103,6 @@ class TitanTradingApp:
             row=2, col=1
         )
         
-        # Volume MA
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df['volume_sma'], line=dict(color='yellow', width=1), name='Volume MA'),
-            row=2, col=1
-        )
-        
         # RSI
         fig.add_trace(
             go.Scatter(x=df.index, y=df['rsi'], line=dict(color='purple', width=2), name='RSI'),
@@ -1118,7 +1110,6 @@ class TitanTradingApp:
         )
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
-        fig.add_hline(y=50, line_dash="dot", line_color="gray", row=3, col=1)
         
         # Update layout
         fig.update_layout(
@@ -1136,44 +1127,45 @@ class TitanTradingApp:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Trend Indicators")
+            st.subheader("📊 Trend Indicators")
             
-            trend_indicators = {
-                "MACD": df['macd'].iloc[-1],
-                "MACD Signal": df['macd_signal'].iloc[-1],
-                "MACD Hist": df['macd_hist'].iloc[-1],
-                "ADX": df['adx'].iloc[-1] if 'adx' in df.columns else 0,
-                "Trend": "Bullish" if df['trend'].iloc[-1] == 1 else "Bearish"
+            trend_data = {
+                "MACD": f"{df['macd'].iloc[-1]:.4f}",
+                "MACD Signal": f"{df['macd_signal'].iloc[-1]:.4f}",
+                "MACD Hist": f"{df['macd_hist'].iloc[-1]:.4f}",
+                "ADX": f"{df['adx'].iloc[-1]:.2f}",
+                "Trend": "Bullish" if df['trend'].iloc[-1] > 0 else "Bearish"
             }
             
-            for indicator, value in trend_indicators.items():
-                st.metric(indicator, f"{value:.4f}" if isinstance(value, float) else value)
+            for indicator, value in trend_data.items():
+                st.metric(indicator, value)
         
         with col2:
-            st.subheader("Momentum Indicators")
+            st.subheader("📈 Momentum Indicators")
             
-            momentum_indicators = {
-                "RSI": df['rsi'].iloc[-1],
-                "Stoch %K": df['stoch_k'].iloc[-1],
-                "Stoch %D": df['stoch_d'].iloc[-1],
-                "RSI Momentum": df['rsi_momentum'].iloc[-1] if 'rsi_momentum' in df.columns else 0
+            momentum_data = {
+                "RSI": f"{df['rsi'].iloc[-1]:.2f}",
+                "Stoch %K": f"{df['stoch_k'].iloc[-1]:.2f}",
+                "Stoch %D": f"{df['stoch_d'].iloc[-1]:.2f}",
+                "Price Momentum": f"{df['momentum'].iloc[-1]:.2%}"
             }
             
-            for indicator, value in momentum_indicators.items():
-                st.metric(indicator, f"{value:.2f}")
+            for indicator, value in momentum_data.items():
+                st.metric(indicator, value)
         
-        # Volatility Indicators
-        st.subheader("Volatility & Volume")
+        # Volatility & Volume
+        st.subheader("📉 Volatility & Volume")
         col3, col4 = st.columns(2)
         
         with col3:
             st.metric("ATR", f"{df['atr'].iloc[-1]:.2f}")
-            st.metric("Volatility", f"{df['volatility'].iloc[-1]:.2%}" if 'volatility' in df.columns else "N/A")
+            st.metric("Volatility", f"{df['volatility'].iloc[-1]:.2%}")
         
         with col4:
-            bb_position = df['bb_position'].iloc[-1] if 'bb_position' in df.columns else 0.5
+            bb_position = (df['close'].iloc[-1] - df['bb_lower'].iloc[-1]) / \
+                         (df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1])
             st.metric("BB Position", f"{bb_position:.2%}")
-            st.metric("Volume Ratio", f"{df['volume_ratio'].iloc[-1]:.2f}x")
+            st.metric("Volume Momentum", f"{df['volume_momentum'].iloc[-1]:.2%}")
     
     def render_backtest_results(self):
         """Render backtest results"""
@@ -1183,62 +1175,15 @@ class TitanTradingApp:
         
         perf = st.session_state.performance
         
-        # Equity Curve
-        if 'trades' in perf and perf['trades']:
-            trades_df = pd.DataFrame(perf['trades'])
-            
-            if 'pnl' in trades_df.columns:
-                fig = go.Figure()
-                
-                # Cumulative P&L
-                fig.add_trace(go.Scatter(
-                    x=trades_df['exit_time'],
-                    y=trades_df['pnl'].cumsum(),
-                    mode='lines',
-                    name='Cumulative P&L',
-                    line=dict(color='green', width=2)
-                ))
-                
-                # Individual trades
-                winning_trades = trades_df[trades_df['pnl'] > 0]
-                losing_trades = trades_df[trades_df['pnl'] < 0]
-                
-                if not winning_trades.empty:
-                    fig.add_trace(go.Scatter(
-                        x=winning_trades['exit_time'],
-                        y=winning_trades['pnl'].cumsum(),
-                        mode='markers',
-                        name='Winning Trades',
-                        marker=dict(color='green', size=8)
-                    ))
-                
-                if not losing_trades.empty:
-                    fig.add_trace(go.Scatter(
-                        x=losing_trades['exit_time'],
-                        y=losing_trades['pnl'].cumsum(),
-                        mode='markers',
-                        name='Losing Trades',
-                        marker=dict(color='red', size=8)
-                    ))
-                
-                fig.update_layout(
-                    title='Equity Curve',
-                    template='plotly_dark',
-                    height=400
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-        
         # Trade Statistics
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Trade Statistics")
+            st.subheader("📊 Trade Statistics")
             
             trade_stats = {
                 "Total Trades": perf.get('total_trades', 0),
                 "Winning Trades": perf.get('winning_trades', 0),
-                "Losing Trades": perf.get('total_trades', 0) - perf.get('winning_trades', 0),
                 "Win Rate": f"{perf.get('win_rate', 0):.1f}%",
                 "Avg Win %": f"{perf.get('avg_win_pct', 0):.2f}%",
                 "Avg Loss %": f"{perf.get('avg_loss_pct', 0):.2f}%"
@@ -1248,7 +1193,7 @@ class TitanTradingApp:
                 st.metric(key, value)
         
         with col2:
-            st.subheader("Performance Metrics")
+            st.subheader("📈 Performance Metrics")
             
             perf_metrics = {
                 "Total Return": f"{perf.get('total_return_pct', 0):.2f}%",
@@ -1260,19 +1205,26 @@ class TitanTradingApp:
             for key, value in perf_metrics.items():
                 st.metric(key, value)
         
-        # Recent Trades Table
+        # Recent trades if available
         if 'trades' in perf and perf['trades']:
-            st.subheader("Recent Trades")
+            st.subheader("📋 Recent Trades")
             trades_df = pd.DataFrame(perf['trades'])
-            st.dataframe(
-                trades_df.tail(10).style.format({
-                    'entry_price': '${:.2f}',
-                    'exit_price': '${:.2f}',
-                    'pnl': '${:.2f}',
-                    'pnl_pct': '{:.2f}%'
-                }),
-                use_container_width=True
-            )
+            
+            # Format the dataframe
+            display_df = trades_df.tail(10).copy()
+            if not display_df.empty:
+                display_df['entry_time'] = pd.to_datetime(display_df['entry_time']).dt.strftime('%Y-%m-%d %H:%M')
+                display_df['exit_time'] = pd.to_datetime(display_df['exit_time']).dt.strftime('%Y-%m-%d %H:%M')
+                
+                st.dataframe(
+                    display_df.style.format({
+                        'entry_price': '${:.2f}',
+                        'exit_price': '${:.2f}',
+                        'pnl': '${:.2f}',
+                        'pnl_pct': '{:.2f}%'
+                    }),
+                    use_container_width=True
+                )
     
     def render_signal_history(self):
         """Render signal history"""
@@ -1280,7 +1232,7 @@ class TitanTradingApp:
         if st.session_state.df is not None:
             current_signal = self.signal_engine.get_current_signal(st.session_state.df)
             
-            st.subheader("Current Signal")
+            st.subheader("🎯 Current Signal")
             col1, col2, col3 = st.columns(3)
             
             with col1:
@@ -1298,26 +1250,26 @@ class TitanTradingApp:
             with col3:
                 st.metric("Confidence", f"{current_signal['confidence']:.0%}")
         
-        # Signal History from Database
-        st.subheader("Signal History")
+        # Signal History
+        st.subheader("📜 Signal History")
         
         try:
             recent_signals = self.db.get_recent_signals(st.session_state.symbol, 20)
             
             if recent_signals:
                 signals_df = pd.DataFrame(recent_signals)
-                signals_df['timestamp'] = pd.to_datetime(signals_df['timestamp'])
+                signals_df['timestamp'] = pd.to_datetime(signals_df['timestamp']).dt.strftime('%Y-%m-%d %H:%M')
                 
-                # Color code signals
-                def color_signal(val):
-                    if "BUY" in val:
-                        return 'color: green'
-                    elif "SELL" in val:
-                        return 'color: red'
-                    return 'color: gray'
+                # Color coding function
+                def color_row(row):
+                    if "BUY" in row['signal_type']:
+                        return ['background-color: rgba(0, 200, 83, 0.1)'] * len(row)
+                    elif "SELL" in row['signal_type']:
+                        return ['background-color: rgba(255, 61, 0, 0.1)'] * len(row)
+                    return [''] * len(row)
                 
                 st.dataframe(
-                    signals_df.style.applymap(color_signal, subset=['signal_type']).format({
+                    signals_df.style.apply(color_row, axis=1).format({
                         'price': '${:.2f}',
                         'confidence': '{:.0%}'
                     }),
@@ -1337,12 +1289,13 @@ class TitanTradingApp:
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.caption(f"📊 Data: {st.session_state.symbol if st.session_state.data_loaded else 'Not loaded'}")
+            status = "✅ Loaded" if st.session_state.data_loaded else "⏳ Waiting"
+            st.caption(f"{status} | {st.session_state.symbol}")
         
         with col2:
             if st.session_state.df is not None:
                 last_update = st.session_state.df.index[-1].strftime('%Y-%m-%d %H:%M')
-                st.caption(f"⏰ Last Data: {last_update}")
+                st.caption(f"📅 Last Data: {last_update}")
         
         with col3:
             st.caption("⚠️ Educational Use Only • Not Financial Advice")
