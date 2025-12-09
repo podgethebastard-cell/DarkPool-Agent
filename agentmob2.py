@@ -10,7 +10,7 @@ import time
 from openai import OpenAI
 
 # ==========================================
-# 1. SETUP PAGE CONFIGURATION (Mobile Template)
+# 1. SETUP PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
     page_title="Titan Mobile", 
@@ -20,7 +20,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. CUSTOM CSS (Merged Mobile + Titan Neon)
+# 2. CUSTOM CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -50,7 +50,7 @@ st.markdown("""
         margin-bottom: 10px;
     }
     .titan-card h4 { margin: 0; font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
-    .titan-card h2 { margin: 5px 0 0 0; font-size: 1.4rem; font-weight: 700; color: #fff; } /* Slightly smaller for mobile */
+    .titan-card h2 { margin: 5px 0 0 0; font-size: 1.4rem; font-weight: 700; color: #fff; } 
     .titan-card .sub { font-size: 0.7rem; color: #555; margin-top: 5px; }
     
     /* STATUS COLORS */
@@ -164,7 +164,7 @@ def run_titan_engine(df, amplitude, channel_dev, hma_len, mf_len, vol_len, hyper
     curr_trend = 0; curr_stop = df['close'].iloc[0]
     curr_max_l = 0.0; curr_min_h = 0.0
 
-    # Fast numba-like loop
+    # Fast loop
     for i in range(amplitude, len(df)):
         c = df['close'].iloc[i]; l = df['ll'].iloc[i]; h = df['hh'].iloc[i]
         dev = df['dev'].iloc[i] if not np.isnan(df['dev'].iloc[i]) else 0
@@ -245,7 +245,6 @@ with tab3:
         tg_on = st.checkbox("Telegram Active", value=True)
         
         # --- ROBUST KEY HANDLING ---
-        # 1. Telegram
         try:
             default_bot = st.secrets["TELEGRAM_TOKEN"]
             default_chat = st.secrets["TELEGRAM_CHAT_ID"]
@@ -255,7 +254,6 @@ with tab3:
         bot_token = st.text_input("Bot Token", value=default_bot, type="password")
         chat_id = st.text_input("Chat ID", value=default_chat)
 
-        # 2. OpenAI
         try:
             default_ai = st.secrets["OPENAI_API_KEY"]
             st.success("OpenAI Key Found in Secrets! ✅")
@@ -319,10 +317,40 @@ with tab1:
         # 3. ACTION BUTTONS
         st.markdown("---")
         if st.button("🔥 Broadcast Signal", type="primary"):
+            # --- SIGNAL CALCULATION ---
             is_bull = last['is_bull']
             direction = "LONG" if is_bull else "SHORT"
-            icon = "🟢" if is_bull else "🔴"
-            msg = f"{icon} *TITAN MOBILE: {symbol}*\nDir: *{direction}*\nPrice: ${last['close']}\nStop: ${last['trend_stop']}"
+            icon = "🟢" if is_bull else "🔴" # Red for short, Green for long
+            
+            # Dynamic Calc for Target (1.5x Risk)
+            risk = abs(last['close'] - last['trend_stop'])
+            if is_bull:
+                target_price = last['close'] + (risk * 1.5)
+            else:
+                target_price = last['close'] - (risk * 1.5)
+
+            # Labels
+            mom_lbl = "POSITIVE" if last['hyper_wave'] > 0 else "NEGATIVE"
+            inst_lbl = "MACRO BULL" if last['close'] > last['hma'] else "MACRO BEAR"
+            
+            # Money Flow Label
+            if last['money_flow'] > 5: mf_lbl = "INFLOW"
+            elif last['money_flow'] < -5: mf_lbl = "OUTFLOW"
+            else: mf_lbl = "NEUTRAL"
+
+            # --- SCREENSHOT-MATCHED FORMAT ---
+            msg = f"""🔥 *TITAN SIGNAL: {symbol} ({timeframe})*
+{icon} DIRECTION: *{direction}*
+🚪 ENTRY: `{last['close']:,.2f}`
+🛑 STOP LOSS: `{last['trend_stop']:,.2f}`
+🎯 TARGET: `{target_price:,.2f}`
+🌊 Trend: {trend_lbl}
+📊 Momentum: {mom_lbl}
+💰 Money Flow: {mf_lbl}
+💀 Institutional Trend: {inst_lbl}
+⚠️ _Not financial advice. DYOR._
+#DarkPool #Titan #Crypto"""
+
             if send_telegram_msg(bot_token, chat_id, msg):
                 st.success("Sent!")
             else:
@@ -331,7 +359,6 @@ with tab1:
         if st.button("🤖 AI Analysis"):
             with st.spinner("Analyzing..."):
                 summary = {'price': last['close'], 'trend': trend_lbl, 'stop': last['trend_stop'], 'mf': last['money_flow']}
-                # Pass the key explicitly to the function
                 rep = get_ai_analysis(summary, symbol, timeframe, ai_key)
                 st.markdown(f"""<div class="ai-box">{rep}</div>""", unsafe_allow_html=True)
 
@@ -341,7 +368,6 @@ with tab1:
 # --- TAB 2: DEEP DIVE (CHARTS) ---
 with tab2:
     if not df.empty:
-        # TRADINGVIEW (Hidden behind expander to save load time/space)
         with st.expander("📈 Live TradingView", expanded=False):
              s_tv = f"KRAKEN:{symbol.replace('/','')}"
              components.html(f"""
@@ -355,7 +381,6 @@ with tab2:
                 }});</script></div>
                 """, height=410)
 
-        # PLOTLY TITAN CHART
         st.subheader("Titan Analysis")
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
         
@@ -371,5 +396,5 @@ with tab2:
         fig.add_trace(go.Bar(x=df['timestamp'], y=df['money_flow'], marker_color=col_mf, name="MF"), row=2, col=1)
         
         fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='#000', plot_bgcolor='#000', showlegend=False)
-        fig.update_xaxes(visible=False) # Clean look for mobile
+        fig.update_xaxes(visible=False) 
         st.plotly_chart(fig, use_container_width=True)
