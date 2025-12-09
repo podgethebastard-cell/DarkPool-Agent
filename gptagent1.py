@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 17.7: "All-In" Signal Broadcast (Flow + Sentiment Added)
+Version 17.8: Neon Clock Color Fix (Iframe Injection)
 """
 import time
 import math
@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # =============================================================================
-# CUSTOM CSS & JS ASSETS (LIVE CLOCK)
+# CUSTOM CSS (Global Page Styles)
 # =============================================================================
 st.markdown("""
 <style>
@@ -41,18 +41,6 @@ st.markdown("""
         padding: 10px;
         border-radius: 8px;
         box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-    }
-    
-    /* Live Clock Styling - NEON GREEN UPGRADE */
-    #live_clock {
-        font-family: 'Roboto Mono', monospace;
-        font-size: 26px;
-        color: #39ff14;
-        text-shadow: 0 0 10px rgba(57, 255, 20, 0.6);
-        font-weight: 800;
-        text-align: right;
-        padding: 10px;
-        letter-spacing: 1px;
     }
     
     h1, h2, h3 { font-family: 'Roboto Mono', monospace; color: #c5c6c7; }
@@ -111,16 +99,31 @@ components.html(
     height=50
 )
 
-# HEADER with JS Clock
+# HEADER with JS Clock (FIXED COLOR INJECTION)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1:
-    st.title("💠 TITAN TERMINAL v17.7")
+    st.title("💠 TITAN TERMINAL v17.8")
     st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
 with c_head2:
     # JavaScript Clock (Updates every second client-side)
+    # STYLE IS NOW INJECTED DIRECTLY INTO IFRAME
     components.html(
         """
         <div id="live_clock"></div>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&display=swap');
+            body { margin: 0; background-color: transparent; }
+            #live_clock {
+                font-family: 'Roboto Mono', monospace;
+                font-size: 26px;
+                color: #39ff14; /* NEON GREEN */
+                text-shadow: 0 0 10px rgba(57, 255, 20, 0.8);
+                font-weight: 800;
+                text-align: right;
+                padding: 10px;
+                letter-spacing: 1px;
+            }
+        </style>
         <script>
         function updateTime() {
             const now = new Date();
@@ -595,7 +598,8 @@ if not df.empty:
         f"• Money Flow: {'🌊 INFLOW' if last['money_flow']>0 else '🩸 OUTFLOW'}\n"
         f"• Sentiment: {fg_index}/100\n"
         f"• VWAP Relation: {'Above' if last['close'] > last['vwap'] else 'Below'}\n"
-        f"• Squeeze Status: {'⚠️ ACTIVE' if last['in_squeeze'] else '🚀 FIRING'}\n\n"
+        f"• Squeeze Status: {'⚠️ ACTIVE' if last['in_squeeze'] else '🚀 FIRING'}\n"
+        f"• Confluence: {'Strong' if last['gann_trend'] == (1 if last['is_bull'] else -1) else 'Weak'}\n\n"
         f"📍 *ENTRY:* `{entry_price:.4f}`\n\n"
         f"🛡️ *SMART STOP:* `{smart_stop:.4f}`\n"
         f"_(Below 0.618 Golden Pocket)_\n\n"
