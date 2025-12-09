@@ -25,6 +25,11 @@ st.sidebar.header("Logic Engine / Ladder")
 atr_mult = st.sidebar.number_input("Stop Deviation (ATR x)", 0.5, 10.0, 3.0)
 hma_len = st.sidebar.number_input("HMA Length", 10, 200, 50)
 
+# --- NEW: Take Profit Settings ---
+st.sidebar.header("Take Profit Ladder")
+tp_atr_mult = st.sidebar.slider("TP ATR Multiplier", 1.0, 10.0, 4.5, step=0.5)
+tp_levels = [1.5, 3.0, 4.5] # Standard laddering levels
+
 # =========================
 # DATA FETCHER (BINANCE) - OPTIMIZED FOR RESTRICTED REGIONS
 # =========================
@@ -125,17 +130,25 @@ sell_signals = df[df["signal"] == -2]
 df["trail"] = df["close"] - df["ATR"] * atr_mult
 df["trail"] = df["trail"].cummax() # The stop only moves up (higher) over time
 
+# --- NEW: TAKE PROFIT CALCULATION ---
+price = df["close"].iloc[-1]
+atr_val = df["ATR"].iloc[-1]
+take_profits = [price + (mult * atr_val) for mult in tp_levels]
+tp1, tp2, tp3 = take_profits
+
 # =========================
 # DASHBOARD METRICS
 # =========================
-price = df["close"].iloc[-1]
 trail_price = df["trail"].iloc[-1]
 trend_state = "BULLISH" if df["trend"].iloc[-1] == 1 else "BEARISH"
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("Price", f"${price:,.2f}")
 col2.metric("Trailing Stop", f"${trail_price:,.2f}")
 col3.metric("Trend", trend_state)
+col4.metric("TP1", f"${tp1:,.2f}")
+col5.metric("TP2", f"${tp2:,.2f}")
+col6.metric("TP3", f"${tp3:,.2f}")
 
 # =========================
 # PLOTLY CHART
@@ -164,6 +177,11 @@ fig.add_trace(go.Scatter(
     line=dict(width=2),
     name="Trailing Stop"
 ))
+
+# --- NEW: Add Take Profit Levels to Chart ---
+fig.add_hline(y=tp1, line_dash="dash", line_color="green", line_width=2, name="TP1")
+fig.add_hline(y=tp2, line_dash="dash", line_color="lime", line_width=2, name="TP2")
+fig.add_hline(y=tp3, line_dash="dash", line_color="yellow", line_width=2, name="TP3")
 
 fig.add_trace(go.Scatter(
     x=buy_signals["time"],
@@ -221,7 +239,7 @@ if not tg_chat:
 # --- BROADCASTING LOGIC ---
 if tg_token and tg_chat:
     # Create a preview similar to the Equity Titan code
-    preview = f"TITAN SIGNAL: {symbol} ({timeframe})\nDIRECTION: {last_signal}\nENTRY: ${price:,.2f}\nTRAIL: ${trail_price:,.2f}\nATR: ${df['ATR'].iloc[-1]:,.2f}"
+    preview = f"TITAN SIGNAL: {symbol} ({timeframe})\nDIRECTION: {last_signal}\nENTRY: ${price:,.2f}\nSTOP: ${trail_price:,.2f}\nTP1: ${tp1:,.2f}\nTP2: ${tp2:,.2f}\nTP3: ${tp3:,.2f}"
     st.text_area("Preview", preview, height=150)
     
     if st.button("Send🚀"):
