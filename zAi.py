@@ -17,7 +17,8 @@ st.title("🔨 TITAN INTRADAY PRO — Execution Dashboard")
 st.sidebar.header("Market Feed")
 
 symbol = st.sidebar.text_input("Symbol (Binance format)", "BTCUSDT")
-timeframe = st.sidebar.selectbox("Timeframe", ["1m","5m","15m","30m","1h","4h"])
+# --- MODIFIED: Removed 1m, 5m options and set default to 1h ---
+timeframe = st.sidebar.selectbox("Timeframe", ["15m", "30m", "1h", "4h"], index=2)
 candles = st.sidebar.slider("Candles", 100, 1500, 600)
 
 # Removed unused parameters: lookback, use_hma
@@ -151,61 +152,45 @@ col5.metric("TP2", f"${tp2:,.2f}")
 col6.metric("TP3", f"${tp3:,.2f}")
 
 # =========================
-# PLOTLY CHART
+# TRADINGVIEW CHART INTEGRATION
 # =========================
-fig = go.Figure()
+# --- NEW: Map Binance timeframes to TradingView intervals ---
+timeframe_map = {
+    "15m": "15",
+    "30m": "30",
+    "1h": "60",
+    "4h": "240"
+}
 
-fig.add_candlestick(
-    x=df["time"],
-    open=df["open"],
-    high=df["high"],
-    low=df["low"],
-    close=df["close"],
-    name="Price"
-)
+# --- NEW: Construct the TradingView widget HTML ---
+tradingview_interval = timeframe_map.get(timeframe, "60") # Default to 1h if not found
+tradingview_symbol = symbol.upper().replace("USDT", "") # TradingView often uses the base symbol
 
-fig.add_trace(go.Scatter(
-    x=df["time"],
-    y=df["HMA"],
-    line=dict(width=2),
-    name="HMA"
-))
+tradingview_html = f"""
+<div id="tradingview_chart"></div>
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+<script type="text/javascript">
+new TradingView.widget({
+  "width": "100%",
+  "height": 610,
+  "symbol": "BINANCE:{tradingview_symbol}",
+  "interval": "{tradingview_interval}",
+  "timezone": "Etc/UTC",
+  "theme": "dark",
+  "style": "1",
+  "locale": "en",
+  "toolbar_bg": "#f1f3f6",
+  "enable_publishing": false,
+  "allow_symbol_change": true,
+  "container_id": "tradingview_chart",
+  "hide_side_toolbar": false,
+  "save_image": true
+});
+</script>
+"""
 
-fig.add_trace(go.Scatter(
-    x=df["time"],
-    y=df["trail"],
-    line=dict(width=2),
-    name="Trailing Stop"
-))
-
-# --- NEW: Add Take Profit Levels to Chart ---
-fig.add_hline(y=tp1, line_dash="dash", line_color="green", line_width=2, name="TP1")
-fig.add_hline(y=tp2, line_dash="dash", line_color="lime", line_width=2, name="TP2")
-fig.add_hline(y=tp3, line_dash="dash", line_color="yellow", line_width=2, name="TP3")
-
-fig.add_trace(go.Scatter(
-    x=buy_signals["time"],
-    y=buy_signals["close"],
-    mode="markers",
-    marker=dict(size=10, symbol="triangle-up"),
-    name="BUY"
-))
-
-fig.add_trace(go.Scatter(
-    x=sell_signals["time"],
-    y=sell_signals["close"],
-    mode="markers",
-    marker=dict(size=10, symbol="triangle-down"),
-    name="SELL"
-))
-
-fig.update_layout(
-    height=700,
-    template="plotly_dark",
-    xaxis_rangeslider_visible=False
-)
-
-st.plotly_chart(fig, use_container_width=True)
+# --- NEW: Render the TradingView widget ---
+st.components.v1.html(tradingview_html, height=610)
 
 # =========================
 # LIVE SIGNAL FEED
