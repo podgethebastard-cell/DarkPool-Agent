@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 17.0: The "Gann Activation" Update (Gann HiLo + 6-Engine Core)
+Version 17.1: Live Update + Backtest Engine + Gann Fixes
 """
 import time
 import math
@@ -39,7 +39,7 @@ use_hma_filter = True
 tp1_r = 1.5
 tp2_r = 3.0
 tp3_r = 5.0
-gann_len = 3  # Default Gann Length
+gann_len = 3
 
 # API ENDPOINTS
 BINANCE_API_BASE = "https://api.binance.us/api/v3"
@@ -78,10 +78,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Main Background */
     .main { background-color: #0b0c10; }
-    
-    /* Metrics Cards */
     div[data-testid="metric-container"] {
         background: rgba(31, 40, 51, 0.7);
         backdrop-filter: blur(12px);
@@ -96,16 +93,12 @@ st.markdown("""
         border-color: #66fcf1;
         box-shadow: 0 0 15px rgba(102, 252, 241, 0.2);
     }
-    
-    /* Fonts */
     h1, h2, h3, h4, h5 { 
         font-family: 'Roboto Mono', monospace; 
         color: #c5c6c7; 
         font-weight: 700;
     }
     p, span, div { font-family: 'Inter', sans-serif; color: #c5c6c7; }
-    
-    /* Buttons */
     .stButton > button {
         border-radius: 4px; 
         font-weight: 700;
@@ -120,14 +113,10 @@ st.markdown("""
         color: #0b0c10;
         border-color: #66fcf1;
     }
-    
-    /* Sidebar */
     section[data-testid="stSidebar"] { 
         background-color: #050608; 
         border-right: 1px solid #1f2833;
     }
-    
-    /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
         background-color: transparent;
@@ -154,13 +143,19 @@ with c_head1:
     st.caption("AI-POWERED MULTI-ENGINE EXECUTION SUITE")
 with c_head2:
     utc_now = datetime.now(timezone.utc)
-    st.metric("UTC TIME", utc_now.strftime("%H:%M:%S"))
+    # Use empty placeholder for clock to allow updates if needed
+    clock_ph = st.empty()
+    clock_ph.metric("UTC TIME", utc_now.strftime("%H:%M:%S"))
 
 # =============================================================================
 # SIDEBAR CONTROLS
 # =============================================================================
 with st.sidebar:
     st.header("⚙️ SYSTEM CONTROL")
+    
+    # Auto-Refresh Logic
+    refresh_on = st.checkbox("⚡ AUTO-REFRESH", value=False)
+    refresh_rate = st.number_input("Rate (sec)", 5, 300, 30)
     
     # Session
     hour = utc_now.hour
@@ -173,14 +168,10 @@ with st.sidebar:
         st.markdown("""
         **1. TITAN (Execution)**
         * ATR Trailing Stops & Trend Structure.
-        
         **2. APEX (Structure)**
         * HMA Trend Cloud & Pivot Liquidity.
-        
         **3. GANN (Trend)**
         * High/Low Activator Step-Line.
-        * Green = Bull, Red = Bear.
-        
         **4. MATRIX (Flow)**
         * Money Flow Index + Hyper Wave.
         """)
@@ -213,10 +204,9 @@ with st.sidebar:
     st.subheader("🤖 TELEGRAM")
     tg_on = st.checkbox("Auto-Broadcast", False)
     
-    # --- SECRETS LOADING ---
+    # Secrets / Creds
     try: sec_token = st.secrets["TELEGRAM_TOKEN"]
     except: sec_token = ""
-    
     try: sec_chat = st.secrets["TELEGRAM_CHAT_ID"]
     except: sec_chat = ""
 
@@ -226,21 +216,22 @@ with st.sidebar:
     if st.button("Test Link"):
         t_clean = tg_token.strip()
         c_clean = tg_chat.strip()
-        
         if not t_clean or not c_clean:
-            st.error("Missing Creds (Check secrets.toml or Inputs)")
+            st.error("Missing Creds")
         else:
             try:
                 r = requests.post(f"https://api.telegram.org/bot{t_clean}/sendMessage", json={"chat_id": c_clean, "text": "💠 TITAN: ONLINE"})
-                if r.status_code == 200:
-                    st.success("Linked! ✅")
-                else:
-                    st.error(f"Error {r.status_code}: Check Token/Chat ID")
-            except Exception as e:
-                st.error(f"Connection Failed: {e}")
+                if r.status_code == 200: st.success("Linked! ✅")
+                else: st.error(f"Error {r.status_code}")
+            except Exception as e: st.error(f"Failed: {e}")
 
     persist = st.checkbox("DB Log", True)
     telegram_cooldown_s = st.number_input("Cooldown (s)", 5, 600, 30)
+
+    # AUTO REFRESH RUNNER
+    if refresh_on:
+        time.sleep(refresh_rate)
+        st.rerun()
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -260,7 +251,7 @@ def calculate_fibonacci(df, lookback=50):
     return {'fib_382': h - (d*0.382), 'fib_500': h - (d*0.5), 'fib_618': h - (d*0.618)}
 
 # =============================================================================
-# ANALYST & SENTIMENT
+# ANALYST & BACKTEST
 # =============================================================================
 def calculate_fear_greed_index(df):
     try:
@@ -275,17 +266,67 @@ def calculate_fear_greed_index(df):
         return int(fg)
     except: return 50
 
+def run_backtest(df):
+    # Simple Loop Backtest
+    trades = []
+    active_trade = None
+    
+    # Iterate only where we have signals
+    signals = df[(df['buy']) | (df['sell'])]
+    
+    for idx, row in signals.iterrows():
+        # Check if previous trade closed? (Simplified: We assume simple R:R outcome for immediate next candles)
+        # In a real engine we iterate every candle. Here we approximate "Potential Win"
+        
+        # Look forward 20 candles for outcome
+        future = df.loc[idx+1 : idx+20]
+        if future.empty: continue
+        
+        entry = row['close']
+        stop = row['entry_stop']
+        tp1 = row['tp1']
+        is_long = row['is_bull']
+        
+        outcome = "PENDING"
+        pnl = 0
+        
+        if is_long:
+            # Hit TP?
+            if future['high'].max() >= tp1:
+                outcome = "WIN"
+                pnl = abs(entry - stop) * tp1_r
+            # Hit Stop?
+            elif future['low'].min() <= stop:
+                outcome = "LOSS"
+                pnl = -abs(entry - stop)
+        else:
+            if future['low'].min() <= tp1:
+                outcome = "WIN"
+                pnl = abs(entry - stop) * tp1_r
+            elif future['high'].max() >= stop:
+                outcome = "LOSS"
+                pnl = -abs(entry - stop)
+                
+        if outcome != "PENDING":
+            trades.append({'outcome': outcome, 'pnl': pnl})
+            
+    if not trades: return 0, 0, 0
+    
+    df_res = pd.DataFrame(trades)
+    total_trades = len(df_res)
+    win_rate = (len(df_res[df_res['outcome']=='WIN']) / total_trades) * 100
+    net_r = (len(df_res[df_res['outcome']=='WIN']) * tp1_r) - len(df_res[df_res['outcome']=='LOSS'])
+    
+    return total_trades, win_rate, net_r
+
 def generate_ai_analysis(row, symbol, tf, fibs, fg_index):
     titan_trend = "BULLISH" if row['is_bull'] else "BEARISH"
     apex_trend = "BULLISH" if row['apex_trend'] == 1 else "BEARISH" if row['apex_trend'] == -1 else "NEUTRAL"
     gann_trend = "BULLISH" if row['gann_trend'] == 1 else "BEARISH"
     
-    # Confluence Check
     confluence = "MIXED"
-    if titan_trend == apex_trend == gann_trend:
-        confluence = "⭐⭐⭐ TRIPLE CONFLUENCE"
-    elif titan_trend == gann_trend:
-        confluence = "⭐⭐ DOUBLE CONFLUENCE"
+    if titan_trend == apex_trend == gann_trend: confluence = "⭐⭐⭐ TRIPLE CONFLUENCE"
+    elif titan_trend == gann_trend: confluence = "⭐⭐ DOUBLE CONFLUENCE"
 
     sent = "NEUTRAL"
     if fg_index >= 75: sent = "EXTREME GREED 🤑"
@@ -333,24 +374,9 @@ def init_db(path: str = DB_PATH):
 
 if 'db_conn' not in st.session_state: st.session_state.db_conn = init_db()
 
-def journal_signal(conn, payload):
-    if not conn: return False
-    try:
-        conn.execute("""
-            INSERT INTO signals (ts, symbol, timeframe, direction, entry, stop, tp1, tp2, tp3, adx, rvol, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (payload['ts'], payload['symbol'], payload['timeframe'], payload['direction'], 
-              payload['entry'], payload['stop'], payload['tp1'], payload['tp2'], payload['tp3'],
-              payload['adx'], payload['rvol'], payload['notes']))
-        conn.commit()
-        return True
-    except: return False
-
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
-    token = token.strip()
-    chat = chat.strip()
-    
+    token = token.strip(); chat = chat.strip()
     last = st.session_state.get("last_tg", 0)
     if time.time() - last < cooldown: return False
     try:
@@ -507,20 +533,26 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l)
     df['is_res'] = (df['high'] == df['pivot_high'])
     df['is_sup'] = (df['low'] == df['pivot_low'])
 
-    # --- GANN HILO ENGINE ---
+    # --- GANN HILO ENGINE (FIXED INITIALIZATION) ---
     sma_high = df['high'].rolling(gann_l).mean()
     sma_low = df['low'].rolling(gann_l).mean()
     
-    g_trend = np.zeros(len(df))
-    g_act = np.zeros(len(df))
+    # FIX: Initialize with NaNs so charts don't spike to 0
+    g_trend = np.full(len(df), np.nan)
+    g_act = np.full(len(df), np.nan)
+    
     curr_g_t = 1
-    curr_g_a = sma_low.iloc[gann_l] if len(sma_low) > gann_l else 0
+    # Seed value
+    curr_g_a = sma_low.iloc[gann_l] if len(sma_low) > gann_l else np.nan
     
     for i in range(gann_l, len(df)):
         c = df.at[i,'close']
         h_ma = sma_high.iloc[i]
         l_ma = sma_low.iloc[i]
-        prev_a = g_act[i-1] if i > 0 else curr_g_a
+        
+        # FIX: Handle first iteration
+        prev_a = g_act[i-1] if (i > 0 and not np.isnan(g_act[i-1])) else curr_g_a
+        if np.isnan(prev_a): prev_a = l_ma # Fallback
         
         if curr_g_t == 1:
             if c < prev_a:
@@ -577,15 +609,22 @@ if not df.empty:
                 else: st.error("FAILED")
             else: st.error("NO CREDS (Check secrets.toml or Inputs)")
     
-    with c_act2: st.download_button("📥 DOWNLOAD CSV", df.to_csv(), "titan.csv", "text/csv", use_container_width=True)
-    with c_act3: st.info("Backtest results placeholder")
+    with c_act2: 
+        if st.button("🤖 ANALYST REPORT", use_container_width=True):
+            st.info(ai_report)
+
+    with c_act3: 
+        # LIVE BACKTEST
+        b_total, b_win, b_net = run_backtest(df)
+        st.metric("Backtest (Approx)", f"WR: {b_win:.1f}%", f"Net: {b_net:.1f}R ({b_total} Txs)")
 
     # --- MAIN CHART (TITAN) ---
     st.markdown("### 🏹 EXECUTION")
     fig = go.Figure()
     fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='#66fcf1', width=1)))
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['entry_stop'], mode='lines', name='Stop', line=dict(color='#ff9900', width=1)))
+    # STOP REMOVED FROM VISUAL CHART AS REQUESTED
+    # fig.add_trace(go.Scatter(x=df['timestamp'], y=df['entry_stop'], mode='lines', name='Stop', line=dict(color='#ff9900', width=1)))
     
     buys = df[df['buy']]; sells = df[df['sell']]
     if not buys.empty: fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.999, mode='markers', marker=dict(symbol='triangle-up', size=12, color='#00ff00'), name='BUY'))
@@ -598,16 +637,32 @@ if not df.empty:
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 GANN HILO", "🌊 APEX", "💸 MATRIX", "📉 VOL", "🧠 SENTIMENT"])
     
     with tab1:
+        # Fixed Plotting Logic for Gann (Handles NaNs correctly)
         fig6 = go.Figure()
         fig6.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
         
-        # Color segment the Gann line
-        for i in range(1, len(df)):
-            color = '#00ff00' if df['gann_trend'].iloc[i] == 1 else '#ff0000'
-            fig6.add_trace(go.Scatter(
-                x=df['timestamp'].iloc[i-1:i+1], y=df['gann_act'].iloc[i-1:i+1],
-                mode='lines', line=dict(color=color, width=2), showlegend=False
-            ))
+        # Only plot valid data
+        mask = ~np.isnan(df['gann_act'])
+        df_g = df[mask]
+        
+        # Segmented Color Line
+        # We plot points but colored by trend. 
+        # To make it a continuous line with changing colors, we can group traces or use a color scale hack.
+        # Simple method: Two traces, one for Bull, one for Bear (breaks continuity but looks cleaner)
+        # Better method: Step line with segments.
+        
+        for i in range(1, len(df_g)):
+            # Check for trend switch or continuity
+            if i > 500: break # optimize loop for visual only
+            
+        # Optimization: Just plot markers or simplified line for performance
+        fig6.add_trace(go.Scatter(
+            x=df_g['timestamp'], y=df_g['gann_act'],
+            mode='markers+lines', 
+            marker=dict(color=np.where(df_g['gann_trend']==1, '#00ff00', '#ff0000'), size=4),
+            line=dict(color='gray', width=1, dash='dot'),
+            name='Gann Activator'
+        ))
             
         fig6.update_layout(height=500, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0), title="Gann High Low Activator")
         st.plotly_chart(fig6, use_container_width=True)
