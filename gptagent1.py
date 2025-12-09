@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 12.0: "Sentience" Update (Fear & Greed Index Added)
+Version 13.0: Bulletproof Edition (Fixed Scoping, Restored MFI, 3-Layer Data)
 """
 import time
 import math
@@ -29,10 +29,16 @@ DB_PATH = "titan_signals.db"
 MAX_RETRIES = 2
 RETRY_DELAY = 0.5
 
-# APEX CONFIG
-APEX_LEN = 55
-APEX_MULT = 1.5
-LIQ_LEN = 10  # Pivot lookback
+# SAFE DEFAULTS (Prevents NameError)
+mf_len = 14
+vol_len = 20
+amplitude = 10
+channel_dev = 3.0
+hma_len = 50
+use_hma_filter = True
+tp1_r = 1.5
+tp2_r = 3.0
+tp3_r = 5.0
 
 # API ENDPOINTS
 BINANCE_API_BASE = "https://api.binance.us/api/v3"
@@ -73,6 +79,7 @@ st.markdown("""
 <style>
     .main { background-color: #0e1117; }
     
+    /* Metrics Cards */
     div[data-testid="metric-container"] {
         background: rgba(30, 33, 39, 0.7);
         backdrop-filter: blur(10px);
@@ -87,8 +94,10 @@ st.markdown("""
         border-color: #00ffbb;
     }
     
+    /* Headers & Text */
     h1, h2, h3 { font-family: 'Inter', sans-serif; font-weight: 700; color: #f0f0f0; }
     
+    /* Buttons */
     .stButton > button {
         border-radius: 8px; font-weight: 600;
         background: linear-gradient(45deg, #2b303b, #3b4252);
@@ -99,6 +108,7 @@ st.markdown("""
         color: #00ffbb;
     }
     
+    /* Sidebar */
     section[data-testid="stSidebar"] { background-color: #121418; }
 </style>
 """, unsafe_allow_html=True)
@@ -115,17 +125,15 @@ with st.sidebar:
     with st.expander("📚 User Guide", expanded=False):
         st.markdown("""
         **1. TITAN Engine (Chart 1)**
-        * Uses ATR Trailing Stops and Market Structure.
-        * Best for entry timing and risk management.
+        * Trend-following with ATR Trailing Stops.
+        * **MFI Filter:** Uses Money Flow Index to confirm volume pressure.
 
         **2. APEX Engine (Chart 2)**
         * **Trend Cloud:** HMA (55) +/- 1.5 ATR.
-        * **Liquidity Zones:** Auto-detected Supply/Demand.
+        * **Liquidity Zones:** Auto-detected Supply/Demand pivots.
 
         **3. Fear & Greed (Chart 3)**
         * Real-time sentiment index (0-100).
-        * < 25: Extreme Fear (Buy Opportunity?)
-        * > 75: Extreme Greed (Correction Risk?)
         """)
 
     st.subheader("📡 Market Feed")
@@ -146,6 +154,12 @@ with st.sidebar:
         tp1_r = st.number_input("TP1 (R)", value=1.5, step=0.1)
         tp2_r = st.number_input("TP2 (R)", value=3.0, step=0.1)
         tp3_r = st.number_input("TP3 (R)", value=5.0, step=0.1)
+
+    st.markdown("---")
+    st.subheader("📊 Filters")
+    # SAFE ASSIGNMENT: Variables assigned here override defaults
+    mf_len = st.number_input("Money Flow Len", 2, 200, 14)
+    vol_len = st.number_input("Volume MA Len", 5, 200, 20)
 
     st.markdown("---")
     st.subheader("🤖 Integrations")
@@ -179,7 +193,7 @@ with st.sidebar:
     telegram_cooldown_s = st.number_input("Broadcast Cooldown (s)", 5, 600, 30)
 
 # =============================================================================
-# HELPER FUNCTIONS (INDICATORS)
+# HELPER FUNCTIONS
 # =============================================================================
 def calculate_hma(series, length):
     half_len = int(length / 2)
@@ -199,52 +213,33 @@ def calculate_fibonacci(df, lookback=50):
 # ANALYST AGENT & FEAR/GREED ENGINE
 # =============================================================================
 def calculate_fear_greed_index(df):
-    """
-    Calculates a proprietary Fear & Greed Index (0-100) based on market data.
-    Components: Volatility (25%), Momentum (25%), Volume (25%), Trend (25%)
-    """
     try:
-        # 1. Volatility Score (Low Vol = Greed, High Vol = Fear)
+        # Volatility
         df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
         vol_30 = df['log_ret'].rolling(30).std()
         vol_90 = df['log_ret'].rolling(90).std()
-        # If current vol is higher than avg, fear increases (score drops)
         vol_score = 50 - ((vol_30.iloc[-1] - vol_90.iloc[-1]) / vol_90.iloc[-1]) * 100
         vol_score = max(0, min(100, vol_score))
 
-        # 2. Momentum Score (RSI)
+        # Momentum
         rsi = df['rsi'].iloc[-1]
-        mom_score = rsi # High RSI = Greed (High Score)
-
-        # 3. Volume Score (Buying vs Selling Pressure)
-        # Using CMF-like logic: (Close-Low) - (High-Close) / (High-Low)
-        ad = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
-        ad = ad.fillna(0)
-        vol_force = ad.rolling(14).mean().iloc[-1]
-        # Map -1..1 to 0..100
-        vol_score_val = (vol_force + 1) * 50
-
-        # 4. Trend Score (Price vs SMA 50)
+        
+        # Trend
         sma_50 = df['close'].rolling(50).mean().iloc[-1]
-        price = df['close'].iloc[-1]
-        dist = (price - sma_50) / sma_50
-        trend_score = 50 + (dist * 1000) # Amplify small %
+        dist = (df['close'].iloc[-1] - sma_50) / sma_50
+        trend_score = 50 + (dist * 1000)
         trend_score = max(0, min(100, trend_score))
 
-        # Composite Score
-        fg_index = (vol_score * 0.25) + (mom_score * 0.25) + (vol_score_val * 0.25) + (trend_score * 0.25)
+        # Composite
+        fg_index = (vol_score * 0.3) + (rsi * 0.4) + (trend_score * 0.3)
         return int(fg_index)
     except:
-        return 50 # Neutral Fallback
+        return 50
 
 def generate_ai_analysis(row, symbol, tf, fibs, fg_index):
-    # TITAN STATUS
     titan_trend = "BULLISH" if row['is_bull'] else "BEARISH"
-    
-    # APEX STATUS
     apex_trend = "BULLISH" if row['apex_trend'] == 1 else "BEARISH" if row['apex_trend'] == -1 else "NEUTRAL"
     
-    # SENTIMENT
     sentiment = "NEUTRAL"
     if fg_index >= 75: sentiment = "EXTREME GREED 🤑"
     elif fg_index >= 55: sentiment = "GREED 🟢"
@@ -255,14 +250,14 @@ def generate_ai_analysis(row, symbol, tf, fibs, fg_index):
         f"**🤖 TITAN AI Analyst Report**\n\n"
         f"**1. Market Regime:**\n"
         f"• Sentiment: **{sentiment}** ({fg_index}/100)\n"
-        f"• TITAN Engine: **{titan_trend}**\n"
+        f"• TITAN Trend: **{titan_trend}**\n"
         f"• APEX Cloud: **{apex_trend}**\n\n"
         f"**2. Technicals:**\n"
-        f"• ADX Strength: {row['adx']:.1f} ({'Strong' if row['adx']>25 else 'Weak'})\n"
+        f"• MFI (Money Flow): {row['mfi']:.1f}\n"
         f"• Relative Vol: {row['rvol']:.2f}x\n"
-        f"• Golden Zone: {fibs['fib_500']:.2f}\n\n"
-        f"**3. Execution Plan:**\n"
-        f"Focus on **{titan_trend}** setups. Invalidation at {row['entry_stop']:.2f}."
+        f"• Golden Zone (50%): {fibs['fib_500']:.2f}\n\n"
+        f"**3. Strategic Bias:**\n"
+        f"Invalidation level is at {row['entry_stop']:.2f}."
     )
 
 # =============================================================================
@@ -353,6 +348,7 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
     except: pass
     return pd.DataFrame()
 
+# Updated Engine Signature to match usage
 def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     if df.empty: return df
     df = df.copy().reset_index(drop=True)
@@ -361,8 +357,34 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1))))
     df['atr'] = df['tr'].ewm(alpha=1/14, adjust=False).mean()
     df['hma'] = calculate_hma(df['close'], hma_l)
-    df['rsi'] = 100 - (100/(1 + (df['close'].diff().clip(lower=0).ewm(alpha=1/14).mean()/(-df['close'].diff().clip(upper=0)).ewm(alpha=1/14).mean())))
+    
+    # RSI
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    # RVOL
     df['rvol'] = df['volume'] / df['volume'].rolling(vol_l).mean()
+    
+    # MFI (Money Flow Index) - RESTORED
+    typical_price = (df['high'] + df['low'] + df['close']) / 3
+    raw_money_flow = typical_price * df['volume']
+    
+    pos_flow = pd.Series(np.where(typical_price > typical_price.shift(1), raw_money_flow, 0), index=df.index)
+    neg_flow = pd.Series(np.where(typical_price < typical_price.shift(1), raw_money_flow, 0), index=df.index)
+    
+    pos_mf = pos_flow.rolling(mf_l).sum()
+    neg_mf = neg_flow.rolling(mf_l).sum()
+    
+    mfi_ratio = pos_mf / neg_mf
+    df['mfi'] = 100 - (100 / (1 + mfi_ratio))
+    df['mfi'] = df['mfi'].fillna(50)
+    
+    # ADX (Simplified)
     df['adx'] = 25.0 
     
     # --- TITAN ENGINE ---
@@ -405,8 +427,8 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
 
     # --- APEX ENGINE ---
-    apex_base = calculate_hma(df['close'], APEX_LEN)
-    apex_atr = df['atr'] * APEX_MULT 
+    apex_base = calculate_hma(df['close'], 55) # Hardcoded APEX Length
+    apex_atr = df['atr'] * 1.5
     df['apex_upper'] = apex_base + apex_atr
     df['apex_lower'] = apex_base - apex_atr
     
@@ -417,8 +439,10 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
         else: apex_t[i] = apex_t[i-1]
     df['apex_trend'] = apex_t
 
-    df['pivot_high'] = df['high'].rolling(LIQ_LEN*2+1, center=True).max()
-    df['pivot_low'] = df['low'].rolling(LIQ_LEN*2+1, center=True).min()
+    # Liquidity
+    pivot_len = 10
+    df['pivot_high'] = df['high'].rolling(pivot_len*2+1, center=True).max()
+    df['pivot_low'] = df['low'].rolling(pivot_len*2+1, center=True).min()
     df['is_res'] = (df['high'] == df['pivot_high'])
     df['is_sup'] = (df['low'] == df['pivot_low'])
     
@@ -433,7 +457,8 @@ with st.spinner("Fetching Data..."):
 if not df.empty:
     df = df.dropna(subset=['close'])
     with st.spinner("Running Engines..."):
-        df = run_engines(df, int(amplitude), channel_dev, int(hma_len), use_hma_filter, tp1_r, tp2_r, tp3_r, mf_len, vol_len)
+        # Explicit arguments using safe globals
+        df = run_engines(df, int(amplitude), channel_dev, int(hma_len), use_hma_filter, tp1_r, tp2_r, tp3_r, int(mf_len), int(vol_len))
     
     last = df.iloc[-1]
     fibs = calculate_fibonacci(df)
@@ -534,11 +559,7 @@ if not df.empty:
                 {'range': [55, 75], 'color': '#00e676'}, # Greed
                 {'range': [75, 100], 'color': '#00b0ff'} # Extreme Greed
             ],
-            'threshold': {
-                'line': {'color': "white", 'width': 4},
-                'thickness': 0.75,
-                'value': fg_index
-            }
+            'threshold': {'line': {'color': "white", 'width': 4}, 'thickness': 0.75, 'value': fg_index}
         }
     ))
     fig3.update_layout(height=400, template='plotly_dark', margin=dict(l=20,r=20,t=50,b=20))
