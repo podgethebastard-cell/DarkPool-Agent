@@ -204,13 +204,19 @@ elif not sell_signals.empty and sell_signals['time'].iloc[-1] == df['time'].iloc
 
 st.success(f"Latest Signal: {last_signal}")
 
-# --- NEW: BROADCAST SECTION (from Equity Titan) ---
+# --- BROADCASTING LOGIC (ROBUST) ---
 st.sidebar.subheader("📡 Broadcast Keys")
-if 'tg_token' not in st.session_state: st.session_state.tg_token = ""
-if 'tg_chat' not in st.session_state: st.session_state.tg_chat = ""
 
-tg_token = st.sidebar.text_input("Telegram Bot Token", value=st.session_state.tg_token, type="password")
-tg_chat = st.sidebar.text_input("Telegram Chat ID", value=st.session_state.tg_chat)
+# --- AUTOMATIC SECRET LOADING ---
+# Try to load from st.secrets first
+tg_token = st.secrets.get("TELEGRAM_TOKEN", "")
+tg_chat = st.secrets.get("TELEGRAM_CHAT_ID", "")
+
+# If secrets are empty, fall back to sidebar inputs (for local dev)
+if not tg_token:
+    tg_token = st.sidebar.text_input("Telegram Bot Token", type="password")
+if not tg_chat:
+    tg_chat = st.sidebar.text_input("Telegram Chat ID")
 
 # --- BROADCASTING LOGIC ---
 if tg_token and tg_chat:
