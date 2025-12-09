@@ -12,7 +12,7 @@ from openai import OpenAI # REQUIRES: pip install openai
 # ==========================================
 # 1. PAGE CONFIG & TERMINAL CSS
 # ==========================================
-st.set_page_config(page_title="🪓Scalper Titan", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="🪓Scalper Titan Pro", layout="wide", page_icon="⚡")
 
 st.markdown("""
     <style>
@@ -102,8 +102,8 @@ st.markdown("""
 # ==========================================
 # 2. SIDEBAR CONTROLS
 # ==========================================
-st.sidebar.title("⚡ TITAN CONFIG")
-st.sidebar.caption("v5.2 | DARK VECTOR ENGINE")
+st.sidebar.title("⚡ TITAN PRO CONFIG")
+st.sidebar.caption("v6.0 | OPTIMIZED CORE")
 st.sidebar.markdown("---")
 
 # Market Data
@@ -116,13 +116,13 @@ st.sidebar.markdown("---")
 
 # Strategies (MATCHING PINE SCRIPT GROUPS)
 st.sidebar.subheader("LOGIC ENGINE")
-with st.sidebar.expander("Apex Engine (1m/5m)", expanded=True):
+with st.sidebar.expander("Apex Engine (Optimized)", expanded=True):
     amplitude = st.number_input("Sensitivity (Lookback)", min_value=1, value=5, help="Perfect for 1m/5m. Reacts fast to breakouts.")
-    channel_dev = st.number_input("Stop Deviation", min_value=1.0, value=3.0, step=0.1, help="3.0 gives the trade room to breathe.")
+    channel_dev = st.number_input("Stop Deviation", min_value=1.0, value=2.5, step=0.1, help="Reduced from 3.0 to 2.5 for tighter scalping.")
     
 with st.sidebar.expander("Trend Reference"):
     hma_len = st.number_input("HMA Length", min_value=1, value=50)
-    use_hma_filter = st.checkbox("Use HMA as Filter?", value=False)
+    use_hma_filter = st.checkbox("Use HMA as Filter?", value=True, help="Force trades to align with institutional trend.")
 
 with st.sidebar.expander("Money Flow & Vol"):
     mf_len = st.number_input("MF Length", value=14)
@@ -204,6 +204,7 @@ def get_ai_analysis(df_summary, symbol, tf):
     - HyperWave Momentum: {df_summary['hw']}
     - Relative Volume: {df_summary['rvol']}x
     - Institutional Trend (HMA): {df_summary['inst_trend']}
+    - ADX (Trend Strength): {df_summary['adx']} (Below 20 is choppy)
     
     INSTRUCTIONS:
     1. Provide a concise, bulleted assessment of the immediate setup.
@@ -248,8 +249,25 @@ def calculate_mfi(high, low, close, volume, length):
     neg = rmf.where(tp < tp.shift(1), 0).rolling(length).sum()
     return 100 - (100 / (1 + (pos / neg)))
 
+# OPTIMIZATION: NEW ADX CALCULATION
+def calculate_adx(high, low, close, length=14):
+    plus_dm = high.diff()
+    minus_dm = low.diff()
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+    
+    tr = np.maximum(high - low, np.maximum(abs(high - close.shift(1)), abs(low - close.shift(1))))
+    atr = tr.rolling(length).mean()
+    
+    plus_di = 100 * (plus_dm.ewm(alpha=1/length).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1/length).mean() / atr)
+    
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.rolling(length).mean()
+    return adx
+
 # ==========================================
-# 4. MASTER ENGINE
+# 4. MASTER ENGINE (OPTIMIZED)
 # ==========================================
 @st.cache_data(ttl=5) 
 def get_data(symbol, timeframe, limit):
@@ -262,20 +280,18 @@ def get_data(symbol, timeframe, limit):
     except: return pd.DataFrame()
 
 def run_titan_engine(df):
-    # --- 1. DARK VECTOR LOGIC (STRICT PINE MAPPING) ---
+    # --- 1. DARK VECTOR LOGIC (OPTIMIZED) ---
     
-    # Pine: float standard_atr = ta.atr(100) -> Uses RMA (Wilder's)
-    # Python: ewm(alpha=1/100) is equivalent to Pine's RMA
+    # OPTIMIZATION 1: FASTER VOLATILITY SYNC
+    # Old: ewm(alpha=1/100) -> Too slow.
+    # New: ewm(span=14) -> Reacts to news/wicks instantly.
     df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
-    df['atr_algo'] = (df['tr'].ewm(alpha=1/100, adjust=False).mean() / 2)
+    df['atr_algo'] = (df['tr'].ewm(span=14, adjust=False).mean() / 2) # Faster reaction
     
-    # Pine: dev = channel_dev * atr_algo
     df['dev'] = df['atr_algo'] * channel_dev
-    
-    # Pine: hma_val = ta.hma(close, hma_len)
     df['hma'] = calc_hma_full(df['close'], hma_len)
 
-    # Pine: Staircase Logic
+    # Staircase Logic
     df['ll'] = df['low'].rolling(amplitude).min()
     df['hh'] = df['high'].rolling(amplitude).max()
     
@@ -283,6 +299,7 @@ def run_titan_engine(df):
     curr_trend = 0; curr_stop = df['close'].iloc[0]
     curr_max_l = 0.0; curr_min_h = 0.0
 
+    # Iterative Staircase Calculation
     for i in range(amplitude, len(df)):
         c = df['close'].iloc[i]; l = df['ll'].iloc[i]; h = df['hh'].iloc[i]
         dev = df['dev'].iloc[i] if not np.isnan(df['dev'].iloc[i]) else 0
@@ -317,15 +334,37 @@ def run_titan_engine(df):
     df['trend'] = trend; df['trend_stop'] = stop
     df['is_bull'] = df['trend'] == 0
     
-    # Pine: Signal Generation
+    # --- 2. CALCULATE INDICATORS FOR FILTERING ---
+    df['rsi'] = calculate_rsi(df['close'], 14)
+    df['adx'] = calculate_adx(df['high'], df['low'], df['close'], 14)
+    
+    # --- 3. OPTIMIZED SIGNAL GENERATION ---
     df['bull_flip'] = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False).astype(bool))
     df['bear_flip'] = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True).astype(bool))
-    filter_buy = ~use_hma_filter | (df['close'] > df['hma'])
-    filter_sell = ~use_hma_filter | (df['close'] < df['hma'])
-    df['buy_signal'] = df['bull_flip'] & filter_buy
-    df['sell_signal'] = df['bear_flip'] & filter_sell
+    
+    # OPTIMIZATION 2: REGIME FILTER (CHOP AVOIDANCE)
+    # Only trade if ADX > 20 (Market is trending)
+    filter_trend_strength = df['adx'] > 20
+    
+    # OPTIMIZATION 3: MOMENTUM GUARDRAILS
+    # Don't Buy if Overbought (>70). Don't Sell if Oversold (<30).
+    filter_rsi_buy = df['rsi'] < 70
+    filter_rsi_sell = df['rsi'] > 30
+    
+    # Existing HMA Filter
+    filter_hma_buy = ~use_hma_filter | (df['close'] > df['hma'])
+    filter_hma_sell = ~use_hma_filter | (df['close'] < df['hma'])
+    
+    # Final Signal Logic
+    df['buy_signal'] = df['bull_flip'] & filter_hma_buy & filter_trend_strength & filter_rsi_buy
+    df['sell_signal'] = df['bear_flip'] & filter_hma_sell & filter_trend_strength & filter_rsi_sell
 
-    # --- 2. MONEY FLOW MATRIX ---
+    # OPTIMIZATION 4: PROFIT TARGETING
+    # Calculate 1.5R Take Profit automatically
+    df['risk'] = abs(df['close'] - df['trend_stop'])
+    df['take_profit'] = np.where(df['is_bull'], df['close'] + (df['risk'] * 1.5), df['close'] - (df['risk'] * 1.5))
+
+    # --- 4. MONEY FLOW & VOLUME ---
     rsi_src = calculate_rsi(df['close'], mf_len) - 50
     mf_vol = df['volume'] / df['volume'].rolling(mf_len).mean()
     df['money_flow'] = (rsi_src * mf_vol).fillna(0).ewm(span=3).mean()
@@ -336,7 +375,7 @@ def run_titan_engine(df):
     ss_abs = abs(pc).ewm(span=hyper_long).mean().ewm(span=hyper_short).mean()
     df['hyper_wave'] = np.where(ss_abs != 0, (100 * (ss / ss_abs)) / 2, 0)
 
-    # --- 3. ADVANCED VOLUME ---
+    # Advanced Volume
     mfm = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
     df['cmf'] = (mfm.fillna(0) * df['volume']).rolling(vol_len).sum() / df['volume'].rolling(vol_len).sum()
     df['mfi'] = calculate_mfi(df['high'], df['low'], df['close'], df['volume'], vol_len)
@@ -353,8 +392,8 @@ def run_titan_engine(df):
 # --- HEADER ---
 st.markdown("""
 <div class="titan-header">
-    <h1 class="titan-title">TITAN SCALPER <span style="color:#00ffbb">TERMINAL</span></h1>
-    <div class="titan-subtitle">INSTITUTIONAL ORDER FLOW & MOMENTUM ENGINE <span class="titan-badge">LIVE</span></div>
+    <h1 class="titan-title">TITAN SCALPER <span style="color:#00ffbb">PRO</span></h1>
+    <div class="titan-subtitle">INSTITUTIONAL ORDER FLOW & REGIME FILTER <span class="titan-badge">OPTIMIZED</span></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -385,20 +424,17 @@ if not df.empty:
             is_buy = last['buy_signal']
             direction = "LONG" if is_buy else "SHORT"
             icon = "🟢" if is_buy else "🔴"
-            risk = abs(last['close'] - last['trend_stop'])
-            target = last['close'] + (risk * 1.5) if is_buy else last['close'] - (risk * 1.5)
             
-            msg = f"""🔥 *TITAN SIGNAL: {symbol} ({timeframe})*
+            msg = f"""🔥 *TITAN PRO SIGNAL: {symbol} ({timeframe})*
 {icon} DIRECTION: *{direction}*
 🚪 ENTRY: `${last['close']:,.2f}`
 🛑 STOP LOSS: `${last['trend_stop']:,.2f}`
-🎯 TARGET: `${target:,.2f}`
+💰 TAKE PROFIT (1.5R): `${last['take_profit']:,.2f}`
+📊 ADX Strength: {last['adx']:.2f}
 🌊 Trend: {'BULLISH' if last['is_bull'] else 'BEARISH'}
-📊 Momentum: {'POSITIVE' if last['hyper_wave'] > 0 else 'NEGATIVE'}
 💰 Money Flow: {'INFLOW' if last['money_flow'] > 5 else 'OUTFLOW' if last['money_flow'] < -5 else 'NEUTRAL'}
-💀 Institutional Trend: {'MACRO BULL' if last['close'] > last['hma'] else 'MACRO BEAR'}
 ⚠️ _Not financial advice. DYOR._
-#DarkPool #Titan #Crypto"""
+#TitanPro #Scalping #Crypto"""
             
             send_telegram_msg(bot_token, chat_id, msg)
             st.session_state.last_signal_time = last['timestamp']
@@ -410,9 +446,13 @@ if not df.empty:
     trend_cls = "border-bull" if last['is_bull'] else "border-bear"
     trend_txt = "text-bull" if last['is_bull'] else "text-bear"
     
+    # ADX Logic for HUD
+    adx_status = "TRENDING" if last['adx'] > 25 else "CHOPPY" if last['adx'] < 20 else "WEAK"
+    adx_color = "text-bull" if last['adx'] > 25 else "text-bear"
+    
     with c1: st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Price</h4><h2>${last['close']:,.2f}</h2><div class="sub">Trend: <span class="{trend_txt}"><b>{trend_lbl}</b></span></div></div>""", unsafe_allow_html=True)
-    with c2: st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Titan Stop</h4><h2>${last['trend_stop']:,.2f}</h2><div class="sub">Risk Mgmt System</div></div>""", unsafe_allow_html=True)
-    with c3: st.markdown(f"""<div class="titan-card"><h4>Money Flow</h4><h2 class="{'text-bull' if last['money_flow']>0 else 'text-bear'}">{last['money_flow']:.2f}</h2><div class="sub">Institutional Pressure</div></div>""", unsafe_allow_html=True)
+    with c2: st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Titan Stop</h4><h2>${last['trend_stop']:,.2f}</h2><div class="sub">Take Profit: ${last['take_profit']:,.2f}</div></div>""", unsafe_allow_html=True)
+    with c3: st.markdown(f"""<div class="titan-card"><h4>Regime Filter</h4><h2 class="{adx_color}">{last['adx']:.1f}</h2><div class="sub">State: {adx_status}</div></div>""", unsafe_allow_html=True)
     with c4: st.markdown(f"""<div class="titan-card"><h4>RVOL</h4><h2 class="{'text-bull' if last['rvol']>1.5 else 'text-white'}">{last['rvol']:.2f}x</h2><div class="sub">Anomaly Detection</div></div>""", unsafe_allow_html=True)
 
     # --- ACTION CENTER (MANUAL) ---
@@ -423,20 +463,17 @@ if not df.empty:
             is_bull = last['is_bull']
             direction = "LONG" if is_bull else "SHORT"
             icon = "🟢" if is_bull else "🔴"
-            risk = abs(last['close'] - last['trend_stop'])
-            target = last['close'] + (risk * 1.5) if is_bull else last['close'] - (risk * 1.5)
             
-            manual_msg = f"""🔥 *TITAN SIGNAL: {symbol} ({timeframe})*
+            manual_msg = f"""🔥 *TITAN PRO SIGNAL: {symbol} ({timeframe})*
 {icon} DIRECTION: *{direction}*
 🚪 ENTRY: `${last['close']:,.2f}`
 🛑 STOP LOSS: `${last['trend_stop']:,.2f}`
-🎯 TARGET: `${target:,.2f}`
+💰 TAKE PROFIT: `${last['take_profit']:,.2f}`
+📊 ADX Strength: {last['adx']:.2f}
 🌊 Trend: {'BULLISH' if is_bull else 'BEARISH'}
-📊 Momentum: {'POSITIVE' if last['hyper_wave'] > 0 else 'NEGATIVE'}
 💰 Money Flow: {'INFLOW' if last['money_flow'] > 5 else 'OUTFLOW' if last['money_flow'] < -5 else 'NEUTRAL'}
-💀 Institutional Trend: {'MACRO BULL' if last['close'] > last['hma'] else 'MACRO BEAR'}
 ⚠️ _Not financial advice. DYOR._
-#DarkPool #Titan #Crypto"""
+#TitanPro #Scalping"""
             if send_telegram_msg(bot_token, chat_id, manual_msg):
                 st.success("✅ Signal Broadcasted Successfully!")
 
@@ -446,14 +483,15 @@ if not df.empty:
                 summary = {
                     'price': last['close'], 'trend': trend_lbl, 'stop': last['trend_stop'],
                     'mf': last['money_flow'], 'hw': last['hyper_wave'], 'rvol': last['rvol'],
-                    'inst_trend': 'BULL' if last['close'] > last['hma'] else 'BEAR'
+                    'inst_trend': 'BULL' if last['close'] > last['hma'] else 'BEAR',
+                    'adx': f"{last['adx']:.2f}"
                 }
                 ai_report = get_ai_analysis(summary, symbol, timeframe)
                 st.markdown(f"""<div class="ai-box"><h3>🤖 TITAN AI ASSESSMENT</h3>{ai_report}</div>""", unsafe_allow_html=True)
 
     # --- TRI-PANE CHART ---
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.55, 0.20, 0.25],
-        subplot_titles=("Price Action", "Money Flow Matrix", f"Advanced Volume ({vol_metric})"))
+        subplot_titles=("Price Action & TP/SL", "Money Flow Matrix", f"Advanced Volume ({vol_metric})"))
     
     # 1. Price
     fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
@@ -462,6 +500,12 @@ if not df.empty:
     fig.add_trace(go.Scatter(x=df['timestamp'], y=b_stop, mode='lines', line=dict(color='#00ffbb', width=2), name='Bull Stop'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df['timestamp'], y=s_stop, mode='lines', line=dict(color='#ff1155', width=2), name='Bear Stop'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', line=dict(color='gray', dash='dot'), name='HMA'), row=1, col=1)
+    
+    # Plot Take Profits (Dotted Lines)
+    b_tp = df['take_profit'].where(df['is_bull'], np.nan)
+    s_tp = df['take_profit'].where(~df['is_bull'], np.nan)
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=b_tp, mode='lines', line=dict(color='#00ffbb', dash='dot', width=1), name='Bull TP'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=s_tp, mode='lines', line=dict(color='#ff1155', dash='dot', width=1), name='Bear TP'), row=1, col=1)
     
     buys = df[df['buy_signal']]
     if not buys.empty: fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.999, mode='markers', marker=dict(symbol='triangle-up', size=14, color='#00ffbb'), name='BUY'), row=1, col=1)
@@ -485,12 +529,12 @@ if not df.empty:
     col_vol = np.where(v_data >= (50 if is_osc else 0), '#00ffbb', '#ff1155')
     
     if vol_metric == "RVOL" or vol_metric == "CMF":
-         fig.add_trace(go.Bar(x=df['timestamp'], y=v_data, marker_color=col_vol, name=vol_metric), row=3, col=1)
+          fig.add_trace(go.Bar(x=df['timestamp'], y=v_data, marker_color=col_vol, name=vol_metric), row=3, col=1)
     else:
-         fig.add_trace(go.Scatter(x=df['timestamp'], y=v_data, mode='lines', line=dict(color='#00ffbb'), name=vol_metric), row=3, col=1)
-         if is_osc:
-             fig.add_hline(y=80, line_dash="dot", line_color="red", row=3, col=1)
-             fig.add_hline(y=20, line_dash="dot", line_color="green", row=3, col=1)
+          fig.add_trace(go.Scatter(x=df['timestamp'], y=v_data, mode='lines', line=dict(color='#00ffbb'), name=vol_metric), row=3, col=1)
+          if is_osc:
+              fig.add_hline(y=80, line_dash="dot", line_color="red", row=3, col=1)
+              fig.add_hline(y=20, line_dash="dot", line_color="green", row=3, col=1)
 
     fig.update_layout(height=900, paper_bgcolor='#050505', plot_bgcolor='#050505', font=dict(color="#aaa"), showlegend=False, xaxis_rangeslider_visible=False)
     fig.update_yaxes(gridcolor="#222", autorange=True, fixedrange=False)
