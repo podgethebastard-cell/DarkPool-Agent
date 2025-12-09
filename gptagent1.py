@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 13.0: Bulletproof Edition (Fixed Scoping, Restored MFI, 3-Layer Data)
+Version 15.0: Omniscient Edition (Advanced Volume + Hidden Liquidity + 5-Chart Layout)
 """
 import time
 import math
@@ -29,7 +29,7 @@ DB_PATH = "titan_signals.db"
 MAX_RETRIES = 2
 RETRY_DELAY = 0.5
 
-# SAFE DEFAULTS (Prevents NameError)
+# SAFE DEFAULTS
 mf_len = 14
 vol_len = 20
 amplitude = 10
@@ -79,7 +79,6 @@ st.markdown("""
 <style>
     .main { background-color: #0e1117; }
     
-    /* Metrics Cards */
     div[data-testid="metric-container"] {
         background: rgba(30, 33, 39, 0.7);
         backdrop-filter: blur(10px);
@@ -94,10 +93,8 @@ st.markdown("""
         border-color: #00ffbb;
     }
     
-    /* Headers & Text */
     h1, h2, h3 { font-family: 'Inter', sans-serif; font-weight: 700; color: #f0f0f0; }
     
-    /* Buttons */
     .stButton > button {
         border-radius: 8px; font-weight: 600;
         background: linear-gradient(45deg, #2b303b, #3b4252);
@@ -108,7 +105,6 @@ st.markdown("""
         color: #00ffbb;
     }
     
-    /* Sidebar */
     section[data-testid="stSidebar"] { background-color: #121418; }
 </style>
 """, unsafe_allow_html=True)
@@ -132,8 +128,9 @@ with st.sidebar:
         * **Trend Cloud:** HMA (55) +/- 1.5 ATR.
         * **Liquidity Zones:** Auto-detected Supply/Demand pivots.
 
-        **3. Fear & Greed (Chart 3)**
-        * Real-time sentiment index (0-100).
+        **3. Advanced Volume (Chart 5)**
+        * **CMF/RVOL:** Detects smart money accumulation.
+        * **Hidden Liquidity:** Marks Doji candles with high volume (Traps).
         """)
 
     st.subheader("📡 Market Feed")
@@ -156,10 +153,12 @@ with st.sidebar:
         tp3_r = st.number_input("TP3 (R)", value=5.0, step=0.1)
 
     st.markdown("---")
-    st.subheader("📊 Filters")
-    # SAFE ASSIGNMENT: Variables assigned here override defaults
+    st.subheader("📊 Filters & Volume")
     mf_len = st.number_input("Money Flow Len", 2, 200, 14)
     vol_len = st.number_input("Volume MA Len", 5, 200, 20)
+    
+    # NEW: Advanced Volume Controls
+    hero_metric = st.selectbox("Volume Hero Metric", ["CMF", "Volume RSI", "Volume Oscillator", "RVOL"])
 
     st.markdown("---")
     st.subheader("🤖 Integrations")
@@ -210,35 +209,66 @@ def calculate_fibonacci(df, lookback=50):
     return {'fib_382': h - (d*0.382), 'fib_500': h - (d*0.5), 'fib_618': h - (d*0.618)}
 
 # =============================================================================
-# ANALYST AGENT & FEAR/GREED ENGINE
+# ADVANCED VOLUME ENGINE
+# =============================================================================
+def calculate_advanced_volume(df, len_cmf=20, len_vrsi=14, len_vo=14):
+    # 1. CMF (Chaikin Money Flow)
+    mfm = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
+    mfm = mfm.fillna(0)
+    mf_vol = mfm * df['volume']
+    df['cmf'] = mf_vol.rolling(len_cmf).sum() / df['volume'].rolling(len_cmf).sum()
+    
+    # 2. Volume RSI
+    delta = df['volume'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(len_vrsi).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(len_vrsi).mean()
+    rs = gain / loss
+    df['vrsi'] = 100 - (100 / (1 + rs))
+    
+    # 3. Volume Oscillator
+    v_short = df['volume'].rolling(len_vo).mean()
+    v_long = df['volume'].rolling(len_vo * 2).mean()
+    df['vol_osc'] = 100 * (v_short - v_long) / v_long
+    
+    # 4. Hidden Liquidity (Doji + High Volume)
+    body_size = (df['close'] - df['open']).abs()
+    range_size = df['high'] - df['low']
+    is_doji = body_size <= (range_size * 0.1)
+    df['hidden_liq'] = is_doji & (df['rvol'] > 2.0)
+    
+    # 5. VWAP Status
+    df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+    df['vwap_status'] = np.where(df['close'] > df['vwap'], 1, -1)
+    
+    return df
+
+# =============================================================================
+# ANALYST AGENT & SENTIMENT
 # =============================================================================
 def calculate_fear_greed_index(df):
     try:
-        # Volatility
         df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
         vol_30 = df['log_ret'].rolling(30).std()
         vol_90 = df['log_ret'].rolling(90).std()
         vol_score = 50 - ((vol_30.iloc[-1] - vol_90.iloc[-1]) / vol_90.iloc[-1]) * 100
-        vol_score = max(0, min(100, vol_score))
-
-        # Momentum
+        
         rsi = df['rsi'].iloc[-1]
         
-        # Trend
         sma_50 = df['close'].rolling(50).mean().iloc[-1]
         dist = (df['close'].iloc[-1] - sma_50) / sma_50
         trend_score = 50 + (dist * 1000)
-        trend_score = max(0, min(100, trend_score))
-
-        # Composite
-        fg_index = (vol_score * 0.3) + (rsi * 0.4) + (trend_score * 0.3)
+        
+        fg_index = (max(0, min(100, vol_score)) * 0.3) + (rsi * 0.4) + (max(0, min(100, trend_score)) * 0.3)
         return int(fg_index)
     except:
         return 50
 
 def generate_ai_analysis(row, symbol, tf, fibs, fg_index):
     titan_trend = "BULLISH" if row['is_bull'] else "BEARISH"
-    apex_trend = "BULLISH" if row['apex_trend'] == 1 else "BEARISH" if row['apex_trend'] == -1 else "NEUTRAL"
+    
+    # Volume Logic
+    liq_alert = "⚠️ HIDDEN LIQUIDITY DETECTED (Trap Candle)" if row['hidden_liq'] else "Volume flow is normal"
+    cmf_stat = "Accumulation" if row['cmf'] > 0 else "Distribution"
     
     sentiment = "NEUTRAL"
     if fg_index >= 75: sentiment = "EXTREME GREED 🤑"
@@ -250,14 +280,13 @@ def generate_ai_analysis(row, symbol, tf, fibs, fg_index):
         f"**🤖 TITAN AI Analyst Report**\n\n"
         f"**1. Market Regime:**\n"
         f"• Sentiment: **{sentiment}** ({fg_index}/100)\n"
-        f"• TITAN Trend: **{titan_trend}**\n"
-        f"• APEX Cloud: **{apex_trend}**\n\n"
-        f"**2. Technicals:**\n"
-        f"• MFI (Money Flow): {row['mfi']:.1f}\n"
-        f"• Relative Vol: {row['rvol']:.2f}x\n"
-        f"• Golden Zone (50%): {fibs['fib_500']:.2f}\n\n"
+        f"• Structure: **{titan_trend}**\n\n"
+        f"**2. Volume Intelligence:**\n"
+        f"• Money Flow: **{cmf_stat}** (CMF: {row['cmf']:.2f})\n"
+        f"• Volume Status: {liq_alert}\n"
+        f"• Relative Vol: {row['rvol']:.2f}x\n\n"
         f"**3. Strategic Bias:**\n"
-        f"Invalidation level is at {row['entry_stop']:.2f}."
+        f"Invalidation at {row['entry_stop']:.2f}. Watch for reactions at {fibs['fib_500']:.2f}."
     )
 
 # =============================================================================
@@ -348,7 +377,6 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
     except: pass
     return pd.DataFrame()
 
-# Updated Engine Signature to match usage
 def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     if df.empty: return df
     df = df.copy().reset_index(drop=True)
@@ -370,21 +398,39 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     # RVOL
     df['rvol'] = df['volume'] / df['volume'].rolling(vol_l).mean()
     
+    # MONEY FLOW MATRIX & ADVANCED VOLUME
+    # Note: Calling advanced volume logic inside main loop for performance
+    df = calculate_advanced_volume(df, 20, 14, 14)
+    
     # MFI (Money Flow Index) - RESTORED
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     raw_money_flow = typical_price * df['volume']
-    
     pos_flow = pd.Series(np.where(typical_price > typical_price.shift(1), raw_money_flow, 0), index=df.index)
     neg_flow = pd.Series(np.where(typical_price < typical_price.shift(1), raw_money_flow, 0), index=df.index)
-    
     pos_mf = pos_flow.rolling(mf_l).sum()
     neg_mf = neg_flow.rolling(mf_l).sum()
-    
     mfi_ratio = pos_mf / neg_mf
     df['mfi'] = 100 - (100 / (1 + mfi_ratio))
     df['mfi'] = df['mfi'].fillna(50)
     
-    # ADX (Simplified)
+    # Money Flow Matrix (Hyper Wave)
+    pc = df['close'].diff()
+    ds_pc = pc.ewm(span=25).mean().ewm(span=13).mean()
+    ds_abs_pc = abs(pc).ewm(span=25).mean().ewm(span=13).mean()
+    df['hyper_wave'] = (100 * (ds_pc / ds_abs_pc)) / 2
+    
+    # Thresholds (BB on Money Flow) - Using Normalized RSI Flow
+    rsi_source = df['rsi'] - 50
+    vol_sma = df['volume'].rolling(mf_l).mean()
+    mf_volume = df['volume'] / vol_sma
+    raw_mf = rsi_source * mf_volume
+    df['money_flow'] = raw_mf.ewm(span=3).mean() 
+    
+    mf_std = df['money_flow'].rolling(20).std()
+    mf_sma = df['money_flow'].rolling(20).mean()
+    df['mf_upper'] = mf_sma + (mf_std * 2.0)
+    df['mf_lower'] = mf_sma - (mf_std * 2.0)
+    
     df['adx'] = 25.0 
     
     # --- TITAN ENGINE ---
@@ -427,7 +473,7 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
 
     # --- APEX ENGINE ---
-    apex_base = calculate_hma(df['close'], 55) # Hardcoded APEX Length
+    apex_base = calculate_hma(df['close'], 55)
     apex_atr = df['atr'] * 1.5
     df['apex_upper'] = apex_base + apex_atr
     df['apex_lower'] = apex_base - apex_atr
@@ -439,7 +485,6 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
         else: apex_t[i] = apex_t[i-1]
     df['apex_trend'] = apex_t
 
-    # Liquidity
     pivot_len = 10
     df['pivot_high'] = df['high'].rolling(pivot_len*2+1, center=True).max()
     df['pivot_low'] = df['low'].rolling(pivot_len*2+1, center=True).min()
@@ -457,7 +502,6 @@ with st.spinner("Fetching Data..."):
 if not df.empty:
     df = df.dropna(subset=['close'])
     with st.spinner("Running Engines..."):
-        # Explicit arguments using safe globals
         df = run_engines(df, int(amplitude), channel_dev, int(hma_len), use_hma_filter, tp1_r, tp2_r, tp3_r, int(mf_len), int(vol_len))
     
     last = df.iloc[-1]
@@ -469,7 +513,7 @@ if not df.empty:
     st.markdown("### 📈 Live Market Metrics")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Current Price", f"{last['close']:.2f}", f"{'BULL' if last['is_bull'] else 'BEAR'}")
-    m2.metric("Trend Cloud", "BULLISH" if last['apex_trend']==1 else "BEARISH")
+    m2.metric("Money Flow", f"{last['money_flow']:.2f}")
     m3.metric("Trailing Stop", f"{last['entry_stop']:.2f}")
     m4.metric("Moon Bag (TP3)", f"{last['tp3']:.2f}")
 
@@ -565,7 +609,56 @@ if not df.empty:
     fig3.update_layout(height=400, template='plotly_dark', margin=dict(l=20,r=20,t=50,b=20))
     st.plotly_chart(fig3, use_container_width=True)
 
-    # --- AUTO BROADCAST ---
+    # --- CHART 4: MONEY FLOW MATRIX ---
+    st.markdown("### 💸 Money Flow Matrix")
+    fig4 = go.Figure()
+    
+    # Money Flow Bars
+    colors = ['#00e676' if x > 0 else '#ff1744' for x in df['money_flow']]
+    fig4.add_trace(go.Bar(x=df['timestamp'], y=df['money_flow'], marker_color=colors, name='Money Flow'))
+    
+    # Hyper Wave
+    fig4.add_trace(go.Scatter(x=df['timestamp'], y=df['hyper_wave'], mode='lines', name='Hyper Wave', line=dict(color='yellow', width=2)))
+    
+    # Thresholds
+    fig4.add_trace(go.Scatter(x=df['timestamp'], y=df['mf_upper'], mode='lines', name='Upper Band', line=dict(color='gray', width=1, dash='dot')))
+    fig4.add_trace(go.Scatter(x=df['timestamp'], y=df['mf_lower'], mode='lines', name='Lower Band', line=dict(color='gray', width=1, dash='dot')))
+    
+    fig4.update_layout(height=400, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig4, use_container_width=True)
+
+    # --- CHART 5: ADVANCED VOLUME ANALYTICS ---
+    st.markdown("### 📊 Advanced Volume Intelligence")
+    fig5 = go.Figure()
+    
+    # Hero Metric Logic
+    vol_data = None
+    vol_color = 'cyan'
+    
+    if hero_metric == "CMF":
+        vol_data = df['cmf']
+        vol_color = '#00e676'
+    elif hero_metric == "Volume RSI":
+        vol_data = df['vrsi']
+        vol_color = '#b388ff'
+    elif hero_metric == "Volume Oscillator":
+        vol_data = df['vol_osc']
+        vol_color = '#ff80ab'
+    else: # RVOL
+        vol_data = df['rvol']
+        vol_color = '#ffd740'
+        
+    fig5.add_trace(go.Scatter(x=df['timestamp'], y=vol_data, mode='lines', name=hero_metric, fill='tozeroy', line=dict(color=vol_color, width=2)))
+    
+    # Hidden Liquidity Markers (Diamonds)
+    traps = df[df['hidden_liq']]
+    if not traps.empty:
+        fig5.add_trace(go.Scatter(x=traps['timestamp'], y=vol_data[df['hidden_liq']], mode='markers', marker=dict(symbol='diamond', size=10, color='yellow'), name='Hidden Liquidity'))
+
+    fig5.update_layout(height=400, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False, title=f"Hero Metric: {hero_metric}")
+    st.plotly_chart(fig5, use_container_width=True)
+
+    # --- AUTO BROADCAST CHECK ---
     if tg_on and (last['buy'] or last['sell']):
         sid = f"{last['timestamp']}_{symbol}"
         if sid != st.session_state.get("last_sid"):
