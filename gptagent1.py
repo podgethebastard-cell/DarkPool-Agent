@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 3.3: Critical Hotfix (Variable NameError Resolved)
+Version 4.0: Final Fix (Scaling, Telegram Debugger, Live Bybit Feed)
 """
 import time
 import math
@@ -55,7 +55,7 @@ st.title("🪓 TITAN INTRADAY PRO — Execution Dashboard")
 st.sidebar.header("Market Feed")
 symbol_input = st.sidebar.text_input("Symbol", value="BTCUSDT")
 
-# FIX: Unified variable name to 'symbol' to prevent NameError
+# UNIFIED SYMBOL HANDLING
 symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
 
 timeframe = st.sidebar.selectbox(
@@ -83,13 +83,39 @@ vol_len = st.sidebar.number_input("Volume rolling length", 5, 200, 20)
 st.sidebar.markdown("---")
 st.sidebar.header("Integrations")
 tg_on = st.sidebar.checkbox("Telegram Broadcast", False)
+
+# CREDENTIAL LOADING
+tg_token = ""
+tg_chat = ""
+
+# Try secrets first
 try:
-    tg_token = st.secrets["TELEGRAM_TOKEN"]
-    tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
-    st.sidebar.success("Telegram secrets loaded")
+    if "TELEGRAM_TOKEN" in st.secrets:
+        tg_token = st.secrets["TELEGRAM_TOKEN"]
+        tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
+        st.sidebar.success("Telegram secrets loaded")
 except:
+    pass
+
+# Fallback to manual input if secrets failed
+if not tg_token:
     tg_token = st.sidebar.text_input("Bot Token", type="password")
     tg_chat = st.sidebar.text_input("Chat ID")
+
+# TELEGRAM TEST BUTTON
+if st.sidebar.button("Test Telegram Connection"):
+    if not tg_token or not tg_chat:
+        st.sidebar.error("❌ Enter Token & Chat ID first!")
+    else:
+        try:
+            url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+            r = requests.post(url, json={"chat_id": tg_chat, "text": "✅ TITAN: Test Message Success!"}, timeout=5)
+            if r.status_code == 200:
+                st.sidebar.success("✅ Connected!")
+            else:
+                st.sidebar.error(f"❌ Failed: {r.text}")
+        except Exception as e:
+            st.sidebar.error(f"❌ Error: {str(e)}")
 
 persist = st.sidebar.checkbox("Persist signals to DB", True)
 run_backtest = st.sidebar.checkbox("Run backtest", False)
@@ -138,21 +164,29 @@ def journal_signal(conn, payload):
     except Exception: return False
 
 # =============================================================================
-# TELEGRAM
+# TELEGRAM FUNCTION (Robust)
 # =============================================================================
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
+    
     last = st.session_state.get("last_tg", 0)
     if time.time() - last < cooldown: return False
     
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    safe_msg = msg.replace('.', '\\.').replace('-', '\\-').replace('!', '\\!')
+    
+    # Simple Markdown escaping to prevent failures
+    safe_msg = msg
+    
     try:
-        r = requests.post(url, json={"chat_id": chat, "text": safe_msg, "parse_mode": "Markdown"}, timeout=5)
+        r = requests.post(url, json={"chat_id": chat, "text": safe_msg}, timeout=5)
         if r.status_code == 200:
             st.session_state["last_tg"] = time.time()
             return True
-    except: pass
+        else:
+            st.error(f"Telegram API Error: {r.text}")
+    except Exception as e:
+        st.error(f"Telegram Connection Error: {str(e)}")
+        
     return False
 
 # =============================================================================
@@ -167,7 +201,7 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
         r = requests.get(url, params={"symbol": symbol_bin, "interval": interval, "limit": limit}, headers=HEADERS, timeout=4)
         if r.status_code == 200:
             data = r.json()
-            if data:
+            if data and isinstance(data, list):
                 df = pd.DataFrame(data, columns=['t','o','h','l','c','v','T','q','n','V','Q','B'])
                 df['timestamp'] = pd.to_datetime(df['t'], unit='ms')
                 df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
@@ -283,11 +317,18 @@ def run_titan(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
 # =============================================================================
 # MAIN UI
 # =============================================================================
-with st.spinner("Fetching Data (Failover System Active)..."):
-    # Fixed NameError by using the corrected 'symbol' variable
+with st.spinner("Fetching Data..."):
     df = get_klines(symbol, timeframe, limit)
 
 if not df.empty:
+    
+    # ---------------------------
+    # DATA CLEANING FOR PLOTLY
+    # ---------------------------
+    # Filter out 0 or NaN prices to fix scaling issues
+    df = df[df['close'] > 0]
+    df = df.dropna(subset=['open', 'high', 'low', 'close'])
+    
     with st.spinner("Calculating TITAN Logic..."):
         df = run_titan(df, int(amplitude), channel_dev, int(hma_len), use_hma_filter, tp1_r, tp2_r, tp3_r, mf_len, vol_len)
     
@@ -295,18 +336,38 @@ if not df.empty:
     
     # Top Chart
     fig = go.Figure()
-    fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['stop'], mode='lines', name='Stop', line=dict(color='orange', width=1)))
     
+    # Candles
+    fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
+    
+    # HMA
+    if 'hma' in df.columns:
+        fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='cyan', width=1)))
+    
+    # Stop Lines
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['stop'], mode='lines', name='Trailing Stop', line=dict(color='orange', width=1)))
+    
+    # Signals
     buys = df[df['buy']]
     if not buys.empty:
-        fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low'], mode='markers', marker=dict(symbol='triangle-up', size=15, color='green'), name='BUY'))
+        # Offset marker below low
+        fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.999, mode='markers', 
+                                 marker=dict(symbol='triangle-up', size=12, color='#00ff00'), name='BUY'))
     
     sells = df[df['sell']]
     if not sells.empty:
-        fig.add_trace(go.Scatter(x=sells['timestamp'], y=sells['high'], mode='markers', marker=dict(symbol='triangle-down', size=15, color='red'), name='SELL'))
+        # Offset marker above high
+        fig.add_trace(go.Scatter(x=sells['timestamp'], y=sells['high']*1.001, mode='markers', 
+                                 marker=dict(symbol='triangle-down', size=12, color='#ff0000'), name='SELL'))
         
-    fig.update_layout(height=600, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
+    # SCALING FIX: Allow Plotly to autoscale Y-axis based on visible range
+    fig.update_layout(
+        height=600, 
+        template='plotly_dark', 
+        margin=dict(l=0,r=0,t=0,b=0), 
+        xaxis_rangeslider_visible=False,
+        yaxis=dict(autorange=True, fixedrange=False) 
+    )
     st.plotly_chart(fig, use_container_width=True)
     
     # Metrics
@@ -320,16 +381,21 @@ if not df.empty:
     if tg_on and (last['buy'] or last['sell']):
         sid = f"{last['timestamp']}_{symbol}"
         if sid != st.session_state.get("last_sid"):
-            txt = f"🔥 TITAN: {symbol} {'LONG' if last['is_bull'] else 'SHORT'} @ {last['close']}"
+            txt = f"🔥 TITAN: {symbol} {'LONG' if last['is_bull'] else 'SHORT'} @ {last['close']:.2f}\nStop: {last['entry_stop']:.2f}"
+            
+            # Send and check success
             if send_telegram_msg(tg_token, tg_chat, txt, telegram_cooldown_s):
-                st.success("Auto-Broadcast Sent!")
+                st.success(f"Signal Broadcasted: {sid}")
                 st.session_state["last_sid"] = sid
-                if persist: journal_signal(st.session_state.db_conn, {
-                    "ts":str(last['timestamp']), "symbol":symbol, "timeframe":timeframe,
-                    "direction":"LONG" if last['is_bull'] else "SHORT", "entry":last['close'],
-                    "stop":last['entry_stop'], "tp1":last['tp1'], "tp2":last['tp2'], "tp3":last['tp3'],
-                    "adx":0, "rvol":last['rvol'], "notes":"Auto"
-                })
+                if persist: 
+                    journal_signal(st.session_state.db_conn, {
+                        "ts":str(last['timestamp']), "symbol":symbol, "timeframe":timeframe,
+                        "direction":"LONG" if last['is_bull'] else "SHORT", "entry":last['close'],
+                        "stop":last['entry_stop'], "tp1":last['tp1'], "tp2":last['tp2'], "tp3":last['tp3'],
+                        "adx":0, "rvol":last['rvol'], "notes":"Auto"
+                    })
+            else:
+                st.warning("Signal detected but Telegram failed or on cooldown.")
 
     st.markdown("---")
     
