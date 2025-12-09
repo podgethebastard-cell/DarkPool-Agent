@@ -44,6 +44,122 @@ class Config:
     }
 
 # =========================
+# TELEGRAM BROADCASTER
+# =========================
+class TelegramBroadcaster:
+    """Telegram broadcast functionality"""
+    
+    def __init__(self):
+        self.base_url = "https://api.telegram.org/bot"
+    
+    def send_message(self, bot_token: str, chat_id: str, message: str, 
+                    parse_mode: str = "HTML", disable_notification: bool = False) -> Dict:
+        """Send message to Telegram"""
+        try:
+            if not bot_token or not chat_id:
+                return {"success": False, "error": "Bot token or chat ID missing"}
+            
+            url = f"{self.base_url}{bot_token}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": parse_mode,
+                "disable_notification": disable_notification
+            }
+            
+            response = requests.post(url, json=payload, timeout=10)
+            result = response.json()
+            
+            if result.get("ok"):
+                return {"success": True, "message_id": result["result"]["message_id"]}
+            else:
+                return {"success": False, "error": result.get("description", "Unknown error")}
+                
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def send_signal_alert(self, bot_token: str, chat_id: str, signal_data: Dict) -> Dict:
+        """Send formatted signal alert to Telegram"""
+        symbol = signal_data.get('symbol', 'Unknown')
+        signal = signal_data.get('signal', 'NEUTRAL')
+        price = signal_data.get('price', 0)
+        rsi = signal_data.get('rsi', 0)
+        volume_ratio = signal_data.get('volume_ratio', 0)
+        confidence = signal_data.get('confidence', 0)
+        
+        # Create emoji based on signal
+        if "BUY" in signal:
+            emoji = "🟢"
+            action = "BUY"
+        elif "SELL" in signal:
+            emoji = "🔴"
+            action = "SELL"
+        else:
+            emoji = "⚪"
+            action = "NEUTRAL"
+        
+        # Create message with HTML formatting
+        message = f"""
+{emoji} <b>TITAN INTRADAY PRO SIGNAL</b> {emoji}
+
+<b>Symbol:</b> {symbol}
+<b>Signal:</b> <b>{signal}</b>
+<b>Price:</b> ${price:,.2f}
+<b>RSI:</b> {rsi:.1f}
+<b>Volume Ratio:</b> {volume_ratio:.2f}x
+<b>Confidence:</b> {confidence:.0%}
+
+<b>Timestamp:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        
+        return self.send_message(bot_token, chat_id, message)
+    
+    def send_performance_report(self, bot_token: str, chat_id: str, performance_data: Dict) -> Dict:
+        """Send performance report to Telegram"""
+        total_return = performance_data.get('total_return', 0)
+        win_rate = performance_data.get('win_rate', 0)
+        total_trades = performance_data.get('total_trades', 0)
+        sharpe = performance_data.get('sharpe_ratio', 0)
+        
+        message = f"""
+📊 <b>TITAN PERFORMANCE REPORT</b> 📊
+
+<b>Total Return:</b> {total_return:+.2f}%
+<b>Win Rate:</b> {win_rate:.1f}%
+<b>Total Trades:</b> {total_trades}
+<b>Sharpe Ratio:</b> {sharpe:.2f}
+
+<b>Report Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}
+"""
+        
+        return self.send_message(bot_token, chat_id, message)
+    
+    def test_connection(self, bot_token: str, chat_id: str) -> Dict:
+        """Test Telegram connection"""
+        try:
+            if not bot_token or not chat_id:
+                return {"success": False, "error": "Bot token or chat ID missing"}
+            
+            url = f"{self.base_url}{bot_token}/getMe"
+            response = requests.get(url, timeout=10)
+            bot_info = response.json()
+            
+            if not bot_info.get("ok"):
+                return {"success": False, "error": "Invalid bot token"}
+            
+            # Try to send a test message
+            test_message = "✅ TITAN INTRADAY PRO - Connection Test Successful!"
+            test_result = self.send_message(bot_token, chat_id, test_message)
+            
+            if test_result["success"]:
+                return {"success": True, "bot_username": bot_info["result"]["username"]}
+            else:
+                return {"success": False, "error": f"Can't send to chat: {test_result.get('error')}"}
+                
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+# =========================
 # KRAKEN DATA FETCHER
 # =========================
 class KrakenDataFetcher:
@@ -159,39 +275,24 @@ class KrakenDataFetcher:
             return pd.DataFrame()
 
 # =========================
-# INDICATOR CALCULATOR (FIXED)
+# INDICATOR CALCULATOR
 # =========================
 class IndicatorCalculator:
     """Calculate technical indicators"""
     
     @staticmethod
     def calculate_all(df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate all indicators - FIXED VERSION"""
+        """Calculate all indicators"""
         df = df.copy()
         
         if len(df) < 20:
-            # Still create basic columns but with NaN
-            df['returns'] = np.nan
-            df['sma_20'] = np.nan
-            df['sma_50'] = np.nan
-            df['ema_12'] = np.nan
-            df['ema_26'] = np.nan
-            df['macd'] = np.nan
-            df['macd_signal'] = np.nan
-            df['macd_hist'] = np.nan
-            df['rsi'] = np.nan
-            df['bb_middle'] = np.nan
-            df['bb_upper'] = np.nan
-            df['bb_lower'] = np.nan
-            df['atr'] = np.nan
-            df['volume_sma'] = np.nan
-            df['volume_ratio'] = np.nan
-            df['vwap'] = np.nan
-            df['stoch_k'] = np.nan
-            df['stoch_d'] = np.nan
-            df['volatility'] = np.nan
+            # Create basic columns with NaN
+            for col in ['returns', 'sma_20', 'sma_50', 'ema_12', 'ema_26', 'macd', 
+                       'macd_signal', 'macd_hist', 'rsi', 'bb_middle', 'bb_upper', 
+                       'bb_lower', 'atr', 'volume_sma', 'volume_ratio', 'vwap', 
+                       'stoch_k', 'stoch_d', 'volatility', 'momentum']:
+                df[col] = np.nan
             df['trend'] = 0
-            df['momentum'] = np.nan  # ADDED THIS LINE
             return df
         
         # Price returns
@@ -242,25 +343,25 @@ class IndicatorCalculator:
         df['stoch_k'] = 100 * ((df['close'] - low_14) / range_14.replace(0, np.nan))
         df['stoch_d'] = df['stoch_k'].rolling(3).mean()
         
-        # Additional indicators - FIXED: All columns must be created
+        # Additional indicators
         df['volatility'] = df['returns'].rolling(20).std() * np.sqrt(252)
         df['trend'] = np.where(df['close'] > df['ema_12'], 1, -1)
-        df['momentum'] = df['close'].pct_change(10)  # This was missing!
+        df['momentum'] = df['close'].pct_change(10)
         
         return df
 
 # =========================
-# SIGNAL GENERATOR (FIXED)
+# SIGNAL GENERATOR
 # =========================
 class SignalGenerator:
     """Generate trading signals"""
     
     @staticmethod
     def generate(df: pd.DataFrame) -> pd.DataFrame:
-        """Generate buy/sell signals - FIXED VERSION"""
+        """Generate buy/sell signals"""
         df = df.copy()
         
-        # Initialize signals - always create these columns
+        # Initialize signals
         df['signal'] = 0
         df['signal_type'] = 'NEUTRAL'
         
@@ -273,7 +374,6 @@ class SignalGenerator:
         missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
-            # If columns are missing, return with neutral signals
             return df
         
         # MACD Crossover
@@ -316,9 +416,27 @@ class SignalGenerator:
         df.loc[strong_sell, 'signal_type'] = 'STRONG_SELL'
         
         return df
+    
+    @staticmethod
+    def get_current_signal_data(df: pd.DataFrame, symbol: str) -> Dict:
+        """Get current signal data for broadcasting"""
+        if len(df) == 0:
+            return {}
+        
+        latest = df.iloc[-1]
+        
+        return {
+            'symbol': symbol,
+            'signal': latest.get('signal_type', 'NEUTRAL'),
+            'price': latest.get('close', 0),
+            'rsi': latest.get('rsi', 50),
+            'volume_ratio': latest.get('volume_ratio', 1),
+            'confidence': min(abs(latest.get('rsi', 50) - 50) / 50, 1.0),
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
 
 # =========================
-# BACKTESTING ENGINE (FIXED)
+# BACKTESTING ENGINE
 # =========================
 class Backtester:
     """Simple backtesting engine"""
@@ -327,7 +445,7 @@ class Backtester:
         self.initial_capital = initial_capital
     
     def run(self, df: pd.DataFrame) -> Dict:
-        """Run backtest - FIXED VERSION"""
+        """Run backtest"""
         if 'signal' not in df.columns or len(df) < 20:
             return {
                 'initial_capital': self.initial_capital,
@@ -389,10 +507,10 @@ class Backtester:
             # Entry conditions
             if position == 0 and signal != 0:
                 if signal == 1:  # Buy
-                    position = capital * 0.1 / price if price > 0 else 0  # 10% position
+                    position = capital * 0.1 / price if price > 0 else 0
                     entry_price = price
                 elif signal == -1:  # Sell
-                    position = -capital * 0.1 / price if price > 0 else 0  # 10% short
+                    position = -capital * 0.1 / price if price > 0 else 0
                     entry_price = price
         
         # Calculate metrics
@@ -401,7 +519,7 @@ class Backtester:
         total_pnl = sum(t['pnl'] for t in trades)
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
         
-        # Sharpe ratio (simplified)
+        # Sharpe ratio
         if len(equity_curve) > 1:
             returns = pd.Series(equity_curve).pct_change().dropna()
             if returns.std() > 0:
@@ -465,20 +583,37 @@ def main():
         border-left: 4px solid #4CC9F0;
         margin: 10px 0;
     }
+    .telegram-success {
+        background: rgba(0, 200, 83, 0.1);
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #00C853;
+        margin: 10px 0;
+    }
+    .telegram-error {
+        background: rgba(255, 61, 0, 0.1);
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #FF3D00;
+        margin: 10px 0;
+    }
     </style>
     """, unsafe_allow_html=True)
     
     # Header
     st.markdown('<h1 class="main-header">🚀 TITAN INTRADAY PRO (KRAKEN)</h1>', unsafe_allow_html=True)
-    st.caption("Advanced Trading Platform • Kraken API • Real-Time Analytics")
+    st.caption("Advanced Trading Platform • Kraken API • Telegram Broadcast")
+    
+    # Initialize Telegram broadcaster
+    telegram = TelegramBroadcaster()
     
     # Sidebar
     with st.sidebar:
         st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Kraken_logo.svg/2560px-Kraken_logo.svg.png", width=120)
         
+        # Market Configuration
         st.header("⚙️ Kraken Configuration")
         
-        # Symbol input with auto-suggest
         symbol = st.selectbox(
             "Select Symbol",
             options=[
@@ -498,10 +633,8 @@ def main():
             help="Select a Kraken USD trading pair"
         )
         
-        # Extract symbol code
         selected_symbol = symbol.split(" ")[0]
         
-        # Timeframe
         timeframe = st.selectbox(
             "Timeframe",
             ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
@@ -509,13 +642,101 @@ def main():
             help="Chart timeframe"
         )
         
-        # Candles
         candles = st.slider("Historical Candles", 100, Config.MAX_CANDLES, 500)
         
         # Load button
         if st.button("📥 Load Market Data", type="primary", use_container_width=True):
             with st.spinner(f"Loading {selected_symbol} data from Kraken..."):
                 load_market_data(selected_symbol, timeframe, candles)
+        
+        # Telegram Configuration
+        st.header("📡 Telegram Broadcast")
+        
+        with st.expander("Telegram Settings", expanded=True):
+            bot_token = st.text_input(
+                "Bot Token",
+                type="password",
+                help="Get this from @BotFather on Telegram"
+            )
+            
+            chat_id = st.text_input(
+                "Chat ID",
+                help="Channel/Group ID (use @getidsbot to find)"
+            )
+            
+            # Store in session state
+            st.session_state.telegram_bot_token = bot_token
+            st.session_state.telegram_chat_id = chat_id
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔗 Test Connection", use_container_width=True):
+                    if bot_token and chat_id:
+                        with st.spinner("Testing Telegram connection..."):
+                            result = telegram.test_connection(bot_token, chat_id)
+                            if result["success"]:
+                                st.markdown(f"""
+                                <div class="telegram-success">
+                                    ✅ Connected to @{result['bot_username']}
+                                </div>
+                                """, unsafe_allow_html=True)
+                            else:
+                                st.markdown(f"""
+                                <div class="telegram-error">
+                                    ❌ Connection failed: {result.get('error', 'Unknown error')}
+                                </div>
+                                """, unsafe_allow_html=True)
+                    else:
+                        st.warning("Please enter Bot Token and Chat ID")
+            
+            with col2:
+                if st.button("🔄 Auto Broadcast", use_container_width=True):
+                    if 'df' in st.session_state and st.session_state.df is not None:
+                        if bot_token and chat_id:
+                            signal_data = SignalGenerator.get_current_signal_data(
+                                st.session_state.df, 
+                                st.session_state.symbol
+                            )
+                            with st.spinner("Sending signal to Telegram..."):
+                                result = telegram.send_signal_alert(bot_token, chat_id, signal_data)
+                                if result["success"]:
+                                    st.markdown(f"""
+                                    <div class="telegram-success">
+                                        ✅ Signal broadcasted successfully!
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"""
+                                    <div class="telegram-error">
+                                        ❌ Broadcast failed: {result.get('error', 'Unknown error')}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                        else:
+                            st.warning("Please configure Telegram settings first")
+                    else:
+                        st.warning("Please load market data first")
+            
+            # Broadcast options
+            st.subheader("Broadcast Options")
+            
+            auto_broadcast = st.checkbox(
+                "Auto-broadcast signals",
+                value=False,
+                help="Automatically send signals when they occur"
+            )
+            
+            broadcast_performance = st.checkbox(
+                "Broadcast performance reports",
+                value=False,
+                help="Send daily performance summaries"
+            )
+            
+            if auto_broadcast:
+                st.info("Auto-broadcast will send signals when BUY/SELL signals are detected")
+            
+            if broadcast_performance:
+                st.info("Performance reports will be sent daily at market close")
     
     # Initialize session state
     if 'df' not in st.session_state:
@@ -526,10 +747,14 @@ def main():
         st.session_state.performance = None
     if 'symbol' not in st.session_state:
         st.session_state.symbol = Config.DEFAULT_SYMBOL
+    if 'telegram_bot_token' not in st.session_state:
+        st.session_state.telegram_bot_token = ""
+    if 'telegram_chat_id' not in st.session_state:
+        st.session_state.telegram_chat_id = ""
     
     # Display data if loaded
     if st.session_state.df is not None:
-        display_market_data()
+        display_market_data(telegram)
     else:
         show_welcome_screen()
     
@@ -546,7 +771,7 @@ def show_welcome_screen():
         <div style='text-align: center; padding: 50px 0;'>
             <h2>🚀 Welcome to TITAN INTRADAY PRO</h2>
             <p style='font-size: 18px; color: #888; margin: 20px 0;'>
-                Professional Trading Platform Powered by Kraken API
+                Professional Trading Platform with Telegram Broadcast
             </p>
             
             <div class="symbol-box">
@@ -566,25 +791,29 @@ def show_welcome_screen():
                 </ul>
             </div>
             
+            <div class="symbol-box">
+                <h3>📡 Telegram Setup:</h3>
+                <ol style='text-align: left;'>
+                    <li>Create a bot via @BotFather on Telegram</li>
+                    <li>Get your bot token</li>
+                    <li>Add bot to your channel/group</li>
+                    <li>Get chat ID using @getidsbot</li>
+                    <li>Configure in sidebar</li>
+                </ol>
+            </div>
+            
             <p style='color: #666; margin-top: 30px;'>
                 <strong>📈 How to start:</strong>
                 <br>1. Select a symbol from the sidebar
-                <br>2. Choose timeframe
+                <br>2. Configure Telegram (optional)
                 <br>3. Click "Load Market Data"
             </p>
-            
-            <div style='background: rgba(0, 200, 83, 0.1); padding: 15px; border-radius: 10px; margin-top: 20px;'>
-                <p style='color: #00C853;'>
-                    ✅ <strong>Kraken API is reliable and doesn't require API keys for public data!</strong>
-                </p>
-            </div>
         </div>
         """, unsafe_allow_html=True)
 
 def load_market_data(symbol: str, timeframe: str, candles: int):
     """Load and process market data"""
     try:
-        # Show status
         status_text = st.empty()
         status_text.info(f"Fetching {symbol} data from Kraken...")
         
@@ -620,6 +849,22 @@ def load_market_data(symbol: str, timeframe: str, candles: int):
         st.session_state.performance = performance
         st.session_state.symbol = symbol
         
+        # Auto-broadcast if enabled and Telegram is configured
+        if (st.session_state.get('telegram_bot_token') and 
+            st.session_state.get('telegram_chat_id') and
+            'signal_type' in df.columns):
+            
+            current_signal = df['signal_type'].iloc[-1]
+            if current_signal in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL']:
+                status_text.info("Broadcasting signal to Telegram...")
+                telegram = TelegramBroadcaster()
+                signal_data = SignalGenerator.get_current_signal_data(df, symbol)
+                telegram.send_signal_alert(
+                    st.session_state.telegram_bot_token,
+                    st.session_state.telegram_chat_id,
+                    signal_data
+                )
+        
         status_text.empty()
         st.success(f"✅ Successfully loaded {len(df)} candles for {symbol}")
         
@@ -627,7 +872,7 @@ def load_market_data(symbol: str, timeframe: str, candles: int):
         st.error(f"❌ Error loading data: {str(e)}")
         st.info("Try using XBTUSD or ETHUSD as the symbol")
 
-def display_market_data():
+def display_market_data(telegram: TelegramBroadcaster):
     """Display the loaded market data"""
     df = st.session_state.df
     signals = st.session_state.signals
@@ -635,7 +880,7 @@ def display_market_data():
     # Current Market Overview
     st.subheader("📈 Market Overview")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         if len(df) > 1:
@@ -656,7 +901,7 @@ def display_market_data():
         st.markdown(f"""
         <div style='background: rgba({'0, 200, 83' if 'BUY' in current_signal else '255, 61, 0' if 'SELL' in current_signal else '100, 100, 100'}, 0.2); 
                     padding: 15px; border-radius: 10px; border-left: 4px solid {signal_color};'>
-            <h3 style='margin: 0; color: {signal_color};'>Current Signal: {current_signal}</h3>
+            <h3 style='margin: 0; color: {signal_color};'>Signal: {current_signal}</h3>
         </div>
         """, unsafe_allow_html=True)
     
@@ -676,12 +921,40 @@ def display_market_data():
         else:
             st.metric("Volume", "N/A")
     
+    with col5:
+        # Telegram Broadcast Button
+        if (st.session_state.get('telegram_bot_token') and 
+            st.session_state.get('telegram_chat_id')):
+            
+            if st.button("📤 Broadcast Signal", use_container_width=True):
+                signal_data = SignalGenerator.get_current_signal_data(df, st.session_state.symbol)
+                with st.spinner("Sending to Telegram..."):
+                    result = telegram.send_signal_alert(
+                        st.session_state.telegram_bot_token,
+                        st.session_state.telegram_chat_id,
+                        signal_data
+                    )
+                    if result["success"]:
+                        st.markdown(f"""
+                        <div class="telegram-success">
+                            ✅ Signal broadcasted successfully!
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div class="telegram-error">
+                            ❌ Broadcast failed: {result.get('error', 'Unknown error')}
+                        </div>
+                        """, unsafe_allow_html=True)
+        else:
+            st.info("Configure Telegram to broadcast")
+    
     # Performance Metrics
     if st.session_state.performance:
         perf = st.session_state.performance
         st.subheader("📊 Performance Metrics")
         
-        cols = st.columns(4)
+        cols = st.columns(6)
         with cols[0]:
             st.metric("Total Return", f"{perf.get('total_return', 0):.2f}%")
         with cols[1]:
@@ -690,6 +963,32 @@ def display_market_data():
             st.metric("Sharpe Ratio", f"{perf.get('sharpe_ratio', 0):.2f}")
         with cols[3]:
             st.metric("Total Trades", f"{perf.get('total_trades', 0)}")
+        with cols[4]:
+            st.metric("Winning Trades", f"{perf.get('winning_trades', 0)}")
+        with cols[5]:
+            # Broadcast Performance Button
+            if (st.session_state.get('telegram_bot_token') and 
+                st.session_state.get('telegram_chat_id')):
+                
+                if st.button("📊 Broadcast Report", use_container_width=True):
+                    with st.spinner("Sending performance report..."):
+                        result = telegram.send_performance_report(
+                            st.session_state.telegram_bot_token,
+                            st.session_state.telegram_chat_id,
+                            perf
+                        )
+                        if result["success"]:
+                            st.markdown(f"""
+                            <div class="telegram-success">
+                                ✅ Performance report sent!
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"""
+                            <div class="telegram-error">
+                                ❌ Report failed: {result.get('error', 'Unknown error')}
+                            </div>
+                            """, unsafe_allow_html=True)
     
     # Chart Tabs
     tab1, tab2, tab3 = st.tabs(["📊 Price Chart", "📈 Indicators", "📋 Data & Signals"])
@@ -701,7 +1000,7 @@ def display_market_data():
         display_indicators(df)
     
     with tab3:
-        display_data_and_signals(df)
+        display_data_and_signals(df, telegram)
 
 def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
     """Display price chart with indicators"""
@@ -726,7 +1025,7 @@ def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
         row=1, col=1
     )
     
-    # Moving Averages (only if they exist)
+    # Moving Averages
     if 'ema_12' in df.columns:
         fig.add_trace(
             go.Scatter(x=df.index, y=df['ema_12'], line=dict(color='orange', width=1), name='EMA 12'),
@@ -738,7 +1037,7 @@ def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
             row=1, col=1
         )
     
-    # Bollinger Bands (only if they exist)
+    # Bollinger Bands
     if 'bb_upper' in df.columns and 'bb_lower' in df.columns:
         fig.add_trace(
             go.Scatter(x=df.index, y=df['bb_upper'], line=dict(color='gray', width=1, dash='dash'), 
@@ -787,14 +1086,14 @@ def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
         row=2, col=1
     )
     
-    # Volume SMA (if exists)
+    # Volume SMA
     if 'volume_sma' in df.columns:
         fig.add_trace(
             go.Scatter(x=df.index, y=df['volume_sma'], line=dict(color='yellow', width=1), name='Volume MA'),
             row=2, col=1
         )
     
-    # RSI (if exists)
+    # RSI
     if 'rsi' in df.columns:
         fig.add_trace(
             go.Scatter(x=df.index, y=df['rsi'], line=dict(color='purple', width=2), name='RSI'),
@@ -803,7 +1102,7 @@ def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
     
-    # MACD (if exists)
+    # MACD
     if 'macd' in df.columns and 'macd_signal' in df.columns:
         fig.add_trace(
             go.Scatter(x=df.index, y=df['macd'], line=dict(color='blue', width=2), name='MACD'),
@@ -826,7 +1125,7 @@ def display_price_chart(df: pd.DataFrame, signals: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 def display_indicators(df: pd.DataFrame):
-    """Display technical indicators - FIXED VERSION"""
+    """Display technical indicators"""
     col1, col2 = st.columns(2)
     
     with col1:
@@ -842,7 +1141,6 @@ def display_indicators(df: pd.DataFrame):
             "MACD": get_value('macd'),
             "MACD Signal": get_value('macd_signal'),
             "MACD Histogram": get_value('macd_hist'),
-            "ADX": "N/A",  # Not calculated in simple version
             "Trend": "Bullish" if ('trend' in df.columns and df['trend'].iloc[-1] > 0) else "Bearish" if ('trend' in df.columns and df['trend'].iloc[-1] < 0) else "N/A"
         }
         
@@ -856,32 +1154,14 @@ def display_indicators(df: pd.DataFrame):
             "RSI": get_value('rsi', formatter=lambda x: f"{x:.1f}"),
             "Stochastic %K": get_value('stoch_k', formatter=lambda x: f"{x:.1f}"),
             "Stochastic %D": get_value('stoch_d', formatter=lambda x: f"{x:.1f}"),
-            "Momentum (10)": get_value('momentum', formatter=lambda x: f"{x:.2%}"),  # FIXED
+            "Momentum (10)": get_value('momentum', formatter=lambda x: f"{x:.2%}"),
             "Volatility": get_value('volatility', formatter=lambda x: f"{x:.2%}")
         }
         
         for name, value in indicators.items():
             st.metric(name, value)
-    
-    # Support/Resistance Levels
-    st.subheader("📉 Support & Resistance")
-    col3, col4 = st.columns(2)
-    
-    with col3:
-        if 'bb_lower' in df.columns and 'bb_upper' in df.columns and 'close' in df.columns:
-            bb_position = (df['close'].iloc[-1] - df['bb_lower'].iloc[-1]) / \
-                         (df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1])
-            st.metric("BB Position", f"{bb_position:.2%}")
-        else:
-            st.metric("BB Position", "N/A")
-        
-        st.metric("ATR", get_value('atr', formatter=lambda x: f"{x:.2f}"))
-    
-    with col4:
-        st.metric("Upper Band", get_value('bb_upper', formatter=lambda x: f"${x:,.2f}"))
-        st.metric("Lower Band", get_value('bb_lower', formatter=lambda x: f"${x:,.2f}"))
 
-def display_data_and_signals(df: pd.DataFrame):
+def display_data_and_signals(df: pd.DataFrame, telegram: TelegramBroadcaster):
     """Display recent data and signals"""
     col1, col2 = st.columns(2)
     
@@ -894,18 +1174,14 @@ def display_data_and_signals(df: pd.DataFrame):
         
         # Create format dictionary
         format_dict = {}
-        if 'open' in display_df.columns:
-            format_dict['open'] = '${:,.2f}'
-        if 'high' in display_df.columns:
-            format_dict['high'] = '${:,.2f}'
-        if 'low' in display_df.columns:
-            format_dict['low'] = '${:,.2f}'
-        if 'close' in display_df.columns:
-            format_dict['close'] = '${:,.2f}'
-        if 'volume' in display_df.columns:
-            format_dict['volume'] = '{:,.0f}'
-        if 'rsi' in display_df.columns:
-            format_dict['rsi'] = '{:.1f}'
+        for col in ['open', 'high', 'low', 'close', 'volume', 'rsi']:
+            if col in display_df.columns:
+                if col == 'rsi':
+                    format_dict[col] = '{:.1f}'
+                elif col == 'volume':
+                    format_dict[col] = '{:,.0f}'
+                else:
+                    format_dict[col] = '${:,.2f}'
         
         # Select columns that exist
         columns_to_show = ['open', 'high', 'low', 'close', 'volume', 'rsi', 'signal_type']
@@ -943,27 +1219,43 @@ def display_data_and_signals(df: pd.DataFrame):
                     use_container_width=True,
                     height=400
                 )
+                
+                # Broadcast individual signal button
+                if (st.session_state.get('telegram_bot_token') and 
+                    st.session_state.get('telegram_chat_id')):
+                    
+                    with st.expander("Broadcast Selected Signal"):
+                        selected_index = st.selectbox(
+                            "Select signal to broadcast",
+                            range(len(signals_df))
+                        )
+                        
+                        if st.button("📤 Broadcast This Signal"):
+                            selected_signal = signals_df.iloc[selected_index]
+                            signal_data = {
+                                'symbol': st.session_state.symbol,
+                                'signal': selected_signal.get('signal_type', 'NEUTRAL'),
+                                'price': selected_signal.get('close', 0),
+                                'rsi': selected_signal.get('rsi', 0),
+                                'volume_ratio': selected_signal.get('volume_ratio', 1),
+                                'confidence': min(abs(selected_signal.get('rsi', 50) - 50) / 50, 1.0),
+                                'timestamp': selected_signal.name
+                            }
+                            
+                            with st.spinner("Broadcasting..."):
+                                result = telegram.send_signal_alert(
+                                    st.session_state.telegram_bot_token,
+                                    st.session_state.telegram_chat_id,
+                                    signal_data
+                                )
+                                if result["success"]:
+                                    st.success("✅ Signal broadcasted!")
+                                else:
+                                    st.error(f"❌ Failed: {result.get('error')}")
             else:
                 st.info("No trading signals generated yet")
         else:
             st.info("Signal column not available")
-        
-        # Performance summary
-        if st.session_state.performance:
-            perf = st.session_state.performance
-            if perf.get('trades'):
-                st.subheader("💰 Recent Trades")
-                trades_df = pd.DataFrame(perf['trades'])
-                st.dataframe(
-                    trades_df.tail(5).style.format({
-                        'entry': '${:,.2f}',
-                        'exit': '${:,.2f}',
-                        'pnl': '${:,.2f}',
-                        'pnl_pct': '{:.2f}%'
-                    }),
-                    use_container_width=True,
-                    height=250
-                )
 
 if __name__ == "__main__":
     main()
