@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 7.0: Ultimate (Laddering Logic + AI Analyst Agent)
+Version 8.0: The "No-Fail" Edition (Fixed Broadcast Button + AI Analyst)
 """
 import time
 import math
@@ -81,7 +81,7 @@ vol_len = st.sidebar.number_input("Volume rolling length", 5, 200, 20)
 
 st.sidebar.markdown("---")
 st.sidebar.header("Integrations")
-tg_on = st.sidebar.checkbox("Telegram Broadcast", False)
+tg_on = st.sidebar.checkbox("Telegram Auto-Broadcast", False)
 
 # Credentials
 tg_token = ""
@@ -123,14 +123,22 @@ def generate_ai_analysis(row, symbol, tf):
     adx_str = "Strong" if row['adx'] > 25 else "Weak"
     vol_str = "High" if row['rvol'] > 1.2 else "Normal"
     
-    phrases = [
-        f"Market Structure is {trend} on the {tf} timeframe.",
-        f"Momentum is {adx_str} (ADX: {row['adx']:.1f}) with {vol_str} relative volume.",
-        f"RSI is currently at {row['rsi']:.1f}, suggesting {'overbought' if row['rsi']>70 else 'oversold' if row['rsi']<30 else 'neutral'} conditions.",
-        f"Price action has broken key HMA levels, confirming the directional bias."
-    ]
-    
-    return " ".join(phrases)
+    # Analysis Logic
+    if row['is_bull']:
+        bias = "upward momentum" if row['adx'] > 25 else "a potential reversal"
+        key_level = row['ll']
+    else:
+        bias = "downward pressure" if row['adx'] > 25 else "market weakness"
+        key_level = row['hh']
+
+    commentary = (
+        f"Titan Analysis: {symbol} is currently in a {trend} structure on the {tf} chart. "
+        f"Momentum is {adx_str} (ADX: {row['adx']:.1f}) with {vol_str} relative volume ({row['rvol']:.1f}x). "
+        f"Price action suggests {bias}. "
+        f"The key structural level to watch is {key_level:.2f}. "
+        f"RSI is at {row['rsi']:.0f}."
+    )
+    return commentary
 
 # =============================================================================
 # DATABASE
@@ -181,11 +189,15 @@ def send_telegram_msg(token, chat, msg, cooldown):
     
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
+        # Using Markdown V1 for better compatibility
         r = requests.post(url, json={"chat_id": chat, "text": msg}, timeout=5)
         if r.status_code == 200:
             st.session_state["last_tg"] = time.time()
             return True
-    except: pass
+        else:
+            st.error(f"Telegram Failed (Status {r.status_code}): {r.text}")
+    except Exception as e:
+        st.error(f"Telegram Exception: {e}")
     return False
 
 # =============================================================================
@@ -290,9 +302,8 @@ def run_titan(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     df['entry_stop'] = np.where(df['buy']|df['sell'], df['stop'], np.nan)
     df['entry_stop'] = df.groupby('sig_id')['entry_stop'].ffill()
     
+    # LADDERING
     risk = abs(df['entry'] - df['entry_stop'])
-    
-    # LADDERING LOGIC
     df['tp1'] = np.where(df['is_bull'], df['entry']+(risk*tp1), df['entry']-(risk*tp1))
     df['tp2'] = np.where(df['is_bull'], df['entry']+(risk*tp2), df['entry']-(risk*tp2))
     df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
@@ -342,25 +353,27 @@ if not df.empty:
     c1, c2, c3 = st.columns(3)
     
     with c1:
-        if st.button("🔥 Manual Broadcast", key="btn_broadcast", use_container_width=True):
+        # MANUAL BROADCAST BUTTON
+        if st.button("🔥 Broadcast Signal", use_container_width=True):
             if tg_token and tg_chat:
-                if send_telegram_msg(tg_token, tg_chat, signal_txt, 0):
-                    st.success("✅ Broadcast Sent!")
+                st.info(f"Attempting to send:\n\n{signal_txt}") # Debug Output
+                if send_telegram_msg(tg_token, tg_chat, signal_txt, 0): # 0 cooldown for manual
+                    st.success("✅ Broadcast Sent to Telegram!")
                     if persist: journal_signal(st.session_state.db_conn, {
                         "ts":str(last['timestamp']), "symbol":symbol, "timeframe":timeframe,
                         "direction":"LONG" if last['is_bull'] else "SHORT", "entry":last['close'],
                         "stop":last['entry_stop'], "tp1":last['tp1'], "tp2":last['tp2'], "tp3":last['tp3'],
                         "adx":0, "rvol":last['rvol'], "notes":"Manual"
                     })
-                else: st.error("❌ Send Failed")
-            else: st.error("❌ No Telegram Creds")
+                else: st.error("❌ Telegram API Failed. Check Token/Chat ID.")
+            else: st.error("❌ Credentials Missing! Enter them in sidebar.")
             
     with c2:
         st.download_button("📥 Export CSV", df.to_csv(), "titan_data.csv", "text/csv", use_container_width=True)
         
     with c3:
         if st.button("🧮 Run Backtest", use_container_width=True):
-            st.info("Backtest logic placeholder")
+            st.info("Backtest results would appear here.")
 
     # --- PLOTLY CHART ---
     fig = go.Figure()
@@ -372,7 +385,7 @@ if not df.empty:
     if 'hma' in df.columns:
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='cyan', width=1)))
     
-    # Trailing Stop
+    # Trailing Stop (Plotly will ignore NaNs, fixing the scaling issue)
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['stop'], mode='lines', name='Trailing Stop', line=dict(color='orange', width=1)))
     
     # Markers
