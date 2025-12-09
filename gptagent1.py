@@ -30,8 +30,8 @@ MAX_RETRIES = 2
 RETRY_DELAY = 0.5
 
 # --- TELEGRAM CONFIG (ENTER YOUR CREDS HERE TO FIX ERROR) ---
-TELEGRAM_TOKEN = ""  # Paste your Bot Token here, e.g., "123456:ABC-DEF..."
-TELEGRAM_CHAT_ID = "" # Paste your Chat ID here, e.g., "-100123456..."
+TELEGRAM_TOKEN = ""  # <--- PASTE YOUR BOT TOKEN HERE (keep quotes)
+TELEGRAM_CHAT_ID = "" # <--- PASTE YOUR CHAT ID HERE (keep quotes)
 
 # SAFE DEFAULTS
 mf_len = 14
@@ -217,17 +217,26 @@ with st.sidebar:
     st.subheader("🤖 TELEGRAM")
     tg_on = st.checkbox("Auto-Broadcast", False)
     
-    # --- UPDATED: Use defaults from Constants if available ---
+    # --- FIXED: Use global variables as default values ---
     tg_token = st.text_input("Token", value=TELEGRAM_TOKEN, type="password")
     tg_chat = st.text_input("Chat ID", value=TELEGRAM_CHAT_ID)
 
     if st.button("Test Link"):
-        if not tg_token or not tg_chat: st.error("Missing Creds")
+        # Strip whitespace to prevent copy-paste errors
+        t_clean = tg_token.strip()
+        c_clean = tg_chat.strip()
+        
+        if not t_clean or not c_clean:
+            st.error("Missing Creds (Check Constants at top of file)")
         else:
             try:
-                requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", json={"chat_id": tg_chat, "text": "💠 TITAN: ONLINE"})
-                st.success("Linked!")
-            except: st.error("Failed")
+                r = requests.post(f"https://api.telegram.org/bot{t_clean}/sendMessage", json={"chat_id": c_clean, "text": "💠 TITAN: ONLINE"})
+                if r.status_code == 200:
+                    st.success("Linked! ✅")
+                else:
+                    st.error(f"Error {r.status_code}: Check Token/Chat ID")
+            except Exception as e:
+                st.error(f"Connection Failed: {e}")
 
     persist = st.checkbox("DB Log", True)
     telegram_cooldown_s = st.number_input("Cooldown (s)", 5, 600, 30)
@@ -338,6 +347,10 @@ def journal_signal(conn, payload):
 
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
+    # Strip whitespace
+    token = token.strip()
+    chat = chat.strip()
+    
     last = st.session_state.get("last_tg", 0)
     if time.time() - last < cooldown: return False
     try:
@@ -562,7 +575,7 @@ if not df.empty:
             if tg_token and tg_chat:
                 if send_telegram_msg(tg_token, tg_chat, signal_txt, 0): st.success("SENT!")
                 else: st.error("FAILED")
-            else: st.error("NO CREDS")
+            else: st.error("NO CREDS (Check Constants or Inputs)")
     
     with c_act2: st.download_button("📥 DOWNLOAD CSV", df.to_csv(), "titan.csv", "text/csv", use_container_width=True)
     with c_act3: st.info("Backtest results placeholder")
