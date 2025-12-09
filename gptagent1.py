@@ -29,10 +29,6 @@ DB_PATH = "titan_signals.db"
 MAX_RETRIES = 2
 RETRY_DELAY = 0.5
 
-# --- TELEGRAM CONFIG (ENTER YOUR CREDS HERE TO FIX ERROR) ---
-TELEGRAM_TOKEN = ""  # <--- PASTE YOUR BOT TOKEN HERE (keep quotes)
-TELEGRAM_CHAT_ID = "" # <--- PASTE YOUR CHAT ID HERE (keep quotes)
-
 # SAFE DEFAULTS
 mf_len = 14
 vol_len = 20
@@ -217,17 +213,24 @@ with st.sidebar:
     st.subheader("🤖 TELEGRAM")
     tg_on = st.checkbox("Auto-Broadcast", False)
     
-    # --- FIXED: Use global variables as default values ---
-    tg_token = st.text_input("Token", value=TELEGRAM_TOKEN, type="password")
-    tg_chat = st.text_input("Chat ID", value=TELEGRAM_CHAT_ID)
+    # --- FIXED: LOAD FROM SECRETS ---
+    # Try loading from secrets.toml first
+    try: sec_token = st.secrets["TELEGRAM_TOKEN"]
+    except: sec_token = ""
+    
+    try: sec_chat = st.secrets["TELEGRAM_CHAT_ID"]
+    except: sec_chat = ""
+
+    # Use secrets as default value
+    tg_token = st.text_input("Token", value=sec_token, type="password")
+    tg_chat = st.text_input("Chat ID", value=sec_chat)
 
     if st.button("Test Link"):
-        # Strip whitespace to prevent copy-paste errors
         t_clean = tg_token.strip()
         c_clean = tg_chat.strip()
         
         if not t_clean or not c_clean:
-            st.error("Missing Creds (Check Constants at top of file)")
+            st.error("Missing Creds (Check secrets.toml or Inputs)")
         else:
             try:
                 r = requests.post(f"https://api.telegram.org/bot{t_clean}/sendMessage", json={"chat_id": c_clean, "text": "💠 TITAN: ONLINE"})
@@ -575,7 +578,7 @@ if not df.empty:
             if tg_token and tg_chat:
                 if send_telegram_msg(tg_token, tg_chat, signal_txt, 0): st.success("SENT!")
                 else: st.error("FAILED")
-            else: st.error("NO CREDS (Check Constants or Inputs)")
+            else: st.error("NO CREDS (Check secrets.toml or Inputs)")
     
     with c_act2: st.download_button("📥 DOWNLOAD CSV", df.to_csv(), "titan.csv", "text/csv", use_container_width=True)
     with c_act3: st.info("Backtest results placeholder")
