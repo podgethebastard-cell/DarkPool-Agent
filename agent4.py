@@ -6,13 +6,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit.components.v1 as components
 import requests
-import time
 from openai import OpenAI # REQUIRES: pip install openai
 
 # ==========================================
 # 1. PAGE CONFIG & TERMINAL CSS
 # ==========================================
-st.set_page_config(page_title="🪓Scalper Titan Pro", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="🪓Scalper Titan Ultimate", layout="wide", page_icon="⚡")
 
 st.markdown("""
     <style>
@@ -102,8 +101,8 @@ st.markdown("""
 # ==========================================
 # 2. SIDEBAR CONTROLS
 # ==========================================
-st.sidebar.title("⚡ TITAN PRO CONFIG")
-st.sidebar.caption("v6.0 | OPTIMIZED CORE")
+st.sidebar.title("⚡ TITAN ULTIMATE")
+st.sidebar.caption("v8.0 | LADDER & TRAIL SYSTEM")
 st.sidebar.markdown("---")
 
 # Market Data
@@ -114,15 +113,20 @@ limit = st.sidebar.slider("Candles", min_value=200, max_value=1500, value=500)
 
 st.sidebar.markdown("---")
 
-# Strategies (MATCHING PINE SCRIPT GROUPS)
+# Strategies
 st.sidebar.subheader("LOGIC ENGINE")
 with st.sidebar.expander("Apex Engine (Optimized)", expanded=True):
-    amplitude = st.number_input("Sensitivity (Lookback)", min_value=1, value=5, help="Perfect for 1m/5m. Reacts fast to breakouts.")
-    channel_dev = st.number_input("Stop Deviation", min_value=1.0, value=2.5, step=0.1, help="Reduced from 3.0 to 2.5 for tighter scalping.")
+    amplitude = st.number_input("Sensitivity (Lookback)", min_value=1, value=5, help="Reaction speed for trailing stop.")
+    channel_dev = st.number_input("Stop Deviation", min_value=1.0, value=2.5, step=0.1, help="Distance of the trailing stop (ATR Multiplier).")
     
 with st.sidebar.expander("Trend Reference"):
     hma_len = st.number_input("HMA Length", min_value=1, value=50)
-    use_hma_filter = st.checkbox("Use HMA as Filter?", value=True, help="Force trades to align with institutional trend.")
+    use_hma_filter = st.checkbox("Use HMA as Filter?", value=True)
+
+with st.sidebar.expander("Ladder Config (R-Multiples)"):
+    tp1_r = st.number_input("TP1 (Banker)", value=1.5, step=0.1)
+    tp2_r = st.number_input("TP2 (Builder)", value=3.0, step=0.1)
+    tp3_r = st.number_input("TP3 (Runner)", value=5.0, step=0.1)
 
 with st.sidebar.expander("Money Flow & Vol"):
     mf_len = st.number_input("MF Length", value=14)
@@ -193,24 +197,23 @@ def get_ai_analysis(df_summary, symbol, tf):
     client = OpenAI(api_key=ai_key)
     
     prompt = f"""
-    You are the TITAN SCALPER AI, a professional institutional crypto trader.
-    Analyze this market snapshot for {symbol} on the {tf} timeframe.
+    You are the TITAN SCALPER AI.
+    Analyze this LADDER SETUP for {symbol} ({tf}).
     
     DATA SNAPSHOT:
-    - Current Price: {df_summary['price']}
+    - Price: {df_summary['price']}
     - Trend: {df_summary['trend']}
-    - Titan Stop: {df_summary['stop']}
-    - Money Flow Matrix: {df_summary['mf']} ({'Inflow' if df_summary['mf'] > 0 else 'Outflow'})
-    - HyperWave Momentum: {df_summary['hw']}
-    - Relative Volume: {df_summary['rvol']}x
-    - Institutional Trend (HMA): {df_summary['inst_trend']}
-    - ADX (Trend Strength): {df_summary['adx']} (Below 20 is choppy)
+    - Stop Loss: {df_summary['stop']}
+    - TP1 (1.5R): {df_summary['tp1']}
+    - TP2 (3.0R): {df_summary['tp2']}
+    - TP3 (5.0R): {df_summary['tp3']}
+    - ADX: {df_summary['adx']}
+    - Vol: {df_summary['rvol']}x
     
     INSTRUCTIONS:
-    1. Provide a concise, bulleted assessment of the immediate setup.
-    2. Identify if there is a confluence of factors (e.g., Price > HMA AND Money Flow > 0).
-    3. Give a clear bias: BULLISH, BEARISH, or NEUTRAL/WAIT.
-    4. Keep it under 100 words. Use emojis.
+    1. Assess the risk/reward. Is TP1 achievable given recent volatility?
+    2. Suggest a % split for the ladder (e.g., 30/30/40) based on trend strength (ADX).
+    3. Keep it under 100 words. Use emojis.
     """
     
     try:
@@ -249,7 +252,6 @@ def calculate_mfi(high, low, close, volume, length):
     neg = rmf.where(tp < tp.shift(1), 0).rolling(length).sum()
     return 100 - (100 / (1 + (pos / neg)))
 
-# OPTIMIZATION: NEW ADX CALCULATION
 def calculate_adx(high, low, close, length=14):
     plus_dm = high.diff()
     minus_dm = low.diff()
@@ -267,7 +269,7 @@ def calculate_adx(high, low, close, length=14):
     return adx
 
 # ==========================================
-# 4. MASTER ENGINE (OPTIMIZED)
+# 4. MASTER ENGINE (OPTIMIZED + LADDER)
 # ==========================================
 @st.cache_data(ttl=5) 
 def get_data(symbol, timeframe, limit):
@@ -280,18 +282,17 @@ def get_data(symbol, timeframe, limit):
     except: return pd.DataFrame()
 
 def run_titan_engine(df):
-    # --- 1. DARK VECTOR LOGIC (OPTIMIZED) ---
+    # --- 1. DARK VECTOR LOGIC (Trailing Stop Engine) ---
+    # The 'trend_stop' IS the Trailing Stop. It moves with Structure (Low) + Volatility (ATR).
     
-    # OPTIMIZATION 1: FASTER VOLATILITY SYNC
-    # Old: ewm(alpha=1/100) -> Too slow.
-    # New: ewm(span=14) -> Reacts to news/wicks instantly.
+    # Volatility Sync
     df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
-    df['atr_algo'] = (df['tr'].ewm(span=14, adjust=False).mean() / 2) # Faster reaction
+    df['atr_algo'] = (df['tr'].ewm(span=14, adjust=False).mean() / 2) 
     
     df['dev'] = df['atr_algo'] * channel_dev
     df['hma'] = calc_hma_full(df['close'], hma_len)
 
-    # Staircase Logic
+    # Staircase Logic (The Core Trailing Mechanism)
     df['ll'] = df['low'].rolling(amplitude).min()
     df['hh'] = df['high'].rolling(amplitude).max()
     
@@ -299,7 +300,6 @@ def run_titan_engine(df):
     curr_trend = 0; curr_stop = df['close'].iloc[0]
     curr_max_l = 0.0; curr_min_h = 0.0
 
-    # Iterative Staircase Calculation
     for i in range(amplitude, len(df)):
         c = df['close'].iloc[i]; l = df['ll'].iloc[i]; h = df['hh'].iloc[i]
         dev = df['dev'].iloc[i] if not np.isnan(df['dev'].iloc[i]) else 0
@@ -318,13 +318,15 @@ def run_titan_engine(df):
                 curr_max_l = max(curr_max_l, l)
                 if h > curr_min_h: curr_min_h = h
         
-        if curr_trend == 0: # Bull Stop
+        # --- TRAILING STOP LOGIC ---
+        # This code effectively implements the "Ratchet" Trail
+        if curr_trend == 0: # Bull Stop (Trails Up)
             s = l + dev
-            if s < curr_stop: s = curr_stop
+            if s < curr_stop: s = curr_stop # Never move stop down
             curr_stop = s
-        else: # Bear Stop
+        else: # Bear Stop (Trails Down)
             s = h - dev
-            if s > curr_stop and curr_stop != 0: s = curr_stop
+            if s > curr_stop and curr_stop != 0: s = curr_stop # Never move stop up
             elif curr_stop == 0: s = h - dev
             curr_stop = s
             
@@ -342,29 +344,29 @@ def run_titan_engine(df):
     df['bull_flip'] = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False).astype(bool))
     df['bear_flip'] = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True).astype(bool))
     
-    # OPTIMIZATION 2: REGIME FILTER (CHOP AVOIDANCE)
-    # Only trade if ADX > 20 (Market is trending)
+    # Regime Filter
     filter_trend_strength = df['adx'] > 20
     
-    # OPTIMIZATION 3: MOMENTUM GUARDRAILS
-    # Don't Buy if Overbought (>70). Don't Sell if Oversold (<30).
+    # Momentum Guardrails
     filter_rsi_buy = df['rsi'] < 70
     filter_rsi_sell = df['rsi'] > 30
     
-    # Existing HMA Filter
+    # HMA Filter
     filter_hma_buy = ~use_hma_filter | (df['close'] > df['hma'])
     filter_hma_sell = ~use_hma_filter | (df['close'] < df['hma'])
     
-    # Final Signal Logic
     df['buy_signal'] = df['bull_flip'] & filter_hma_buy & filter_trend_strength & filter_rsi_buy
     df['sell_signal'] = df['bear_flip'] & filter_hma_sell & filter_trend_strength & filter_rsi_sell
 
-    # OPTIMIZATION 4: PROFIT TARGETING
-    # Calculate 1.5R Take Profit automatically
+    # --- 4. LADDER TAKE PROFIT LOGIC ---
     df['risk'] = abs(df['close'] - df['trend_stop'])
-    df['take_profit'] = np.where(df['is_bull'], df['close'] + (df['risk'] * 1.5), df['close'] - (df['risk'] * 1.5))
+    
+    # Bull Ladder
+    df['tp1'] = np.where(df['is_bull'], df['close'] + (df['risk'] * tp1_r), df['close'] - (df['risk'] * tp1_r))
+    df['tp2'] = np.where(df['is_bull'], df['close'] + (df['risk'] * tp2_r), df['close'] - (df['risk'] * tp2_r))
+    df['tp3'] = np.where(df['is_bull'], df['close'] + (df['risk'] * tp3_r), df['close'] - (df['risk'] * tp3_r))
 
-    # --- 4. MONEY FLOW & VOLUME ---
+    # --- 5. MONEY FLOW & VOLUME ---
     rsi_src = calculate_rsi(df['close'], mf_len) - 50
     mf_vol = df['volume'] / df['volume'].rolling(mf_len).mean()
     df['money_flow'] = (rsi_src * mf_vol).fillna(0).ewm(span=3).mean()
@@ -392,8 +394,8 @@ def run_titan_engine(df):
 # --- HEADER ---
 st.markdown("""
 <div class="titan-header">
-    <h1 class="titan-title">TITAN SCALPER <span style="color:#00ffbb">PRO</span></h1>
-    <div class="titan-subtitle">INSTITUTIONAL ORDER FLOW & REGIME FILTER <span class="titan-badge">OPTIMIZED</span></div>
+    <h1 class="titan-title">TITAN SCALPER <span style="color:#00ffbb">ULTIMATE</span></h1>
+    <div class="titan-subtitle">LADDER EXECUTION + DYNAMIC TRAILING STOP</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -425,20 +427,32 @@ if not df.empty:
             direction = "LONG" if is_buy else "SHORT"
             icon = "🟢" if is_buy else "🔴"
             
-            msg = f"""🔥 *TITAN PRO SIGNAL: {symbol} ({timeframe})*
+            # --- PROFESSIONAL MANAGEMENT MSG ---
+            msg = f"""🔥 *TITAN ULTIMATE SIGNAL: {symbol} ({timeframe})*
 {icon} DIRECTION: *{direction}*
 🚪 ENTRY: `${last['close']:,.2f}`
-🛑 STOP LOSS: `${last['trend_stop']:,.2f}`
-💰 TAKE PROFIT (1.5R): `${last['take_profit']:,.2f}`
+🛑 INITIAL STOP: `${last['trend_stop']:,.2f}`
+
+🏗️ *TRADE MANAGEMENT PLAN:*
+1️⃣ **TP1 (1.5R):** `${last['tp1']:,.2f}`
+   _(Close 30% -> Move Stop to Breakeven)_
+
+2️⃣ **TP2 (3.0R):** `${last['tp2']:,.2f}`
+   _(Close 40% -> Tighten Trail)_
+
+3️⃣ **TP3 (5.0R):** `${last['tp3']:,.2f}`
+   _(Let the runner fly!)_
+
+📉 *TRAILING RULE:*
+Trail the **Titan Stop** (Cyan Line on Chart).
+It calculates `Local Low + ATR` automatically.
+
 📊 ADX Strength: {last['adx']:.2f}
-🌊 Trend: {'BULLISH' if last['is_bull'] else 'BEARISH'}
-💰 Money Flow: {'INFLOW' if last['money_flow'] > 5 else 'OUTFLOW' if last['money_flow'] < -5 else 'NEUTRAL'}
-⚠️ _Not financial advice. DYOR._
-#TitanPro #Scalping #Crypto"""
+⚠️ _Not financial advice._"""
             
             send_telegram_msg(bot_token, chat_id, msg)
             st.session_state.last_signal_time = last['timestamp']
-            st.toast(f"Auto-Broadcast: {direction}", icon="🚀")
+            st.toast(f"Plan Broadcast: {direction}", icon="🚀")
 
     # --- HUD METRICS ---
     c1, c2, c3, c4 = st.columns(4)
@@ -451,7 +465,7 @@ if not df.empty:
     adx_color = "text-bull" if last['adx'] > 25 else "text-bear"
     
     with c1: st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Price</h4><h2>${last['close']:,.2f}</h2><div class="sub">Trend: <span class="{trend_txt}"><b>{trend_lbl}</b></span></div></div>""", unsafe_allow_html=True)
-    with c2: st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Titan Stop</h4><h2>${last['trend_stop']:,.2f}</h2><div class="sub">Take Profit: ${last['take_profit']:,.2f}</div></div>""", unsafe_allow_html=True)
+    with c2: st.markdown(f"""<div class="titan-card {trend_cls}"><h4>Trailing Stop</h4><h2>${last['trend_stop']:,.2f}</h2><div class="sub">Dynamic Structure Lock</div></div>""", unsafe_allow_html=True)
     with c3: st.markdown(f"""<div class="titan-card"><h4>Regime Filter</h4><h2 class="{adx_color}">{last['adx']:.1f}</h2><div class="sub">State: {adx_status}</div></div>""", unsafe_allow_html=True)
     with c4: st.markdown(f"""<div class="titan-card"><h4>RVOL</h4><h2 class="{'text-bull' if last['rvol']>1.5 else 'text-white'}">{last['rvol']:.2f}x</h2><div class="sub">Anomaly Detection</div></div>""", unsafe_allow_html=True)
 
@@ -459,54 +473,69 @@ if not df.empty:
     col_a, col_b = st.columns(2)
     
     with col_a:
-        if st.button("🔥 BROADCAST SIGNAL NOW", use_container_width=True):
+        if st.button("🔥 BROADCAST FULL PLAN", use_container_width=True):
             is_bull = last['is_bull']
             direction = "LONG" if is_bull else "SHORT"
             icon = "🟢" if is_bull else "🔴"
             
-            manual_msg = f"""🔥 *TITAN PRO SIGNAL: {symbol} ({timeframe})*
+            manual_msg = f"""🔥 *TITAN ULTIMATE SIGNAL: {symbol} ({timeframe})*
 {icon} DIRECTION: *{direction}*
 🚪 ENTRY: `${last['close']:,.2f}`
-🛑 STOP LOSS: `${last['trend_stop']:,.2f}`
-💰 TAKE PROFIT: `${last['take_profit']:,.2f}`
+🛑 INITIAL STOP: `${last['trend_stop']:,.2f}`
+
+🏗️ *TRADE MANAGEMENT PLAN:*
+1️⃣ **TP1 (1.5R):** `${last['tp1']:,.2f}`
+   _(Close 30% -> Move Stop to Breakeven)_
+
+2️⃣ **TP2 (3.0R):** `${last['tp2']:,.2f}`
+   _(Close 40% -> Tighten Trail)_
+
+3️⃣ **TP3 (5.0R):** `${last['tp3']:,.2f}`
+   _(Let the runner fly!)_
+
+📉 *TRAILING RULE:*
+Trail the **Titan Stop** (Cyan Line on Chart).
+It calculates `Local Low + ATR` automatically.
+
 📊 ADX Strength: {last['adx']:.2f}
-🌊 Trend: {'BULLISH' if is_bull else 'BEARISH'}
-💰 Money Flow: {'INFLOW' if last['money_flow'] > 5 else 'OUTFLOW' if last['money_flow'] < -5 else 'NEUTRAL'}
-⚠️ _Not financial advice. DYOR._
-#TitanPro #Scalping"""
+⚠️ _Not financial advice._"""
             if send_telegram_msg(bot_token, chat_id, manual_msg):
-                st.success("✅ Signal Broadcasted Successfully!")
+                st.success("✅ Full Plan Broadcasted!")
 
     with col_b:
-        if st.button("🤖 GENERATE AI REPORT", use_container_width=True):
-            with st.spinner("Titan AI is analyzing market structure..."):
+        if st.button("🤖 GENERATE AI EXECUTION STRATEGY", use_container_width=True):
+            with st.spinner("Titan AI is calculating optimal exits..."):
                 summary = {
                     'price': last['close'], 'trend': trend_lbl, 'stop': last['trend_stop'],
-                    'mf': last['money_flow'], 'hw': last['hyper_wave'], 'rvol': last['rvol'],
-                    'inst_trend': 'BULL' if last['close'] > last['hma'] else 'BEAR',
-                    'adx': f"{last['adx']:.2f}"
+                    'tp1': last['tp1'], 'tp2': last['tp2'], 'tp3': last['tp3'],
+                    'adx': f"{last['adx']:.2f}", 'rvol': last['rvol']
                 }
                 ai_report = get_ai_analysis(summary, symbol, timeframe)
-                st.markdown(f"""<div class="ai-box"><h3>🤖 TITAN AI ASSESSMENT</h3>{ai_report}</div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="ai-box"><h3>🤖 TITAN AI STRATEGY</h3>{ai_report}</div>""", unsafe_allow_html=True)
 
     # --- TRI-PANE CHART ---
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.55, 0.20, 0.25],
-        subplot_titles=("Price Action & TP/SL", "Money Flow Matrix", f"Advanced Volume ({vol_metric})"))
+        subplot_titles=("Price Action & Management System", "Money Flow Matrix", f"Advanced Volume ({vol_metric})"))
     
     # 1. Price
     fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
+    
+    # Plot The Trailing Stops (Solid Lines)
     b_stop = df['trend_stop'].where(df['is_bull'], np.nan).replace(0, np.nan)
     s_stop = df['trend_stop'].where(~df['is_bull'], np.nan).replace(0, np.nan)
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=b_stop, mode='lines', line=dict(color='#00ffbb', width=2), name='Bull Stop'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=s_stop, mode='lines', line=dict(color='#ff1155', width=2), name='Bear Stop'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', line=dict(color='gray', dash='dot'), name='HMA'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=b_stop, mode='lines', line=dict(color='#00ffbb', width=2), name='Bull Trail'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=s_stop, mode='lines', line=dict(color='#ff1155', width=2), name='Bear Trail'), row=1, col=1)
     
-    # Plot Take Profits (Dotted Lines)
-    b_tp = df['take_profit'].where(df['is_bull'], np.nan)
-    s_tp = df['take_profit'].where(~df['is_bull'], np.nan)
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=b_tp, mode='lines', line=dict(color='#00ffbb', dash='dot', width=1), name='Bull TP'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df['timestamp'], y=s_tp, mode='lines', line=dict(color='#ff1155', dash='dot', width=1), name='Bear TP'), row=1, col=1)
+    # LADDER PLOTTING (Dynamic Dotted Lines)
+    tp_col = '#00ffbb' if last['is_bull'] else '#ff1155'
+    t1 = df['tp1'].where(df['is_bull'] if last['is_bull'] else ~df['is_bull'], np.nan)
+    t2 = df['tp2'].where(df['is_bull'] if last['is_bull'] else ~df['is_bull'], np.nan)
+    t3 = df['tp3'].where(df['is_bull'] if last['is_bull'] else ~df['is_bull'], np.nan)
     
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=t1, mode='lines', line=dict(color=tp_col, dash='dot', width=1), name='TP1 (1.5R)'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=t2, mode='lines', line=dict(color=tp_col, dash='dash', width=1), name='TP2 (3.0R)'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=t3, mode='lines', line=dict(color=tp_col, dash='longdash', width=1), name='TP3 (5.0R)'), row=1, col=1)
+
     buys = df[df['buy_signal']]
     if not buys.empty: fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.999, mode='markers', marker=dict(symbol='triangle-up', size=14, color='#00ffbb'), name='BUY'), row=1, col=1)
     sells = df[df['sell_signal']]
@@ -536,7 +565,7 @@ if not df.empty:
               fig.add_hline(y=80, line_dash="dot", line_color="red", row=3, col=1)
               fig.add_hline(y=20, line_dash="dot", line_color="green", row=3, col=1)
 
-    fig.update_layout(height=900, paper_bgcolor='#050505', plot_bgcolor='#050505', font=dict(color="#aaa"), showlegend=False, xaxis_rangeslider_visible=False)
+    fig.update_layout(height=900, paper_bgcolor='#050505', plot_bgcolor='#050505', font=dict(color="#aaa"), showlegend=True, xaxis_rangeslider_visible=False)
     fig.update_yaxes(gridcolor="#222", autorange=True, fixedrange=False)
     fig.update_xaxes(gridcolor="#222")
     st.plotly_chart(fig, use_container_width=True)
