@@ -1,11 +1,10 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 17.1: Live Update + Backtest Engine + Gann Fixes
+Version 17.2: LIVE Ticker + Full Brain Integration + JS Clock
 """
 import time
 import math
 import sqlite3
-import atexit
 import random
 from typing import Dict, Optional, List
 from contextlib import contextmanager
@@ -19,55 +18,7 @@ import streamlit.components.v1 as components
 from datetime import datetime, timezone
 
 # =============================================================================
-# CONSTANTS & CONFIG
-# =============================================================================
-ADX_THRESHOLD = 23.0
-RVOL_THRESHOLD = 1.15
-RSI_OVERBOUGHT = 70
-RSI_OVERSOLD = 30
-DB_PATH = "titan_signals.db"
-MAX_RETRIES = 2
-RETRY_DELAY = 0.5
-
-# SAFE DEFAULTS
-mf_len = 14
-vol_len = 20
-amplitude = 10
-channel_dev = 3.0
-hma_len = 50
-use_hma_filter = True
-tp1_r = 1.5
-tp2_r = 3.0
-tp3_r = 5.0
-gann_len = 3
-
-# API ENDPOINTS
-BINANCE_API_BASE = "https://api.binance.us/api/v3"
-BYBIT_API_BASE = "https://api.bybit.com/v5/market/kline"
-COINBASE_API_BASE = "https://api.exchange.coinbase.com/products"
-
-# HEADERS
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json"
-}
-
-# TOP 100 CRYPTO ASSETS
-TOP_100_ASSETS = [
-    "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "SHIB", "TON",
-    "DOT", "LINK", "BCH", "TRX", "LTC", "NEAR", "MATIC", "UNI", "APT", "ICP",
-    "PEPE", "WIF", "FET", "RNDR", "STX", "FIL", "ATOM", "ARB", "IMX", "KAS",
-    "ETC", "OP", "INJ", "GRT", "LDO", "TIA", "VET", "FLOKI", "BONK", "MKR",
-    "RUNE", "SEI", "ALGO", "ORDI", "EGLD", "FLOW", "QNT", "GALA", "AAVE", "SNX",
-    "SAND", "HBAR", "AXS", "BSV", "MINA", "BEAM", "EOS", "BTT", "MANA", "XLM",
-    "KCS", "CAKE", "NEO", "CHZ", "JUP", "APE", "IOTA", "XTZ", "LUNC", "BLUR",
-    "ZEC", "KLAY", "CFX", "GNO", "ROSE", "DYDX", "CRV", "WOO", "1INCH", "COMP",
-    "RPL", "ZIL", "FXS", "BAT", "LRC", "ENJ", "MASK", "QTUM", "TWT", "CELO"
-]
-TOP_100_SYMBOLS = [f"{asset}USDT" for asset in TOP_100_ASSETS]
-
-# =============================================================================
-# PAGE CONFIG & STYLING
+# PAGE CONFIG
 # =============================================================================
 st.set_page_config(
     page_title="TITAN TERMINAL",
@@ -76,104 +27,140 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# =============================================================================
+# CUSTOM CSS & JS ASSETS (LIVE CLOCK)
+# =============================================================================
 st.markdown("""
 <style>
     .main { background-color: #0b0c10; }
+    
+    /* Metrics Cards */
     div[data-testid="metric-container"] {
         background: rgba(31, 40, 51, 0.7);
-        backdrop-filter: blur(12px);
         border: 1px solid rgba(102, 252, 241, 0.1);
-        padding: 15px;
+        padding: 10px;
         border-radius: 8px;
         box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-        transition: all 0.3s ease;
     }
-    div[data-testid="metric-container"]:hover {
-        transform: translateY(-3px);
-        border-color: #66fcf1;
-        box-shadow: 0 0 15px rgba(102, 252, 241, 0.2);
+    
+    /* Live Clock Styling */
+    #live_clock {
+        font-family: 'Roboto Mono', monospace;
+        font-size: 24px;
+        color: #66fcf1;
+        font-weight: bold;
+        text-align: right;
+        padding: 10px;
     }
-    h1, h2, h3, h4, h5 { 
-        font-family: 'Roboto Mono', monospace; 
-        color: #c5c6c7; 
-        font-weight: 700;
-    }
-    p, span, div { font-family: 'Inter', sans-serif; color: #c5c6c7; }
+    
+    h1, h2, h3 { font-family: 'Roboto Mono', monospace; color: #c5c6c7; }
+    
+    /* Buttons */
     .stButton > button {
-        border-radius: 4px; 
-        font-weight: 700;
         background: linear-gradient(135deg, #1f2833, #0b0c10);
         border: 1px solid #45a29e;
         color: #66fcf1;
-        text-transform: uppercase;
-        letter-spacing: 1px;
+        font-weight: bold;
     }
     .stButton > button:hover {
         background: #45a29e;
         color: #0b0c10;
-        border-color: #66fcf1;
-    }
-    section[data-testid="stSidebar"] { 
-        background-color: #050608; 
-        border-right: 1px solid #1f2833;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        background-color: transparent;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        border-radius: 4px 4px 0 0;
-        background-color: #1f2833;
-        color: #c5c6c7;
-        border: 1px solid transparent;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #0b0c10;
-        color: #66fcf1;
-        border-top: 2px solid #66fcf1;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# HEADER
-c_head1, c_head2 = st.columns([3, 1])
-with c_head1:
-    st.title("💠 TITAN TERMINAL v17")
-    st.caption("AI-POWERED MULTI-ENGINE EXECUTION SUITE")
-with c_head2:
-    utc_now = datetime.now(timezone.utc)
-    # Use empty placeholder for clock to allow updates if needed
-    clock_ph = st.empty()
-    clock_ph.metric("UTC TIME", utc_now.strftime("%H:%M:%S"))
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+BINANCE_API_BASE = "https://api.binance.us/api/v3"
+BYBIT_API_BASE = "https://api.bybit.com/v5/market/kline"
+COINBASE_API_BASE = "https://api.exchange.coinbase.com/products"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json"
+}
+
+TOP_100_ASSETS = [
+    "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "SHIB", "TON",
+    "DOT", "LINK", "BCH", "TRX", "LTC", "NEAR", "MATIC", "UNI", "APT", "ICP",
+    "PEPE", "WIF", "FET", "RNDR", "STX", "FIL", "ATOM", "ARB", "IMX", "KAS",
+    "ETC", "OP", "INJ", "GRT", "LDO", "TIA", "VET", "FLOKI", "BONK", "MKR",
+    "RUNE", "SEI", "ALGO", "ORDI", "EGLD", "FLOW", "QNT", "GALA", "AAVE", "SNX",
+    "SAND", "HBAR", "AXS", "BSV", "MINA", "BEAM", "EOS", "BTT", "MANA", "XLM",
+    "KCS", "CAKE", "NEO", "CHZ", "JUP", "APE", "IOTA", "XTZ", "LUNC", "BLUR",
+    "ZEC", "KLAY", "CFX", "GNO", "ROSE", "DYDX", "CRV", "WOO", "1INCH", "COMP"
+]
+TOP_100_SYMBOLS = [f"{asset}USDT" for asset in TOP_100_ASSETS]
 
 # =============================================================================
-# SIDEBAR CONTROLS
+# LIVE TICKER WIDGET (Top of Page)
+# =============================================================================
+# This solves the "Live Price" issue without needing Streamlit to refresh
+components.html(
+    """
+    <div class="tradingview-widget-container">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js" async>
+      {
+      "symbols": [
+        {"proName": "BINANCE:BTCUSDT", "title": "BTC/USDT"},
+        {"proName": "BINANCE:ETHUSDT", "title": "ETH/USDT"},
+        {"proName": "BINANCE:SOLUSDT", "title": "SOL/USDT"},
+        {"proName": "BINANCE:XRPUSDT", "title": "XRP/USDT"},
+        {"proName": "BINANCE:BNBUSDT", "title": "BNB/USDT"}
+      ],
+      "showSymbolLogo": true,
+      "colorTheme": "dark",
+      "isTransparent": true,
+      "displayMode": "adaptive",
+      "locale": "en"
+    }
+      </script>
+    </div>
+    """,
+    height=50
+)
+
+# HEADER with JS Clock
+c_head1, c_head2 = st.columns([3, 1])
+with c_head1:
+    st.title("💠 TITAN TERMINAL v17.2")
+    st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
+with c_head2:
+    # JavaScript Clock (Updates every second client-side)
+    components.html(
+        """
+        <div id="live_clock"></div>
+        <script>
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-GB', { timeZone: 'UTC' });
+            document.getElementById('live_clock').innerHTML = 'UTC: ' + timeString;
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+        </script>
+        """,
+        height=60
+    )
+
+# =============================================================================
+# SIDEBAR
 # =============================================================================
 with st.sidebar:
     st.header("⚙️ SYSTEM CONTROL")
     
-    # Auto-Refresh Logic
-    refresh_on = st.checkbox("⚡ AUTO-REFRESH", value=False)
-    refresh_rate = st.number_input("Rate (sec)", 5, 300, 30)
-    
-    # Session
-    hour = utc_now.hour
-    session = "🌏 ASIA"
-    if 7 <= hour < 15: session = "🇪🇺 LONDON"
-    elif 12 <= hour < 21: session = "🇺🇸 NEW YORK"
-    st.info(f"ACTIVE SESSION: {session}")
+    # Simple manual refresh button is better than auto-refresh for "Pro" feel
+    if st.button("🔄 FORCE REFRESH DATA", use_container_width=True):
+        st.rerun()
 
     with st.expander("📚 Engines Guide", expanded=False):
         st.markdown("""
-        **1. TITAN (Execution)**
-        * ATR Trailing Stops & Trend Structure.
-        **2. APEX (Structure)**
-        * HMA Trend Cloud & Pivot Liquidity.
-        **3. GANN (Trend)**
-        * High/Low Activator Step-Line.
-        **4. MATRIX (Flow)**
-        * Money Flow Index + Hyper Wave.
+        **1. TITAN:** ATR Trailing Stops.
+        **2. APEX:** HMA Cloud Structure.
+        **3. GANN:** HiLo Step Activator.
+        **4. MATRIX:** Money Flow + Hyper Wave.
         """)
 
     st.subheader("📡 FEED")
@@ -202,9 +189,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("🤖 TELEGRAM")
-    tg_on = st.checkbox("Auto-Broadcast", False)
-    
-    # Secrets / Creds
+    # Secrets Loading
     try: sec_token = st.secrets["TELEGRAM_TOKEN"]
     except: sec_token = ""
     try: sec_chat = st.secrets["TELEGRAM_CHAT_ID"]
@@ -225,16 +210,8 @@ with st.sidebar:
                 else: st.error(f"Error {r.status_code}")
             except Exception as e: st.error(f"Failed: {e}")
 
-    persist = st.checkbox("DB Log", True)
-    telegram_cooldown_s = st.number_input("Cooldown (s)", 5, 600, 30)
-
-    # AUTO REFRESH RUNNER
-    if refresh_on:
-        time.sleep(refresh_rate)
-        st.rerun()
-
 # =============================================================================
-# HELPER FUNCTIONS
+# LOGIC ENGINES
 # =============================================================================
 def calculate_hma(series, length):
     half_len = int(length / 2)
@@ -250,9 +227,6 @@ def calculate_fibonacci(df, lookback=50):
     d = h - l
     return {'fib_382': h - (d*0.382), 'fib_500': h - (d*0.5), 'fib_618': h - (d*0.618)}
 
-# =============================================================================
-# ANALYST & BACKTEST
-# =============================================================================
 def calculate_fear_greed_index(df):
     try:
         df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
@@ -267,18 +241,10 @@ def calculate_fear_greed_index(df):
     except: return 50
 
 def run_backtest(df):
-    # Simple Loop Backtest
     trades = []
-    active_trade = None
-    
-    # Iterate only where we have signals
     signals = df[(df['buy']) | (df['sell'])]
     
     for idx, row in signals.iterrows():
-        # Check if previous trade closed? (Simplified: We assume simple R:R outcome for immediate next candles)
-        # In a real engine we iterate every candle. Here we approximate "Potential Win"
-        
-        # Look forward 20 candles for outcome
         future = df.loc[idx+1 : idx+20]
         if future.empty: continue
         
@@ -291,11 +257,9 @@ def run_backtest(df):
         pnl = 0
         
         if is_long:
-            # Hit TP?
             if future['high'].max() >= tp1:
                 outcome = "WIN"
                 pnl = abs(entry - stop) * tp1_r
-            # Hit Stop?
             elif future['low'].min() <= stop:
                 outcome = "LOSS"
                 pnl = -abs(entry - stop)
@@ -311,68 +275,66 @@ def run_backtest(df):
             trades.append({'outcome': outcome, 'pnl': pnl})
             
     if not trades: return 0, 0, 0
-    
     df_res = pd.DataFrame(trades)
     total_trades = len(df_res)
     win_rate = (len(df_res[df_res['outcome']=='WIN']) / total_trades) * 100
     net_r = (len(df_res[df_res['outcome']=='WIN']) * tp1_r) - len(df_res[df_res['outcome']=='LOSS'])
-    
     return total_trades, win_rate, net_r
 
-def generate_ai_analysis(row, symbol, tf, fibs, fg_index):
-    titan_trend = "BULLISH" if row['is_bull'] else "BEARISH"
-    apex_trend = "BULLISH" if row['apex_trend'] == 1 else "BEARISH" if row['apex_trend'] == -1 else "NEUTRAL"
-    gann_trend = "BULLISH" if row['gann_trend'] == 1 else "BEARISH"
+# --- THE "BRAIN" FUNCTION ---
+def generate_full_report(row, symbol, tf, fibs, fg_index):
+    # 1. Titan Status
+    titan_status = "BULLISH 🟢" if row['is_bull'] else "BEARISH 🔴"
     
-    confluence = "MIXED"
-    if titan_trend == apex_trend == gann_trend: confluence = "⭐⭐⭐ TRIPLE CONFLUENCE"
-    elif titan_trend == gann_trend: confluence = "⭐⭐ DOUBLE CONFLUENCE"
+    # 2. Apex Status
+    if row['apex_trend'] == 1: apex_status = "BULLISH 🟢"
+    elif row['apex_trend'] == -1: apex_status = "BEARISH 🔴"
+    else: apex_status = "NEUTRAL ⚪"
+    
+    # 3. Gann Status
+    gann_status = "BULLISH 🟢" if row['gann_trend'] == 1 else "BEARISH 🔴"
+    
+    # 4. Matrix (Flow) Status
+    flow_val = row['money_flow']
+    flow_status = "INFLOW 🌊" if flow_val > 0 else "OUTFLOW 🩸"
+    
+    # 5. Volume Status
+    vol_status = "HIGH" if row['rvol'] > 1.2 else "NORMAL"
+    
+    # Confluence Score
+    score = 0
+    if row['is_bull'] and row['apex_trend'] == 1: score += 1
+    if row['is_bull'] and row['gann_trend'] == 1: score += 1
+    if not row['is_bull'] and row['apex_trend'] == -1: score += 1
+    if not row['is_bull'] and row['gann_trend'] == -1: score += 1
+    
+    confluence = "WEAK"
+    if score >= 2: confluence = "STRONG 🔥"
+    
+    # Sentiment Text
+    sent_txt = "NEUTRAL"
+    if fg_index > 70: sent_txt = "GREED"
+    if fg_index < 30: sent_txt = "FEAR"
 
-    sent = "NEUTRAL"
-    if fg_index >= 75: sent = "EXTREME GREED 🤑"
-    elif fg_index >= 55: sent = "GREED 🟢"
-    elif fg_index <= 25: sent = "EXTREME FEAR 😱"
-    elif fg_index <= 45: sent = "FEAR 🔴"
-
-    return (
-        f"**🤖 TITAN AI Analyst Report**\n\n"
-        f"**1. Market Regime:**\n"
-        f"• Confluence: **{confluence}**\n"
-        f"• TITAN: **{titan_trend}**\n"
-        f"• GANN: **{gann_trend}**\n"
-        f"• Sentiment: {sent} ({fg_index})\n\n"
-        f"**2. Volume & Flow:**\n"
-        f"• Money Flow: {'Inflow' if row['money_flow'] > 0 else 'Outflow'}\n"
-        f"• Trap Candle: {'YES ⚠️' if row['hidden_liq'] else 'No'}\n"
-        f"• Golden Zone: {fibs['fib_500']:.2f}\n\n"
-        f"**3. Plan:**\n"
-        f"Invalidation at {row['entry_stop']:.2f}."
+    # Report Text
+    report = (
+        f"**🤖 TITAN BRAIN REPORT**\n"
+        f"---------------------------\n"
+        f"**1. MARKET REGIME:**\n"
+        f"• Structure: **{confluence}**\n"
+        f"• Titan Trend: {titan_status}\n"
+        f"• Apex Cloud: {apex_status}\n"
+        f"• Gann Activator: {gann_status}\n\n"
+        f"**2. FLOW & MOMENTUM:**\n"
+        f"• Money Flow: {flow_status} ({flow_val:.2f})\n"
+        f"• Volume: {vol_status} (RVOL: {row['rvol']:.2f})\n"
+        f"• Sentiment: {sent_txt} ({fg_index})\n\n"
+        f"**3. KEY LEVELS:**\n"
+        f"• Golden Zone (50%): {fibs['fib_500']:.2f}\n"
+        f"• Stop Loss: {row['entry_stop']:.2f}\n"
+        f"---------------------------"
     )
-
-# =============================================================================
-# DATA ENGINE
-# =============================================================================
-@contextmanager
-def get_db_connection(path: str = DB_PATH):
-    conn = sqlite3.connect(path, check_same_thread=False, timeout=30)
-    try: yield conn
-    finally: conn.close()
-
-def init_db(path: str = DB_PATH):
-    if not persist: return None
-    conn = sqlite3.connect(path, check_same_thread=False, timeout=30)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT, symbol TEXT, timeframe TEXT, direction TEXT,
-            entry REAL, stop REAL, tp1 REAL, tp2 REAL, tp3 REAL,
-            adx REAL, rvol REAL, notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    return conn
-
-if 'db_conn' not in st.session_state: st.session_state.db_conn = init_db()
+    return report
 
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
@@ -389,7 +351,6 @@ def send_telegram_msg(token, chat, msg, cooldown):
 
 @st.cache_data(ttl=5)
 def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
-    # 1. Binance US
     try:
         r = requests.get(f"{BINANCE_API_BASE}/klines", params={"symbol": symbol_bin, "interval": interval, "limit": limit}, headers=HEADERS, timeout=4)
         if r.status_code == 200:
@@ -398,32 +359,8 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
             df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
             return df[['timestamp','open','high','low','close','volume']]
     except: pass
-    # 2. Bybit
-    try:
-        imap = {"1m":"1", "5m":"5", "15m":"15", "1h":"60", "4h":"240", "1d":"D"}
-        r = requests.get(BYBIT_API_BASE, params={"category":"spot", "symbol":symbol_bin, "interval":imap.get(interval,"60"), "limit":limit}, headers=HEADERS, timeout=4)
-        if r.json().get('retCode') == 0:
-            df = pd.DataFrame(r.json()['result']['list'], columns=['t','o','h','l','c','v','to'])
-            df['timestamp'] = pd.to_datetime(df['t'].astype(float), unit='ms')
-            df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
-            return df.iloc[::-1].reset_index(drop=True)[['timestamp','open','high','low','close','volume']]
-    except: pass
-    # 3. Coinbase
-    try:
-        gmap = {"1m":60, "5m":300, "15m":900, "1h":3600, "4h":21600, "1d":86400}
-        sym_cb = f"{symbol_bin[:-4]}-{symbol_bin[-4:]}" if symbol_bin.endswith("USDT") else "BTC-USD"
-        r = requests.get(f"{COINBASE_API_BASE}/{sym_cb}/candles", params={"granularity": gmap.get(interval, 3600)}, headers=HEADERS, timeout=5)
-        if r.status_code == 200:
-            df = pd.DataFrame(r.json(), columns=['t','l','h','o','c','v'])
-            df['timestamp'] = pd.to_datetime(df['t'], unit='s')
-            df[['open','high','low','close','volume']] = df[['o','h','l','c','v']].astype(float)
-            return df.sort_values('timestamp').reset_index(drop=True).iloc[-limit:]
-    except: pass
     return pd.DataFrame()
 
-# =============================================================================
-# MULTI-CORE LOGIC ENGINE
-# =============================================================================
 def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l):
     if df.empty: return df
     df = df.copy().reset_index(drop=True)
@@ -450,12 +387,6 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l)
     ds_abs_pc = abs(pc).ewm(span=25).mean().ewm(span=13).mean()
     df['hyper_wave'] = (100 * (ds_pc / ds_abs_pc)) / 2
     
-    mf_std = df['money_flow'].rolling(20).std()
-    mf_sma = df['money_flow'].rolling(20).mean()
-    df['mf_upper'] = mf_sma + (mf_std * 2.0)
-    df['mf_lower'] = mf_sma - (mf_std * 2.0)
-    df['adx'] = 25.0 
-    
     # ADVANCED VOLUME
     mfm = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
     mfm = mfm.fillna(0)
@@ -476,7 +407,7 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l)
     is_doji = body_size <= (range_size * 0.1)
     df['hidden_liq'] = is_doji & (df['rvol'] > 2.0)
 
-    # --- TITAN ENGINE ---
+    # TITAN ENGINE
     df['ll'] = df['low'].rolling(amp).min()
     df['hh'] = df['high'].rolling(amp).max()
     
@@ -497,8 +428,8 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l)
     df['is_bull'] = trend == 0
     df['entry_stop'] = stop
     
-    cond_buy = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False)) & (df['rvol']>RVOL_THRESHOLD) & (df['rsi']<70)
-    cond_sell = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True)) & (df['rvol']>RVOL_THRESHOLD) & (df['rsi']>30)
+    cond_buy = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False)) & (df['rvol']>1.15) & (df['rsi']<70)
+    cond_sell = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True)) & (df['rvol']>1.15) & (df['rsi']>30)
     if hma_on:
         cond_buy &= (df['close'] > df['hma'])
         cond_sell &= (df['close'] < df['hma'])
@@ -515,7 +446,7 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l)
     df['tp2'] = np.where(df['is_bull'], df['entry']+(risk*tp2), df['entry']-(risk*tp2))
     df['tp3'] = np.where(df['is_bull'], df['entry']+(risk*tp3), df['entry']-(risk*tp3))
 
-    # --- APEX ENGINE ---
+    # APEX ENGINE
     apex_base = calculate_hma(df['close'], 55)
     apex_atr = df['atr'] * 1.5
     df['apex_upper'] = apex_base + apex_atr
@@ -528,31 +459,27 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l)
         else: apex_t[i] = apex_t[i-1]
     df['apex_trend'] = apex_t
 
-    df['pivot_high'] = df['high'].rolling(10*2+1, center=True).max()
-    df['pivot_low'] = df['low'].rolling(10*2+1, center=True).min()
+    df['pivot_high'] = df['high'].rolling(21, center=True).max()
+    df['pivot_low'] = df['low'].rolling(21, center=True).min()
     df['is_res'] = (df['high'] == df['pivot_high'])
     df['is_sup'] = (df['low'] == df['pivot_low'])
 
-    # --- GANN HILO ENGINE (FIXED INITIALIZATION) ---
+    # GANN HILO ENGINE (Fixed NaN)
     sma_high = df['high'].rolling(gann_l).mean()
     sma_low = df['low'].rolling(gann_l).mean()
     
-    # FIX: Initialize with NaNs so charts don't spike to 0
     g_trend = np.full(len(df), np.nan)
     g_act = np.full(len(df), np.nan)
     
     curr_g_t = 1
-    # Seed value
     curr_g_a = sma_low.iloc[gann_l] if len(sma_low) > gann_l else np.nan
     
     for i in range(gann_l, len(df)):
         c = df.at[i,'close']
         h_ma = sma_high.iloc[i]
         l_ma = sma_low.iloc[i]
-        
-        # FIX: Handle first iteration
         prev_a = g_act[i-1] if (i > 0 and not np.isnan(g_act[i-1])) else curr_g_a
-        if np.isnan(prev_a): prev_a = l_ma # Fallback
+        if np.isnan(prev_a): prev_a = l_ma
         
         if curr_g_t == 1:
             if c < prev_a:
@@ -576,7 +503,7 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l)
     return df
 
 # =============================================================================
-# MAIN UI
+# MAIN APP EXECUTION
 # =============================================================================
 with st.spinner("Initializing Terminal..."):
     df = get_klines(symbol, timeframe, limit)
@@ -584,12 +511,14 @@ with st.spinner("Initializing Terminal..."):
 if not df.empty:
     df = df.dropna(subset=['close'])
     with st.spinner("Processing Algorithms..."):
-        df = run_engines(df, int(amplitude), channel_dev, int(hma_len), use_hma_filter, tp1_r, tp2_r, tp3_r, int(mf_len), int(vol_len), int(gann_len))
+        df = run_engines(df, int(amplitude), channel_dev, int(hma_len), True, tp1_r, tp2_r, tp3_r, int(mf_len), int(vol_len), int(gann_len))
     
     last = df.iloc[-1]
     fibs = calculate_fibonacci(df)
     fg_index = calculate_fear_greed_index(df)
-    ai_report = generate_ai_analysis(last, symbol, timeframe, fibs, fg_index)
+    
+    # GENERATE REPORT USING ALL ENGINES
+    ai_report = generate_full_report(last, symbol, timeframe, fibs, fg_index)
     
     # --- METRICS ---
     m1, m2, m3, m4 = st.columns(4)
@@ -600,7 +529,7 @@ if not df.empty:
 
     # --- ACTION CENTER ---
     c_act1, c_act2, c_act3 = st.columns(3)
-    signal_txt = f"🔥 *TITAN SIGNAL: {symbol}*\n⏰ TF: {timeframe} | 🧭 Dir: *{'LONG 🟢' if last['is_bull'] else 'SHORT 🔴'}*\n📍 Entry: `{last['close']:.2f}`\n🛑 Stop: `{last['entry_stop']:.2f}`\n🎯 *LADDER:*\n1️⃣ TP1: `{last['tp1']:.2f}`\n2️⃣ TP2: `{last['tp2']:.2f}`\n3️⃣ TP3: `{last['tp3']:.2f}`\n\n{ai_report}\n⚠️ _NFA_"
+    signal_txt = f"🔥 *TITAN SIGNAL: {symbol}*\n⏰ TF: {timeframe} | 🧭 Dir: *{'LONG 🟢' if last['is_bull'] else 'SHORT 🔴'}*\n📍 Entry: `{last['close']:.2f}`\n🛑 Stop: `{last['entry_stop']:.2f}`\n\n{ai_report}\n⚠️ _NFA_"
 
     with c_act1:
         if st.button("🔥 BROADCAST SIGNAL", use_container_width=True):
@@ -623,8 +552,6 @@ if not df.empty:
     fig = go.Figure()
     fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='#66fcf1', width=1)))
-    # STOP REMOVED FROM VISUAL CHART AS REQUESTED
-    # fig.add_trace(go.Scatter(x=df['timestamp'], y=df['entry_stop'], mode='lines', name='Stop', line=dict(color='#ff9900', width=1)))
     
     buys = df[df['buy']]; sells = df[df['sell']]
     if not buys.empty: fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.999, mode='markers', marker=dict(symbol='triangle-up', size=12, color='#00ff00'), name='BUY'))
@@ -637,33 +564,18 @@ if not df.empty:
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 GANN HILO", "🌊 APEX", "💸 MATRIX", "📉 VOL", "🧠 SENTIMENT"])
     
     with tab1:
-        # Fixed Plotting Logic for Gann (Handles NaNs correctly)
         fig6 = go.Figure()
         fig6.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
-        
-        # Only plot valid data
         mask = ~np.isnan(df['gann_act'])
         df_g = df[mask]
         
-        # Segmented Color Line
-        # We plot points but colored by trend. 
-        # To make it a continuous line with changing colors, we can group traces or use a color scale hack.
-        # Simple method: Two traces, one for Bull, one for Bear (breaks continuity but looks cleaner)
-        # Better method: Step line with segments.
-        
-        for i in range(1, len(df_g)):
-            # Check for trend switch or continuity
-            if i > 500: break # optimize loop for visual only
-            
-        # Optimization: Just plot markers or simplified line for performance
+        # Plot markers to show trend
         fig6.add_trace(go.Scatter(
             x=df_g['timestamp'], y=df_g['gann_act'],
-            mode='markers+lines', 
+            mode='markers', 
             marker=dict(color=np.where(df_g['gann_trend']==1, '#00ff00', '#ff0000'), size=4),
-            line=dict(color='gray', width=1, dash='dot'),
             name='Gann Activator'
         ))
-            
         fig6.update_layout(height=500, template='plotly_dark', margin=dict(l=0,r=0,t=0,b=0), title="Gann High Low Activator")
         st.plotly_chart(fig6, use_container_width=True)
 
@@ -672,7 +584,6 @@ if not df.empty:
         fig2.add_trace(go.Scatter(x=df['timestamp'], y=df['apex_upper'], mode='lines', line=dict(width=0), showlegend=False))
         fig2.add_trace(go.Scatter(x=df['timestamp'], y=df['apex_lower'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(102, 252, 241, 0.1)', name='Cloud'))
         fig2.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
-        
         for i, r in df[df['is_sup']].iloc[-5:].iterrows():
             fig2.add_shape(type="rect", x0=r['timestamp'], y0=r['low'], x1=df['timestamp'].iloc[-1], y1=r['low']-(r['atr']*0.5), fillcolor="rgba(0,255,0,0.2)", line_width=0)
         for i, r in df[df['is_res']].iloc[-5:].iterrows():
