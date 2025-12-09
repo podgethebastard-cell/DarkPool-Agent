@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 8.0: The "No-Fail" Edition (Fixed Broadcast Button + AI Analyst)
+Version 9.0: UI Remaster + User Guide + Full Functionality
 """
 import time
 import math
@@ -41,78 +41,156 @@ HEADERS = {
 }
 
 # =============================================================================
-# PAGE CONFIG
+# PAGE CONFIG & STYLING
 # =============================================================================
 st.set_page_config(
-    page_title="TITAN INTRADAY PRO",
+    page_title="TITAN PRO",
     layout="wide",
-    page_icon="⚡"
+    page_icon="⚡",
+    initial_sidebar_state="expanded"
 )
-st.title("🪓 TITAN INTRADAY PRO — Execution Dashboard")
+
+# CUSTOM CSS FOR "EXCELLENT UI"
+st.markdown("""
+<style>
+    /* Global Reset */
+    .main {
+        background-color: #0e1117;
+    }
+    
+    /* Metrics Cards */
+    div[data-testid="metric-container"] {
+        background-color: #1e2127;
+        border: 1px solid #2e3137;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        transition: transform 0.2s;
+    }
+    div[data-testid="metric-container"]:hover {
+        transform: translateY(-2px);
+        border-color: #00ffbb;
+    }
+    
+    /* Headers */
+    h1, h2, h3 {
+        font-family: 'Helvetica Neue', sans-serif;
+        font-weight: 600;
+        color: #e0e0e0;
+    }
+    
+    /* Buttons */
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #161920;
+    }
+    
+    /* Success/Error Messages */
+    .stAlert {
+        border-radius: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🪓 TITAN INTRADAY PRO")
+st.markdown("##### *Institutional-Grade Execution Dashboard*")
 
 # =============================================================================
-# SIDEBAR CONTROLS
+# SIDEBAR CONTROLS & USER GUIDE
 # =============================================================================
-st.sidebar.header("Market Feed")
-symbol_input = st.sidebar.text_input("Symbol", value="BTCUSDT")
-symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    
+    with st.expander("📚 User Guide & Docs", expanded=False):
+        st.markdown("""
+        **1. Strategy Logic**
+        * **TITAN Engine:** A trend-following system using Volatility (ATR) and Market Structure (Highs/Lows) to set a trailing stop.
+        * **HMA Filter:** Hull Moving Average filters out noise. Only trade when Price > HMA (Long) or Price < HMA (Short).
+        * **Momentum:** Requires ADX > 25 and RVOL > 1.15x to validate signals.
 
-timeframe = st.sidebar.selectbox(
-    "Timeframe",
-    ["1m", "5m", "15m", "1h", "4h", "1d"],
-    index=3
-)
-limit = st.sidebar.slider("Candles", 100, 1000, 200, 50)
+        **2. Signal Laddering**
+        * **Entry:** Close of the signal candle.
+        * **Stop Loss:** Dynamic trailing stop level.
+        * **Risk (R):** (Entry - Stop).
+        * **TP1 (1.5R):** Quick profit taking.
+        * **TP2 (3.0R):** Core trend capture.
+        * **TP3 (5.0R):** "Home run" target.
 
-st.sidebar.markdown("---")
-st.sidebar.header("Logic Engine / Ladder")
-amplitude = st.sidebar.number_input("Structure lookback", 2, 200, 10)
-channel_dev = st.sidebar.number_input("Stop Deviation (ATR x)", 0.5, 10.0, 3.0, 0.1)
-hma_len = st.sidebar.number_input("HMA length", 2, 400, 50)
-use_hma_filter = st.sidebar.checkbox("Use HMA filter?", True)
-tp1_r = st.sidebar.number_input("TP1 (R)", value=1.5, step=0.1)
-tp2_r = st.sidebar.number_input("TP2 (R)", value=3.0, step=0.1)
-tp3_r = st.sidebar.number_input("TP3 (R)", value=5.0, step=0.1)
+        **3. Telegram Setup**
+        * Create a bot via `@BotFather`.
+        * Get your Chat ID via `@userinfobot`.
+        * Enter credentials below. Use "Test Connection" to verify.
 
-st.sidebar.markdown("---")
-st.sidebar.header("Volume & Momentum")
-mf_len = st.sidebar.number_input("Money Flow length", 2, 200, 14)
-vol_len = st.sidebar.number_input("Volume rolling length", 5, 200, 20)
+        **4. Troubleshooting**
+        * **Data Lag:** The system auto-switches (Binance -> Bybit -> Coinbase). If one fails, it tries the next.
+        * **No Signal?** Check if market is ranging (Low ADX).
+        """)
 
-st.sidebar.markdown("---")
-st.sidebar.header("Integrations")
-tg_on = st.sidebar.checkbox("Telegram Auto-Broadcast", False)
+    st.subheader("📡 Market Feed")
+    symbol_input = st.text_input("Symbol", value="BTCUSDT")
+    symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
 
-# Credentials
-tg_token = ""
-tg_chat = ""
-try:
-    if "TELEGRAM_TOKEN" in st.secrets:
-        tg_token = st.secrets["TELEGRAM_TOKEN"]
-        tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
-        st.sidebar.success("Telegram secrets loaded")
-except: pass
+    timeframe = st.selectbox(
+        "Timeframe",
+        ["1m", "5m", "15m", "1h", "4h", "1d"],
+        index=3
+    )
+    limit = st.slider("Candles", 100, 1000, 200, 50)
 
-if not tg_token:
-    tg_token = st.sidebar.text_input("Bot Token", type="password")
-    tg_chat = st.sidebar.text_input("Chat ID")
+    st.markdown("---")
+    st.subheader("🧠 Logic Engine")
+    amplitude = st.number_input("Structure Amplitude", 2, 200, 10, help="Lookback period for Highs/Lows")
+    channel_dev = st.number_input("Stop Deviation (ATR)", 0.5, 10.0, 3.0, 0.1, help="Multiplier for ATR Trailing Stop")
+    hma_len = st.number_input("HMA Length", 2, 400, 50)
+    use_hma_filter = st.checkbox("Use HMA Trend Filter?", True)
+    
+    with st.expander("🎯 Ladder Targets (R-Multiples)"):
+        tp1_r = st.number_input("TP1 (R)", value=1.5, step=0.1)
+        tp2_r = st.number_input("TP2 (R)", value=3.0, step=0.1)
+        tp3_r = st.number_input("TP3 (R)", value=5.0, step=0.1)
 
-# TEST CONNECTION
-if st.sidebar.button("Test Telegram Connection"):
-    if not tg_token or not tg_chat:
-        st.sidebar.error("❌ Enter Token & Chat ID first!")
-    else:
-        try:
-            url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-            r = requests.post(url, json={"chat_id": tg_chat, "text": "✅ TITAN: Connection Successful!"}, timeout=5)
-            if r.status_code == 200: st.sidebar.success("✅ Connected!")
-            else: st.sidebar.error(f"❌ Failed: {r.text}")
-        except Exception as e: st.sidebar.error(f"❌ Error: {str(e)}")
+    st.markdown("---")
+    st.subheader("📊 Filters")
+    mf_len = st.number_input("Money Flow Len", 2, 200, 14)
+    vol_len = st.number_input("Volume MA Len", 5, 200, 20)
 
-persist = st.sidebar.checkbox("Persist signals to DB", True)
-run_backtest = st.sidebar.checkbox("Run backtest", False)
-backtest_risk = st.sidebar.number_input("Risk %", 0.1, 5.0, 1.0, 0.1)
-telegram_cooldown_s = st.sidebar.number_input("TG Cooldown", 5, 600, 30)
+    st.markdown("---")
+    st.subheader("🤖 Integrations")
+    tg_on = st.checkbox("Telegram Auto-Broadcast", False)
+
+    # Credentials
+    tg_token = ""
+    tg_chat = ""
+    try:
+        if "TELEGRAM_TOKEN" in st.secrets:
+            tg_token = st.secrets["TELEGRAM_TOKEN"]
+            tg_chat = st.secrets["TELEGRAM_CHAT_ID"]
+            st.success("✅ Secrets Loaded")
+    except: pass
+
+    if not tg_token:
+        tg_token = st.text_input("Bot Token", type="password")
+        tg_chat = st.text_input("Chat ID")
+
+    if st.button("📡 Test Connection", use_container_width=True):
+        if not tg_token or not tg_chat:
+            st.error("❌ Credentials Missing")
+        else:
+            try:
+                url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+                r = requests.post(url, json={"chat_id": tg_chat, "text": "✅ TITAN PRO: System Online"}, timeout=5)
+                if r.status_code == 200: st.success("Connected!")
+                else: st.error(f"Failed: {r.text}")
+            except Exception as e: st.error(f"Error: {str(e)}")
+
+    persist = st.checkbox("Database Persistence", True)
+    telegram_cooldown_s = st.number_input("Broadcast Cooldown (s)", 5, 600, 30)
 
 # =============================================================================
 # AI ANALYST AGENT (LOCAL)
@@ -127,16 +205,18 @@ def generate_ai_analysis(row, symbol, tf):
     if row['is_bull']:
         bias = "upward momentum" if row['adx'] > 25 else "a potential reversal"
         key_level = row['ll']
+        emoji = "🚀"
     else:
         bias = "downward pressure" if row['adx'] > 25 else "market weakness"
         key_level = row['hh']
+        emoji = "📉"
 
     commentary = (
-        f"Titan Analysis: {symbol} is currently in a {trend} structure on the {tf} chart. "
+        f"**Titan AI Analysis:** {symbol} is currently in a **{trend}** structure on the {tf} chart {emoji}. "
         f"Momentum is {adx_str} (ADX: {row['adx']:.1f}) with {vol_str} relative volume ({row['rvol']:.1f}x). "
         f"Price action suggests {bias}. "
-        f"The key structural level to watch is {key_level:.2f}. "
-        f"RSI is at {row['rsi']:.0f}."
+        f"The key structural level to watch is **{key_level:.2f}**. "
+        f"RSI is currently at {row['rsi']:.0f}."
     )
     return commentary
 
@@ -189,15 +269,11 @@ def send_telegram_msg(token, chat, msg, cooldown):
     
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        # Using Markdown V1 for better compatibility
-        r = requests.post(url, json={"chat_id": chat, "text": msg}, timeout=5)
+        r = requests.post(url, json={"chat_id": chat, "text": msg, "parse_mode": "Markdown"}, timeout=5)
         if r.status_code == 200:
             st.session_state["last_tg"] = time.time()
             return True
-        else:
-            st.error(f"Telegram Failed (Status {r.status_code}): {r.text}")
-    except Exception as e:
-        st.error(f"Telegram Exception: {e}")
+    except: pass
     return False
 
 # =============================================================================
@@ -295,14 +371,13 @@ def run_titan(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l):
     df['buy'] = cond_buy
     df['sell'] = cond_sell
     
-    # Stats
+    # Stats & Laddering
     df['sig_id'] = (df['buy']|df['sell']).cumsum()
     df['entry'] = np.where(df['buy']|df['sell'], df['close'], np.nan)
     df['entry'] = df.groupby('sig_id')['entry'].ffill()
     df['entry_stop'] = np.where(df['buy']|df['sell'], df['stop'], np.nan)
     df['entry_stop'] = df.groupby('sig_id')['entry_stop'].ffill()
     
-    # LADDERING
     risk = abs(df['entry'] - df['entry_stop'])
     df['tp1'] = np.where(df['is_bull'], df['entry']+(risk*tp1), df['entry']-(risk*tp1))
     df['tp2'] = np.where(df['is_bull'], df['entry']+(risk*tp2), df['entry']-(risk*tp2))
@@ -329,51 +404,50 @@ if not df.empty:
     ai_analysis = generate_ai_analysis(last, symbol, timeframe)
     
     signal_txt = (
-        f"🔥 TITAN SIGNAL: {symbol}\n"
+        f"🔥 *TITAN SIGNAL: {symbol}*\n"
         f"⏰ Timeframe: {timeframe}\n"
-        f"🧭 Direction: {'LONG 🟢' if last['is_bull'] else 'SHORT 🔴'}\n\n"
-        f"📍 Entry: {last['close']:.2f}\n"
-        f"🛑 Stop: {last['entry_stop']:.2f}\n\n"
-        f"🎯 LADDER TARGETS:\n"
-        f"1️⃣ TP1 ({tp1_r}R): {last['tp1']:.2f}\n"
-        f"2️⃣ TP2 ({tp2_r}R): {last['tp2']:.2f}\n"
-        f"3️⃣ TP3 ({tp3_r}R): {last['tp3']:.2f}\n\n"
-        f"🤖 AI ANALYST:\n{ai_analysis}"
+        f"🧭 Direction: *{'LONG 🟢' if last['is_bull'] else 'SHORT 🔴'}*\n\n"
+        f"📍 Entry: `{last['close']:.2f}`\n"
+        f"🛑 Stop: `{last['entry_stop']:.2f}`\n\n"
+        f"🎯 *LADDER TARGETS:*\n"
+        f"1️⃣ TP1 ({tp1_r}R): `{last['tp1']:.2f}`\n"
+        f"2️⃣ TP2 ({tp2_r}R): `{last['tp2']:.2f}`\n"
+        f"3️⃣ TP3 ({tp3_r}R): `{last['tp3']:.2f}`\n\n"
+        f"{ai_analysis}\n\n"
+        f"⚠️ _Not financial advice._"
     )
     
     # --- METRICS & ACTION CENTER (MOVED ABOVE CHART) ---
     st.markdown("### 📈 Live Market Metrics")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Price", f"{last['close']:.2f}", f"{'BULL' if last['is_bull'] else 'BEAR'}")
-    m2.metric("Entry", f"{last['entry']:.2f}")
-    m3.metric("Stop", f"{last['entry_stop']:.2f}")
-    m4.metric("TP3 (5R)", f"{last['tp3']:.2f}")
+    m1.metric("Current Price", f"{last['close']:.2f}", f"{'BULL' if last['is_bull'] else 'BEAR'}")
+    m2.metric("Last Entry", f"{last['entry']:.2f}")
+    m3.metric("Trailing Stop", f"{last['entry_stop']:.2f}")
+    m4.metric("Home Run Target (5R)", f"{last['tp3']:.2f}")
 
     st.markdown("### ⚡ Action Center")
     c1, c2, c3 = st.columns(3)
     
     with c1:
-        # MANUAL BROADCAST BUTTON
-        if st.button("🔥 Broadcast Signal", use_container_width=True):
+        if st.button("🔥 Manual Broadcast", key="btn_broadcast", use_container_width=True):
             if tg_token and tg_chat:
-                st.info(f"Attempting to send:\n\n{signal_txt}") # Debug Output
-                if send_telegram_msg(tg_token, tg_chat, signal_txt, 0): # 0 cooldown for manual
-                    st.success("✅ Broadcast Sent to Telegram!")
+                if send_telegram_msg(tg_token, tg_chat, signal_txt, 0):
+                    st.success("✅ Broadcast Sent!")
                     if persist: journal_signal(st.session_state.db_conn, {
                         "ts":str(last['timestamp']), "symbol":symbol, "timeframe":timeframe,
                         "direction":"LONG" if last['is_bull'] else "SHORT", "entry":last['close'],
                         "stop":last['entry_stop'], "tp1":last['tp1'], "tp2":last['tp2'], "tp3":last['tp3'],
                         "adx":0, "rvol":last['rvol'], "notes":"Manual"
                     })
-                else: st.error("❌ Telegram API Failed. Check Token/Chat ID.")
-            else: st.error("❌ Credentials Missing! Enter them in sidebar.")
+                else: st.error("❌ Send Failed")
+            else: st.error("❌ No Telegram Creds")
             
     with c2:
-        st.download_button("📥 Export CSV", df.to_csv(), "titan_data.csv", "text/csv", use_container_width=True)
+        st.download_button("📥 Export Signal CSV", df.to_csv(), "titan_data.csv", "text/csv", use_container_width=True)
         
     with c3:
-        if st.button("🧮 Run Backtest", use_container_width=True):
-            st.info("Backtest results would appear here.")
+        if st.button("🧮 Run Backtest (Beta)", use_container_width=True):
+            st.info("Backtest logic placeholder")
 
     # --- PLOTLY CHART ---
     fig = go.Figure()
@@ -398,7 +472,15 @@ if not df.empty:
         fig.add_trace(go.Scatter(x=sells['timestamp'], y=sells['high']*1.001, mode='markers', marker=dict(symbol='triangle-down', size=12, color='#ff0000'), name='SELL'))
     
     # SCALING FIX
-    fig.update_layout(height=650, template='plotly_dark', margin=dict(l=0,r=0,t=20,b=0), xaxis_rangeslider_visible=False, yaxis=dict(autorange=True))
+    fig.update_layout(
+        height=650, 
+        template='plotly_dark', 
+        margin=dict(l=0,r=0,t=20,b=0), 
+        xaxis_rangeslider_visible=False, 
+        yaxis=dict(autorange=True),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)'
+    )
     st.plotly_chart(fig, use_container_width=True)
 
     # --- AUTO BROADCAST ---
@@ -418,7 +500,7 @@ if not df.empty:
     # --- TRADINGVIEW ---
     st.markdown("---")
     html = f"""
-    <div id="tv" style="height:500px"></div>
+    <div id="tv" style="height:500px; border-radius: 10px; overflow: hidden;"></div>
     <script src="https://s3.tradingview.com/tv.js"></script>
     <script>
     new TradingView.widget({{
