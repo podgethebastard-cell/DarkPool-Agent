@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 17.2: LIVE Ticker + Full Brain Integration + JS Clock
+Version 17.7: "All-In" Signal Broadcast (Flow + Sentiment Added)
 """
 import time
 import math
@@ -43,14 +43,16 @@ st.markdown("""
         box-shadow: 0 4px 15px rgba(0,0,0,0.3);
     }
     
-    /* Live Clock Styling */
+    /* Live Clock Styling - NEON GREEN UPGRADE */
     #live_clock {
         font-family: 'Roboto Mono', monospace;
-        font-size: 24px;
-        color: #66fcf1;
-        font-weight: bold;
+        font-size: 26px;
+        color: #39ff14;
+        text-shadow: 0 0 10px rgba(57, 255, 20, 0.6);
+        font-weight: 800;
         text-align: right;
         padding: 10px;
+        letter-spacing: 1px;
     }
     
     h1, h2, h3 { font-family: 'Roboto Mono', monospace; color: #c5c6c7; }
@@ -81,22 +83,9 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-TOP_100_ASSETS = [
-    "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "SHIB", "TON",
-    "DOT", "LINK", "BCH", "TRX", "LTC", "NEAR", "MATIC", "UNI", "APT", "ICP",
-    "PEPE", "WIF", "FET", "RNDR", "STX", "FIL", "ATOM", "ARB", "IMX", "KAS",
-    "ETC", "OP", "INJ", "GRT", "LDO", "TIA", "VET", "FLOKI", "BONK", "MKR",
-    "RUNE", "SEI", "ALGO", "ORDI", "EGLD", "FLOW", "QNT", "GALA", "AAVE", "SNX",
-    "SAND", "HBAR", "AXS", "BSV", "MINA", "BEAM", "EOS", "BTT", "MANA", "XLM",
-    "KCS", "CAKE", "NEO", "CHZ", "JUP", "APE", "IOTA", "XTZ", "LUNC", "BLUR",
-    "ZEC", "KLAY", "CFX", "GNO", "ROSE", "DYDX", "CRV", "WOO", "1INCH", "COMP"
-]
-TOP_100_SYMBOLS = [f"{asset}USDT" for asset in TOP_100_ASSETS]
-
 # =============================================================================
 # LIVE TICKER WIDGET (Top of Page)
 # =============================================================================
-# This solves the "Live Price" issue without needing Streamlit to refresh
 components.html(
     """
     <div class="tradingview-widget-container">
@@ -125,7 +114,7 @@ components.html(
 # HEADER with JS Clock
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1:
-    st.title("💠 TITAN TERMINAL v17.2")
+    st.title("💠 TITAN TERMINAL v17.7")
     st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
 with c_head2:
     # JavaScript Clock (Updates every second client-side)
@@ -151,7 +140,6 @@ with c_head2:
 with st.sidebar:
     st.header("⚙️ SYSTEM CONTROL")
     
-    # Simple manual refresh button is better than auto-refresh for "Pro" feel
     if st.button("🔄 FORCE REFRESH DATA", use_container_width=True):
         st.rerun()
 
@@ -161,11 +149,18 @@ with st.sidebar:
         **2. APEX:** HMA Cloud Structure.
         **3. GANN:** HiLo Step Activator.
         **4. MATRIX:** Money Flow + Hyper Wave.
+        **5. VWAP:** Institutional Average Price.
+        **6. SQUEEZE:** Volatility Compression.
         """)
 
     st.subheader("📡 FEED")
-    symbol_select = st.selectbox("Asset", options=TOP_100_SYMBOLS, index=0)
-    symbol = symbol_select.strip().upper().replace("/", "").replace("-", "")
+    
+    # Universal Search Box
+    symbol_input = st.text_input("Asset Search (e.g. BTC)", value="BTC")
+    symbol = symbol_input.strip().upper().replace("/", "").replace("-", "")
+    if not symbol.endswith("USDT"): 
+        symbol += "USDT"
+
     timeframe = st.selectbox("Interval", ["1m", "5m", "15m", "1h", "4h", "1d"], index=3)
     limit = st.slider("Depth", 100, 1000, 300, 50)
 
@@ -225,7 +220,16 @@ def calculate_fibonacci(df, lookback=50):
     recent = df.iloc[-lookback:]
     h, l = recent['high'].max(), recent['low'].min()
     d = h - l
-    return {'fib_382': h - (d*0.382), 'fib_500': h - (d*0.5), 'fib_618': h - (d*0.618)}
+    
+    # Standard Retrace Levels
+    fibs = {
+        'fib_382': h - (d * 0.382), # Shallow / Continuation
+        'fib_500': h - (d * 0.500), # Equilibrium
+        'fib_618': h - (d * 0.618), # Golden Pocket (Deep)
+        'high': h,
+        'low': l
+    }
+    return fibs
 
 def calculate_fear_greed_index(df):
     try:
@@ -281,8 +285,8 @@ def run_backtest(df):
     net_r = (len(df_res[df_res['outcome']=='WIN']) * tp1_r) - len(df_res[df_res['outcome']=='LOSS'])
     return total_trades, win_rate, net_r
 
-# --- THE "BRAIN" FUNCTION ---
-def generate_full_report(row, symbol, tf, fibs, fg_index):
+# --- THE "BRAIN" FUNCTION (ENHANCED WITH VWAP & SQUEEZE) ---
+def generate_full_report(row, symbol, tf, fibs, fg_index, smart_stop):
     # 1. Titan Status
     titan_status = "BULLISH 🟢" if row['is_bull'] else "BEARISH 🔴"
     
@@ -294,44 +298,58 @@ def generate_full_report(row, symbol, tf, fibs, fg_index):
     # 3. Gann Status
     gann_status = "BULLISH 🟢" if row['gann_trend'] == 1 else "BEARISH 🔴"
     
-    # 4. Matrix (Flow) Status
+    # 4. VWAP Status
+    vwap_status = "BULLISH (Above) 🟢" if row['close'] > row['vwap'] else "BEARISH (Below) 🔴"
+    
+    # 5. Squeeze Status
+    if row['in_squeeze']: sq_status = "SQUEEZING (Energy Building) ⚠️"
+    else: sq_status = "FIRING (Energy Released) 🚀"
+
+    # 6. Matrix & Volume
     flow_val = row['money_flow']
     flow_status = "INFLOW 🌊" if flow_val > 0 else "OUTFLOW 🩸"
-    
-    # 5. Volume Status
     vol_status = "HIGH" if row['rvol'] > 1.2 else "NORMAL"
     
     # Confluence Score
     score = 0
     if row['is_bull'] and row['apex_trend'] == 1: score += 1
     if row['is_bull'] and row['gann_trend'] == 1: score += 1
+    if row['is_bull'] and row['close'] > row['vwap']: score += 1 # VWAP Confluence
+    
     if not row['is_bull'] and row['apex_trend'] == -1: score += 1
     if not row['is_bull'] and row['gann_trend'] == -1: score += 1
+    if not row['is_bull'] and row['close'] < row['vwap']: score += 1 # VWAP Confluence
     
     confluence = "WEAK"
-    if score >= 2: confluence = "STRONG 🔥"
+    if score >= 3: confluence = "INSTITUTIONAL 🔥"
+    elif score == 2: confluence = "MODERATE"
     
-    # Sentiment Text
+    # Sentiment
     sent_txt = "NEUTRAL"
     if fg_index > 70: sent_txt = "GREED"
     if fg_index < 30: sent_txt = "FEAR"
 
     # Report Text
     report = (
-        f"**🤖 TITAN BRAIN REPORT**\n"
+        f"**🤖 TITAN ANALYST REPORT: {symbol}**\n"
         f"---------------------------\n"
         f"**1. MARKET REGIME:**\n"
         f"• Structure: **{confluence}**\n"
         f"• Titan Trend: {titan_status}\n"
         f"• Apex Cloud: {apex_status}\n"
         f"• Gann Activator: {gann_status}\n\n"
-        f"**2. FLOW & MOMENTUM:**\n"
+        f"**2. INSTITUTIONAL DATA:**\n"
+        f"• VWAP: {vwap_status}\n"
+        f"• TTM Squeeze: {sq_status}\n\n"
+        f"**3. FLOW & MOMENTUM:**\n"
         f"• Money Flow: {flow_status} ({flow_val:.2f})\n"
         f"• Volume: {vol_status} (RVOL: {row['rvol']:.2f})\n"
         f"• Sentiment: {sent_txt} ({fg_index})\n\n"
-        f"**3. KEY LEVELS:**\n"
-        f"• Golden Zone (50%): {fibs['fib_500']:.2f}\n"
-        f"• Stop Loss: {row['entry_stop']:.2f}\n"
+        f"**4. KEY LEVELS:**\n"
+        f"• 0.382 (Aggressive): {fibs['fib_382']:.2f}\n"
+        f"• 0.500 (Equilibrium): {fibs['fib_500']:.2f}\n"
+        f"• 0.618 (Golden Pocket): {fibs['fib_618']:.2f}\n"
+        f"• **SMART STOP:** {smart_stop:.2f}\n"
         f"---------------------------"
     )
     return report
@@ -369,6 +387,29 @@ def run_engines(df, amp, dev, hma_l, hma_on, tp1, tp2, tp3, mf_l, vol_l, gann_l)
     df['tr'] = np.maximum(df['high']-df['low'], np.maximum(abs(df['high']-df['close'].shift(1)), abs(df['low']-df['close'].shift(1))))
     df['atr'] = df['tr'].ewm(alpha=1/14, adjust=False).mean()
     df['hma'] = calculate_hma(df['close'], hma_l)
+    
+    # --- VWAP ENGINE ---
+    # Typical Price * Volume
+    df['tp'] = (df['high'] + df['low'] + df['close']) / 3
+    df['vol_tp'] = df['tp'] * df['volume']
+    # Cumulative Sums for VWAP
+    df['vwap'] = df['vol_tp'].cumsum() / df['volume'].cumsum()
+    
+    # --- SQUEEZE ENGINE (TTM STYLE) ---
+    # Bollinger Bands (20, 2)
+    bb_basis = df['close'].rolling(20).mean()
+    bb_dev = df['close'].rolling(20).std() * 2.0
+    bb_upper = bb_basis + bb_dev
+    bb_lower = bb_basis - bb_dev
+    
+    # Keltner Channels (20, 1.5 ATR)
+    kc_basis = df['close'].rolling(20).mean() # Using SMA as centerline
+    kc_dev = df['atr'] * 1.5
+    kc_upper = kc_basis + kc_dev
+    kc_lower = kc_basis - kc_dev
+    
+    # Squeeze Logic: If BB inside KC = Squeeze IS ON
+    df['in_squeeze'] = (bb_lower > kc_lower) & (bb_upper < kc_upper)
     
     delta = df['close'].diff()
     gain = delta.clip(lower=0).ewm(alpha=1/14).mean()
@@ -517,30 +558,74 @@ if not df.empty:
     fibs = calculate_fibonacci(df)
     fg_index = calculate_fear_greed_index(df)
     
-    # GENERATE REPORT USING ALL ENGINES
-    ai_report = generate_full_report(last, symbol, timeframe, fibs, fg_index)
+    # --- SMART STOP LOGIC ---
+    if last['is_bull']:
+        smart_stop = min(last['entry_stop'], fibs['fib_618'] * 0.9995) 
+    else:
+        smart_stop = max(last['entry_stop'], fibs['fib_618'] * 1.0005)
     
+    # GENERATE REPORT
+    ai_report = generate_full_report(last, symbol, timeframe, fibs, fg_index, smart_stop)
+    
+    # --- CALCULATE RISK METRICS ---
+    entry_price = last['close']
+    risk_pct = abs(entry_price - smart_stop) / entry_price * 100
+    
+    vol_tier = "🟢 LOW RISK"
+    if risk_pct > 2.0: vol_tier = "🟡 MED RISK"
+    if risk_pct > 5.0: vol_tier = "🔴 HIGH VOLATILITY"
+
     # --- METRICS ---
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("PRICE", f"{last['close']:.2f}", f"{'BULL' if last['is_bull'] else 'BEAR'}")
     m2.metric("GANN TREND", "BULL" if last['gann_trend']==1 else "BEAR")
-    m3.metric("STOP LOSS", f"{last['entry_stop']:.2f}")
+    m3.metric("SMART STOP", f"{smart_stop:.2f}") 
     m4.metric("TP3 (5R)", f"{last['tp3']:.2f}")
 
     # --- ACTION CENTER ---
     c_act1, c_act2, c_act3 = st.columns(3)
-    signal_txt = f"🔥 *TITAN SIGNAL: {symbol}*\n⏰ TF: {timeframe} | 🧭 Dir: *{'LONG 🟢' if last['is_bull'] else 'SHORT 🔴'}*\n📍 Entry: `{last['close']:.2f}`\n🛑 Stop: `{last['entry_stop']:.2f}`\n\n{ai_report}\n⚠️ _NFA_"
+    
+    # ENHANCED SIGNAL TEXT (INCLUDES EVERYTHING)
+    signal_txt = (
+        f"🔥 *TITAN SIGNAL: {symbol}*\n"
+        f"➖➖➖➖➖➖➖➖➖➖\n"
+        f"📊 *STRATEGY INFO:*\n"
+        f"• Type: *{'LONG 🟢' if last['is_bull'] else 'SHORT 🔴'}* | TF: {timeframe}\n"
+        f"• Volatility: {vol_tier} (Risk: {risk_pct:.2f}%)\n"
+        f"• Money Flow: {'🌊 INFLOW' if last['money_flow']>0 else '🩸 OUTFLOW'}\n"
+        f"• Sentiment: {fg_index}/100\n"
+        f"• VWAP Relation: {'Above' if last['close'] > last['vwap'] else 'Below'}\n"
+        f"• Squeeze Status: {'⚠️ ACTIVE' if last['in_squeeze'] else '🚀 FIRING'}\n\n"
+        f"📍 *ENTRY:* `{entry_price:.4f}`\n\n"
+        f"🛡️ *SMART STOP:* `{smart_stop:.4f}`\n"
+        f"_(Below 0.618 Golden Pocket)_\n\n"
+        f"🎯 *TARGETS:*\n"
+        f"1️⃣ TP1 (1.5R): `{last['tp1']:.4f}`\n"
+        f"2️⃣ TP2 (3.0R): `{last['tp2']:.4f}`\n"
+        f"3️⃣ TP3 (5.0R): `{last['tp3']:.4f}`\n"
+        f"➖➖➖➖➖➖➖➖➖➖\n"
+        f"⚠️ _NFA: Manage Risk_"
+    )
 
     with c_act1:
         if st.button("🔥 BROADCAST SIGNAL", use_container_width=True):
             if tg_token and tg_chat:
-                if send_telegram_msg(tg_token, tg_chat, signal_txt, 0): st.success("SENT!")
+                if send_telegram_msg(tg_token, tg_chat, signal_txt, 0): st.success("SIGNAL SENT!")
                 else: st.error("FAILED")
             else: st.error("NO CREDS (Check secrets.toml or Inputs)")
     
     with c_act2: 
-        if st.button("🤖 ANALYST REPORT", use_container_width=True):
-            st.info(ai_report)
+        # BROADCAST REPORT
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            if st.button("🤖 VIEW REPORT", use_container_width=True):
+                st.info(ai_report)
+        with col_r2:
+            if st.button("✈️ POST REPORT TO TG", use_container_width=True):
+                if tg_token and tg_chat:
+                    if send_telegram_msg(tg_token, tg_chat, ai_report, 0): st.success("REPORT SENT!")
+                    else: st.error("FAILED")
+                else: st.error("NO CREDS")
 
     with c_act3: 
         # LIVE BACKTEST
@@ -552,6 +637,8 @@ if not df.empty:
     fig = go.Figure()
     fig.add_candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price')
     fig.add_trace(go.Scatter(x=df['timestamp'], y=df['hma'], mode='lines', name='HMA', line=dict(color='#66fcf1', width=1)))
+    # NEW: VWAP TRACE
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['vwap'], mode='lines', name='VWAP', line=dict(color='#9933ff', width=2, dash='solid')))
     
     buys = df[df['buy']]; sells = df[df['sell']]
     if not buys.empty: fig.add_trace(go.Scatter(x=buys['timestamp'], y=buys['low']*0.999, mode='markers', marker=dict(symbol='triangle-up', size=12, color='#00ff00'), name='BUY'))
