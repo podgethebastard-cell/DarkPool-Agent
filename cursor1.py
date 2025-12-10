@@ -1,4 +1,4 @@
-  import pandas as pd
+import pandas as pd
 import numpy as np
 import datetime
 import random
@@ -24,6 +24,7 @@ class Trade:
     price: float
     quantity: float
     commission: float
+    pnl: float = 0.0  # Added field to track realized PnL per trade easily
 
 
 @dataclass
@@ -103,7 +104,9 @@ class MarketDataCursor:
         # Ensure we don't look ahead
         end_idx = self._current_index
         start_idx = max(0, end_idx - window_size)
-        return self._data.iloc[0:end_idx]
+        
+        # [FIXED] Correctly using start_idx to slice the dataframe
+        return self._data.iloc[start_idx:end_idx]
 
 
 # ==========================================
@@ -204,10 +207,14 @@ class PortfolioManager:
                 commission = revenue * TRANSACTION_COST
                 
                 self.cash += (revenue - commission)
+                
+                # Calculate PnL for this trade
+                realized_pnl = (price - position.average_entry_price) * quantity
+                
                 self.positions.remove(position)
                 
-                self.trade_log.append(Trade(timestamp, symbol, 'SELL', price, quantity, commission))
-                print(f"[{timestamp}] SELL {symbol} @ {price:.2f} | PnL: {(price - position.average_entry_price)*quantity:.2f}")
+                self.trade_log.append(Trade(timestamp, symbol, 'SELL', price, quantity, commission, pnl=realized_pnl))
+                print(f"[{timestamp}] SELL {symbol} @ {price:.2f} | PnL: {realized_pnl:.2f}")
 
     def update_equity(self, current_price: float):
         position_value = sum([p.quantity * current_price for p in self.positions])
@@ -265,9 +272,18 @@ class TradingAgent:
         
         # Calculate Win Rate
         if len(self.portfolio.trade_log) > 0:
-            # Simple heuristic for wins: Close Price > Open Price on Sell trades (checking PnL logic effectively)
-            # A more complex reporter would track trade pairs (entry vs exit).
-            pass
+            # Filter only for SELL trades (exits) to calculate win rate
+            exits = [t for t in self.portfolio.trade_log if t.side == 'SELL']
+            if exits:
+                wins = len([t for t in exits if t.pnl > 0])
+                win_rate = (wins / len(exits)) * 100
+                print(f"Winning Trades:  {wins}")
+                print(f"Losing Trades:   {len(exits) - wins}")
+                print(f"Win Rate:        {win_rate:.2f}%")
+            else:
+                print("Win Rate:        N/A (No positions closed)")
+        else:
+            print("Win Rate:        N/A (No trades)")
 
 
 # ==========================================
@@ -290,5 +306,4 @@ if __name__ == "__main__":
     
     # 4. Run
     agent.run()
-
 
