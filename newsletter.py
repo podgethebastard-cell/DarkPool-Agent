@@ -1,4 +1,4 @@
-pip install streamlit yfinance pandas matplotlib
+
 streamlit run app.py
 import streamlit as st
 import yfinance as yf
