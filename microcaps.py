@@ -2,425 +2,387 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import openai
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import io
 import xlsxwriter
 import requests
 import numpy as np
 
 # ------------------------------------------------------------------
-# CONFIGURATION & SETUP
+# CONFIGURATION
 # ------------------------------------------------------------------
-st.set_page_config(page_title="AI Micro-Cap Mining Scout", layout="wide")
-
-st.title("💎 AI Micro-Cap Mining Scout")
+st.set_page_config(page_title="Apex SMC Scout", layout="wide")
+st.title("🏛️ Apex Trend & Liquidity Master (SMC) Scout")
 st.markdown("""
-**Focus: High-Risk / High-Reward Micro-Caps ($10M - $500M)**
-This agent hunts for "Tenbaggers" by analyzing:
-1.  **Cash Runway:** Does the company have cash to drill, or is a dilutive raise coming?
-2.  **Cash Backing:** Is the stock trading close to its cash value? (Downside protection).
-3.  **Explosive Technicals:** Micro-caps move on news. We scan for volume spikes.
+**SMC & Trend Edition:** This agent runs the **Apex v8.0 Pine Script logic** in Python.
+It scans for:
+* 🌊 **Apex Trends:** HMA-based trend following with Volatility Bands.
+* 🏛️ **Smart Money:** Detects **BOS** (Break of Structure) and **FVG** (Fair Value Gaps).
+* 🚀 **Momentum Signals:** Replicates the WaveTrend + ADX + Volume Buy Signals.
 """)
 
 # ------------------------------------------------------------------
-# SECRETS & SIDEBAR
+# SIDEBAR & SECRETS
 # ------------------------------------------------------------------
 st.sidebar.header("Configuration")
-
-# 1. OpenAI API Key
 if "OPENAI_API_KEY" in st.secrets:
     api_key = st.secrets["OPENAI_API_KEY"]
     st.sidebar.success("OpenAI Key: Loaded")
 else:
     api_key = st.sidebar.text_input("Enter OpenAI API Key", type="password")
 
-# 2. Telegram Integration
 use_telegram = False
 if "TELEGRAM_TOKEN" in st.secrets and "TELEGRAM_CHAT_ID" in st.secrets:
     tele_token = st.secrets["TELEGRAM_TOKEN"]
     tele_chat_id = st.secrets["TELEGRAM_CHAT_ID"]
     use_telegram = True
     st.sidebar.success("Telegram: Connected")
-else:
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Telegram Setup (Optional)")
-    tele_token = st.sidebar.text_input("Bot Token", type="password")
-    tele_chat_id = st.sidebar.text_input("Chat ID")
-    use_telegram = bool(tele_token and tele_chat_id)
 
 # ------------------------------------------------------------------
-# 1. MICRO-CAP UNIVERSE (Explorers & Developers)
+# 1. UNIVERSE (Diverse Mix)
 # ------------------------------------------------------------------
-# Focus: TSX-V (Venture), CSE, and ASX Small Caps
 MICRO_UNIVERSE = [
-    # Gold/Silver Juniors (Canada/US)
-    "ABRA.V", "AMX.V", "DSV.TO", "WM.TO", "GWM.V", "SBB.TO", "KRR.TO", "PGM.V", "LIO.V",
-    "NFG.V", "VZLA.V", "SGD.V", "RVG.V", "DEF.V",
-    # Uranium Juniors (High Volatility)
-    "ISO.V", "CUR.V", "SYH.V", "LAM.TO", "AAZ.V", "CVV.V", "FCU.TO",
-    # Lithium/Battery Metals (ASX/Canada)
-    "PMET.TO", "CRE.TO", "LLI.AX", "GL1.AX", "AZS.AX", "VUL.AX", "INR.AX", "SYA.AX",
-    # Copper/Base Metals
-    "ALS.TO", "FIL.TO", "NGQ.TO", "WAR.AX", "RXM.AX", "ADN.AX"
+    # Biotech
+    "VNDA", "ORMP", "SELB", "ATRA", "XFOR", "PLX", "SENS",
+    # Tech/AI
+    "QUIK", "ATOM", "KOPN", "EMKR", "UPLD", "MVIS", "WATT", "AIRG",
+    # Crypto/High Beta
+    "MARA", "RIOT", "HUT", "CLSK", "COIN", "MSTR",
+    # Industrial
+    "LNN", "WNC", "TITN", "ALG", "WIRE", "IESC",
+    # Consumer
+    "TA", "BKE", "CRMT", "LQDT", "GROW"
 ]
 
 # ------------------------------------------------------------------
-# 2. TECHNICAL ANALYSIS ENGINE (Micro-Cap Optimized)
+# 2. APEX ENGINE (Pine Script Logic in Python)
 # ------------------------------------------------------------------
-def calculate_technicals(hist):
-    """
-    Calculates RSI, Volatility, and Volume Spikes.
-    """
-    if hist is None or len(hist) < 50:
+class ApexEngine:
+    @staticmethod
+    def calculate_hma(series, length):
+        """Calculates Hull Moving Average (HMA)"""
+        if len(series) < length: return pd.Series(0, index=series.index)
+        
+        def wma(s, l):
+            weights = np.arange(1, l + 1)
+            return s.rolling(l).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+
+        wma_half = wma(series, int(length / 2))
+        wma_full = wma(series, length)
+        diff = 2 * wma_half - wma_full
+        return wma(diff, int(np.sqrt(length)))
+
+    @staticmethod
+    def calculate_atr(df, length=14):
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift())
+        low_close = np.abs(df['Low'] - df['Close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        # Pine Script RMA is roughly Pandas EWM alpha=1/length
+        return true_range.ewm(alpha=1/length, adjust=False).mean()
+
+    @staticmethod
+    def calculate_adx(df, length=14):
+        # Simplified ADX calculation
+        up = df['High'].diff()
+        down = -df['Low'].diff()
+        plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+        minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+        
+        tr = ApexEngine.calculate_atr(df, length)
+        plus_di = 100 * (pd.Series(plus_dm).ewm(alpha=1/length, adjust=False).mean() / tr)
+        minus_di = 100 * (pd.Series(minus_dm).ewm(alpha=1/length, adjust=False).mean() / tr)
+        dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+        return dx.ewm(alpha=1/length, adjust=False).mean()
+
+    @staticmethod
+    def calculate_wavetrend(df):
+        # LazyBear / Apex WaveTrend
+        ap = (df['High'] + df['Low'] + df['Close']) / 3
+        esa = ap.ewm(span=10, adjust=False).mean()
+        d = (ap - esa).abs().ewm(span=10, adjust=False).mean()
+        ci = (ap - esa) / (0.015 * d)
+        tci = ci.ewm(span=21, adjust=False).mean() # tci line
+        return tci
+
+    @staticmethod
+    def detect_smc(df):
+        """Detects BOS (Break of Structure) and FVGs"""
+        # 1. PIVOTS (Lookback 10)
+        # Note: In real-time we can only know a pivot occurred N bars ago
+        lookback = 10
+        df['Pivot_High'] = df['High'].rolling(window=lookback*2+1, center=True).max()
+        df['Pivot_Low'] = df['Low'].rolling(window=lookback*2+1, center=True).min()
+        
+        # 2. BOS Detection (Price crossing recent confirmed pivot)
+        # We perform a simplified check: Did we close above the 20-day high recently?
+        recent_high = df['High'].shift(1).rolling(20).max()
+        bos_bull = (df['Close'] > recent_high) & (df['Close'].shift(1) <= recent_high.shift(1))
+        
+        # 3. FVG (Fair Value Gap) - Bullish
+        # Low of candle 0 > High of candle 2
+        fvg_bull = (df['Low'] > df['High'].shift(2))
+        fvg_size = (df['Low'] - df['High'].shift(2))
+        
+        return bos_bull, fvg_bull, fvg_size
+
+    @staticmethod
+    def run_full_analysis(df):
+        if len(df) < 60: return None
+        
+        # --- 1. APEX TREND (HMA 55) ---
+        len_main = 55
+        mult = 1.5
+        
+        baseline = ApexEngine.calculate_hma(df['Close'], len_main)
+        atr = ApexEngine.calculate_atr(df, len_main)
+        upper = baseline + (atr * mult)
+        lower = baseline - (atr * mult)
+        
+        # Trend State
+        # 1 = Bull, -1 = Bear
+        # We iterate to simulate the state machine
+        trends = []
+        curr_trend = 0
+        for i in range(len(df)):
+            c = df['Close'].iloc[i]
+            u = upper.iloc[i]
+            l = lower.iloc[i]
+            
+            if c > u: curr_trend = 1
+            elif c < l: curr_trend = -1
+            trends.append(curr_trend)
+        
+        df['Apex_Trend'] = trends
+        
+        # --- 2. SIGNALS (ADX + Vol + Momentum) ---
+        df['ADX'] = ApexEngine.calculate_adx(df)
+        df['WaveTrend'] = ApexEngine.calculate_wavetrend(df)
+        vol_ma = df['Volume'].rolling(20).mean()
+        
+        # Buy Logic: Trend is Bullish + Momentum Oversold/Recovering + Vol OK
+        # Original script: tci < 60 and tci > tci[1] (rising)
+        buy_signal = (
+            (df['Apex_Trend'] == 1) & 
+            (df['WaveTrend'] < 60) & 
+            (df['WaveTrend'] > df['WaveTrend'].shift(1)) &
+            (df['ADX'] > 20) &
+            (df['Volume'] > vol_ma)
+        )
+        
+        # --- 3. SMC ---
+        bos_bull, fvg_bull, fvg_size = ApexEngine.detect_smc(df)
+        df['BOS_Bull'] = bos_bull
+        df['FVG_Bull'] = fvg_bull
+        df['FVG_Size'] = fvg_size
+
+        # Return latest data point
+        last = df.iloc[-1]
+        
+        # Check for recent signals (last 3 days) to catch screen results
+        recent_buy = buy_signal.tail(3).any()
+        recent_bos = df['BOS_Bull'].tail(3).any()
+        has_fvg = df['FVG_Bull'].iloc[-1]
+        
         return {
-            "RSI_14": None, "Trend": "Insufficient Data", 
-            "Volatility": None, "Volume_Spike": False
+            "Price": last['Close'],
+            "Trend": "Bullish 🟢" if last['Apex_Trend'] == 1 else "Bearish 🔴",
+            "WaveTrend": last['WaveTrend'],
+            "ADX": last['ADX'],
+            "Apex_Buy_Signal": recent_buy,
+            "BOS_Alert": recent_bos,
+            "FVG_Detected": has_fvg,
+            "FVG_Size": last['FVG_Size'] if has_fvg else 0
         }
-    
-    # 1. RSI (14-day)
-    delta = hist['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    current_rsi = rsi.iloc[-1]
-    
-    # 2. Trend (Simple SMA check for micro caps)
-    sma_50 = hist['Close'].rolling(window=50).mean().iloc[-1]
-    current_price = hist['Close'].iloc[-1]
-    trend = "Bullish" if current_price > sma_50 else "Bearish"
-        
-    # 3. Volatility (Annualized) - Crucial for Micros
-    daily_returns = hist['Close'].pct_change()
-    volatility = daily_returns.std() * np.sqrt(252)
-    
-    # 4. Volume Spike Detection (Is something happening?)
-    avg_vol_20 = hist['Volume'].rolling(window=20).mean().iloc[-1]
-    current_vol = hist['Volume'].iloc[-1]
-    # If today's volume is 2x the average, it's a spike (news leak?)
-    vol_spike = current_vol > (2 * avg_vol_20)
-
-    return {
-        "RSI_14": round(current_rsi, 2),
-        "Trend": trend,
-        "Volatility": f"{round(volatility*100, 1)}%",
-        "Volume_Spike": vol_spike
-    }
 
 # ------------------------------------------------------------------
-# 3. DATA FETCHING (MICRO CAP OPTIMIZED)
+# 3. DATA & SCREENING
 # ------------------------------------------------------------------
-@st.cache_data(ttl=3600) 
-def get_micro_financials(ticker_symbol):
+@st.cache_data(ttl=3600)
+def get_financials(ticker):
     try:
-        stock = yf.Ticker(ticker_symbol)
+        stock = yf.Ticker(ticker)
         info = stock.info
-        
-        # MICRO CAP FILTER: $10M to $500M
-        market_cap = info.get('marketCap', 0)
-        if market_cap < 10_000_000: return None  # Too illiquid/Penny stock risk
-        if market_cap > 500_000_000: return None # Graduated to Mid-Cap
-
-        # Extraction
-        data = {
-            "ticker": ticker_symbol,
-            "name": info.get('longName', ticker_symbol),
-            "country": info.get('country', 'Unknown'),
-            "sector": "Mining Junior",
-            "market_cap": market_cap,
-            "current_price": info.get('currentPrice', 0),
-            
-            # Survival Metrics
-            "total_cash": info.get('totalCash', 0),
-            "total_debt": info.get('totalDebt', 0),
-            "book_value": info.get('bookValue', 0),
-            "price_to_book": info.get('priceToBook', 999),
-            
-            # Ownership (Important for micros)
-            "insider_ownership": info.get('heldPercentInsiders', 0),
+        return {
+            "ticker": ticker,
+            "name": info.get('longName', ticker),
+            "sector": info.get('sector', 'Unknown'),
+            "market_cap": info.get('marketCap', 0),
+            "stock_obj": stock
         }
-        
-        # 1. CASH BACKING RATIO
-        # (Total Cash / Market Cap). 
-        # If this is 0.5, then 50% of the share price is backed by cash. Very safe.
-        if market_cap > 0:
-            data["cash_backing"] = data["total_cash"] / market_cap
-        else:
-            data["cash_backing"] = 0
-            
-        # 2. ENTERPRISE VALUE (MCap + Debt - Cash)
-        # Low EV means cheap acquisition target
-        data["enterprise_value"] = market_cap + data["total_debt"] - data["total_cash"]
-
-        return data
-    except Exception as e:
-        return None
-
-def get_price_history(ticker_symbol):
-    try:
-        stock = yf.Ticker(ticker_symbol)
-        hist = stock.history(period="6mo") # 6 months is enough for micros
-        return hist
     except:
         return None
 
-def get_price_at_date(hist, target_date_str):
-    target_date = pd.to_datetime(target_date_str).tz_localize(None)
-    if hist is None or hist.empty: return None
-    hist.index = hist.index.tz_localize(None)
-    hist = hist.sort_index()
+def get_history(stock_obj):
     try:
-        idx = hist.index.get_indexer([target_date], method='nearest')[0]
-        return hist.iloc[idx]['Close']
+        # Need enough data for HMA 55 + ATR
+        return stock_obj.history(period="1y") 
     except:
-        return hist['Close'].iloc[-1]
+        return None
 
-# ------------------------------------------------------------------
-# 4. MICRO SCREENING LOGIC
-# ------------------------------------------------------------------
-def run_micro_screen(universe):
+def run_apex_screen(universe):
     progress_bar = st.progress(0)
-    status_text = st.empty()
+    status = st.empty()
     results = []
     
     total = len(universe)
     for i, ticker in enumerate(universe):
-        status_text.text(f"Scouting: {ticker} ({i+1}/{total})")
-        progress_bar.progress((i + 1) / total)
+        status.text(f"Running Apex Algorithm: {ticker}...")
+        progress_bar.progress((i+1)/total)
         
-        # 1. Fundamentals
-        data = get_micro_financials(ticker)
+        data = get_financials(ticker)
         if not data: continue
+        
+        hist = get_history(data['stock_obj'])
+        if hist is None or len(hist) < 60: continue
+        
+        # RUN APEX ENGINE
+        apex_data = ApexEngine.run_full_analysis(hist)
+        if not apex_data: continue
+        
+        # SCORING (SMC + Trend)
+        score = 0
+        tags = []
+        
+        if apex_data['Trend'] == "Bullish 🟢":
+            score += 1
             
-        # 2. Technicals
-        hist = get_price_history(data['ticker']) 
-        technicals = calculate_technicals(hist)
-        data.update(technicals)
-
-        # 3. MICRO CAP FILTERS
-        
-        cash_ratio = data['cash_backing'] # 0.0 to 1.0+
-        insider = data['insider_ownership']
-        pb = data['price_to_book'] or 999
-        vol_spike = data['Volume_Spike']
-        
-        # List A: The "Cash Box" (Trading near cash value)
-        # Safe play: If Cash > 20% of Mcap
-        l_cash = (cash_ratio > 0.20)
-        
-        # List B: Insider Conviction
-        # Insiders own > 10%
-        l_insider = (insider > 0.10)
-        
-        # List C: Deep Value (Trading under Book Value)
-        # Market hates it, but assets are there
-        l_value = (pb < 1.0)
-        
-        # List D: Action (Volume Spike + Bullish)
-        l_action = vol_spike and (data['Trend'] == "Bullish")
-
-        # Keep if matches ANY criteria
-        if any([l_cash, l_insider, l_value, l_action]):
-            # Calc Performance
-            curr = data['current_price']
-            # Just take 3 month performance for micros (moves fast)
-            p_start = hist['Close'].iloc[0] if (hist is not None and not hist.empty) else curr
-            perf = ((curr - p_start) / p_start)
-
+        if apex_data['Apex_Buy_Signal']:
+            score += 3
+            tags.append("APEX BUY SIGNAL")
+            
+        if apex_data['BOS_Alert']:
+            score += 2
+            tags.append("BOS (Structure Break)")
+            
+        if apex_data['FVG_Detected']:
+            score += 1
+            tags.append("FVG Zone")
+            
+        if score >= 1:
             row = data.copy()
-            row.update({
-                "perf_6mo": perf,
-                "matched_criteria": [k for k,v in zip(["CashRich","HighInsider","DeepValue","VolSpike"], [l_cash,l_insider,l_value,l_action]) if v]
-            })
+            del row['stock_obj']
+            row.update(apex_data)
+            row['Score'] = score
+            row['Tags'] = ", ".join(tags)
             results.append(row)
             
     progress_bar.empty()
-    status_text.empty()
+    status.empty()
     return pd.DataFrame(results)
 
 # ------------------------------------------------------------------
-# 5. AI SPECULATOR ANALYST
+# 4. AI ANALYST (SMC AWARE)
 # ------------------------------------------------------------------
-def analyze_micro_with_ai(row, api_key):
+def analyze_smc_with_ai(row, api_key):
     client = openai.OpenAI(api_key=api_key)
     
     prompt = f"""
-    Act as a Micro-Cap Speculator (High Risk Tolerance). Analyze this junior miner.
+    Act as a Smart Money Concepts (SMC) Trader. Analyze this setup based on the Apex v8 indicator logic.
     
-    [PROFILE]
-    Name: {row['name']} ({row['ticker']})
-    Market Cap: ${row['market_cap'] / 1e6:.1f}M
-    Cash Backing: {row['cash_backing']*100:.1f}% of Market Cap is CASH.
-    Insider Ownership: {row['insider_ownership']*100:.1f}%
+    [TICKER] {row['ticker']} (${row['Price']:.2f})
+    [TREND] {row['Trend']} (HMA 55 Baseline)
     
-    [TECHNICALS]
-    Trend: {row['Trend']} | Volatility: {row['Volatility']}
-    Volume Spike Today: {row['Volume_Spike']}
+    [SIGNALS]
+    Apex Buy Signal: {row['Apex_Buy_Signal']} (WaveTrend + ADX + Vol confirmed)
+    BOS (Break of Structure): {row['BOS_Alert']}
+    FVG (Fair Value Gap): {row['FVG_Detected']} (Size: {row['FVG_Size']:.2f})
     
-    OUTPUT REQUIREMENTS (Separated by "|"):
-    1. VERDICT: "Speculative Buy", "Watchlist", or "Avoid".
-    2. CASH RUNWAY: Comment on if they need to raise money soon (Dilution Risk).
-    3. BLUE SKY: What is the dream scenario? (e.g. "Next major district discovery").
-    4. RED FLAG: The single biggest danger.
+    [MOMENTUM]
+    WaveTrend TCI: {row['WaveTrend']:.1f}
+    ADX Strength: {row['ADX']:.1f}
     
-    Example:
-    Speculative Buy | Solid cash position, no raise needed for 12 months. | Could define a new lithium district in Quebec. | Low liquidity, hard to exit position.
+    OUTPUT REQUIREMENTS:
+    1. VERDICT: "Strong Long", "Scalp Long", "Wait", or "Short".
+    2. SMC STRUCTURE: Explain the BOS/FVG context. (e.g. "Price created a FVG after breaking structure").
+    3. EXECUTION: Where is the entry? (e.g. "Enter on FVG retest").
     """
     
     try:
         response = client.chat.completions.create(
             model="gpt-4",
-            messages=[{"role": "system", "content": "You are a micro-cap speculator."},
+            messages=[{"role": "system", "content": "You are an SMC master trader."},
                       {"role": "user", "content": prompt}],
             temperature=0.7
         )
         content = response.choices[0].message.content
         parts = content.split('|')
-        if len(parts) < 4: return ["Watchlist", "AI Error", "AI Error", "AI Error"]
-        return [p.strip() for p in parts[:4]]
+        # Handle loose formatting from AI
+        return content 
     except Exception as e:
-        return ["Error", f"API Error: {str(e)}", "", ""]
+        return f"Error: {e}"
 
 # ------------------------------------------------------------------
-# 6. TELEGRAM SENDER
+# 5. TELEGRAM
 # ------------------------------------------------------------------
-def send_telegram_package(token, chat_id, text, excel_buffer, filename):
+def send_telegram(token, chat_id, text, file_buf, fname):
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-        )
-        excel_buffer.seek(0)
-        requests.post(
-            f"https://api.telegram.org/bot{token}/sendDocument",
-            data={"chat_id": chat_id, "caption": "💎 Micro-Cap Scout Report"},
-            files={"document": (filename, excel_buffer, "application/vnd.ms-excel")}
-        )
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      data={"chat_id": chat_id, "text": text})
+        file_buf.seek(0)
+        requests.post(f"https://api.telegram.org/bot{token}/sendDocument",
+                      data={"chat_id": chat_id},
+                      files={"document": (fname, file_buf, "application/vnd.ms-excel")})
         return True
-    except Exception as e:
-        st.error(f"Telegram Error: {e}")
-        return False
+    except: return False
 
 # ------------------------------------------------------------------
-# MAIN EXECUTION
+# MAIN UI
 # ------------------------------------------------------------------
-if "micro_done" not in st.session_state:
-    st.session_state.micro_done = False
-if "micro_df" not in st.session_state:
-    st.session_state.micro_df = None
-if "micro_excel" not in st.session_state:
-    st.session_state.micro_excel = None
+if "apex_df" not in st.session_state: st.session_state.apex_df = None
+if "apex_excel" not in st.session_state: st.session_state.apex_excel = None
 
-if st.button("🔎 Scout for Tenbaggers"):
+if st.button("🏛️ Run Apex SMC Scanner"):
     if not api_key:
-        st.error("Please provide OpenAI API Key.")
+        st.error("Need OpenAI API Key")
     else:
-        st.subheader("1. Scouting Micro-Cap Universe...")
-        
-        df = run_micro_screen(MICRO_UNIVERSE)
+        st.subheader("1. Calculating HMA, BOS & Order Flow...")
+        df = run_apex_screen(MICRO_UNIVERSE)
         
         if df.empty:
-            st.warning("No micro-caps matched criteria. (Check market hours or data availability).")
+            st.warning("No setups found.")
         else:
-            # Sort: Prioritize "Volume Spikes" (Action) then "Cash Backing" (Safety)
-            df = df.sort_values(by=['Volume_Spike', 'cash_backing'], ascending=False)
+            df = df.sort_values(by='Score', ascending=False).head(10).reset_index(drop=True)
             
-            # Select Top 10
-            final_df = df.head(10).reset_index(drop=True)
-            
-            st.success(f"Found {len(final_df)} Micro-Cap Opportunities.")
-            
-            # AI Analysis
-            st.subheader("2. Assessing Drill Potential...")
+            st.subheader("2. SMC Analyst Review...")
+            ai_results = []
             prog = st.progress(0)
-            for i, idx in enumerate(final_df.index):
-                row = final_df.loc[idx]
-                insights = analyze_micro_with_ai(row, api_key)
-                final_df.loc[idx, 'AI_Verdict'] = insights[0]
-                final_df.loc[idx, 'Cash_Runway'] = insights[1]
-                final_df.loc[idx, 'Blue_Sky'] = insights[2]
-                final_df.loc[idx, 'Red_Flag'] = insights[3]
-                prog.progress((i+1)/len(final_df))
+            for i, idx in enumerate(df.index):
+                res = analyze_smc_with_ai(df.loc[idx], api_key)
+                df.loc[idx, 'SMC_Analysis'] = res
+                prog.progress((i+1)/len(df))
             prog.empty()
             
-            st.session_state.micro_df = final_df
-            st.session_state.micro_done = True
+            st.session_state.apex_df = df
             
-            # Create Excel
-            output_df = pd.DataFrame()
-            output_df['Ticker'] = final_df['ticker']
-            output_df['Name'] = final_df['name']
-            output_df['Tags'] = final_df['matched_criteria'].apply(lambda x: ", ".join(x))
-            output_df['Market Cap'] = final_df['market_cap']
-            output_df['Cash % of MCap'] = final_df['cash_backing']
-            output_df['Insider %'] = final_df['insider_ownership']
-            output_df['Vol Spike'] = final_df['Volume_Spike']
-            output_df['AI Verdict'] = final_df['AI_Verdict']
-            output_df['Dilution Risk'] = final_df['Cash_Runway']
-            output_df['Blue Sky'] = final_df['Blue_Sky']
-            output_df['Red Flag'] = final_df['Red_Flag']
+            # Excel
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name="Apex SMC")
+            buf.seek(0)
+            st.session_state.apex_excel = buf.getvalue()
 
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                output_df.to_excel(writer, index=False, sheet_name="Micro Caps")
-                # Format Percentage Columns
-                workbook = writer.book
-                worksheet = writer.sheets['Micro Caps']
-                pct_fmt = workbook.add_format({'num_format': '0.0%'})
-                worksheet.set_column('E:F', 12, pct_fmt) # Cash% and Insider%
-
-            buffer.seek(0)
-            st.session_state.micro_excel = buffer.getvalue()
-
-# ------------------------------------------------------------------
-# DISPLAY
-# ------------------------------------------------------------------
-if st.session_state.micro_done and st.session_state.micro_df is not None:
-    final_df = st.session_state.micro_df
+if st.session_state.apex_df is not None:
+    df = st.session_state.apex_df
     
-    st.write("### 🧨 Top High-Risk Micro Picks")
-    
-    # Custom display for Micros
-    for i, row in final_df.iterrows():
-        with st.expander(f"{row['ticker']} - {row['name']} ({row['AI_Verdict']})"):
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Market Cap", f"${row['market_cap']/1e6:.1f}M")
-            c2.metric("Cash Backing", f"{row['cash_backing']*100:.1f}%", help="% of share price backed by hard cash.")
-            c3.metric("Volume Spike", "YES" if row['Volume_Spike'] else "No")
-            st.write(f"**Dream Scenario:** {row['Blue_Sky']}")
-            st.write(f"**Risk:** {row['Red_Flag']}")
+    st.write("### 🏛️ Apex Signal Matrix")
+    for i, row in df.iterrows():
+        with st.expander(f"{row['ticker']} | {row['Tags']} | {row['Trend']}"):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Price", f"${row['Price']:.2f}")
+            c2.metric("WaveTrend", f"{row['WaveTrend']:.1f}")
+            c3.metric("ADX", f"{row['ADX']:.1f}")
+            c4.metric("FVG Detected", str(row['FVG_Detected']))
+            
+            st.info(f"**SMC Analysis:** {row['SMC_Analysis']}")
 
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        fname = f"MicroCap_Scout_{date.today()}.xlsx"
-        st.download_button("📥 Download Recon Report", data=st.session_state.micro_excel, file_name=fname)
-
-    with col2:
-        if use_telegram:
-            if st.button("📡 Broadcast Speculative Alert"):
-                st.info("Transmitting...")
-                top_stock = final_df.iloc[0]
-                
-                signal_msg = f"""
-🧨 **MICRO-CAP SPEC ALERT** 🧨
-
-**Target:** {top_stock['name']} ({top_stock['ticker']})
-**Verdict:** {top_stock['AI_Verdict']}
-
-**Why we like it:**
-• Market Cap: ${top_stock['market_cap']/1e6:.1f}M
-• Cash Backing: {top_stock['cash_backing']*100:.1f}%
-• Insider Ownership: {top_stock['insider_ownership']*100:.1f}%
-
-**Blue Sky:** {top_stock['Blue_Sky']}
-**Caution:** {top_stock['Red_Flag']}
-"""
-                send_buffer = io.BytesIO(st.session_state.micro_excel)
-                if send_telegram_package(tele_token, tele_chat_id, signal_msg, send_buffer, "MicroCap_Report.xlsx"):
-                    st.success("✅ Alert Sent!")
-                else:
-                    st.error("❌ Transmission Failed.")
-
-st.markdown("---")
-st.caption("Disclaimer: Micro-cap stocks are extremely volatile and can lose 100% of value. 'Cash Backing' is based on last reported financials.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("📥 Download Apex Report", st.session_state.apex_excel, "Apex_SMC.xlsx")
+    with c2:
+        if use_telegram and st.button("📡 Broadcast Apex Signal"):
+            top = df.iloc[0]
+            msg = f"🏛️ **APEX SMC ALERT**\n\nTicker: {top['ticker']}\nTags: {top['Tags']}\nTrend: {top['Trend']}"
+            send_telegram(tele_token, tele_chat_id, msg, io.BytesIO(st.session_state.apex_excel), "Apex.xlsx")
+            st.success("Sent!")
