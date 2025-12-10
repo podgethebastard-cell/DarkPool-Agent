@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 17.9: Live TradingView Price Pane + Neon Clock
+Version 18.0: Live TradingView Price Pane + Neon Clock + Enhanced AI Report
 """
 import time
 import math
@@ -56,6 +56,25 @@ st.markdown("""
         background: #45a29e;
         color: #0b0c10;
     }
+    
+    /* Report Table Styling */
+    div[data-testid="stMarkdownContainer"] table {
+        width: 100%;
+        border-collapse: collapse;
+        background-color: #1f2833;
+        color: #c5c6c7;
+    }
+    div[data-testid="stMarkdownContainer"] th {
+        background-color: #45a29e;
+        color: #0b0c10;
+        text-align: center;
+        padding: 8px;
+    }
+    div[data-testid="stMarkdownContainer"] td {
+        border-bottom: 1px solid #0b0c10;
+        padding: 8px;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -102,7 +121,7 @@ components.html(
 # HEADER with JS Clock (FIXED COLOR INJECTION)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1:
-    st.title("💠 TITAN TERMINAL v17.9")
+    st.title("💠 TITAN TERMINAL v18.0")
     st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
 with c_head2:
     # JavaScript Clock (Updates every second client-side)
@@ -288,74 +307,87 @@ def run_backtest(df):
     net_r = (len(df_res[df_res['outcome']=='WIN']) * tp1_r) - len(df_res[df_res['outcome']=='LOSS'])
     return total_trades, win_rate, net_r
 
-# --- THE "BRAIN" FUNCTION (ENHANCED WITH VWAP & SQUEEZE) ---
+# --- THE "BRAIN" FUNCTION (RE-ENGINEERED FOR LANDSCAPE & DETAIL) ---
 def generate_full_report(row, symbol, tf, fibs, fg_index, smart_stop):
-    # 1. Titan Status
-    titan_status = "BULLISH 🟢" if row['is_bull'] else "BEARISH 🔴"
+    # 1. Determine Confluence Score & Trend Alignment
+    is_bull = row['is_bull']
+    direction = "LONG 🐂" if is_bull else "SHORT 🐻"
     
-    # 2. Apex Status
-    if row['apex_trend'] == 1: apex_status = "BULLISH 🟢"
-    elif row['apex_trend'] == -1: apex_status = "BEARISH 🔴"
-    else: apex_status = "NEUTRAL ⚪"
+    # Alignment Logic
+    titan_sig = 1 if row['is_bull'] else -1
+    apex_sig = row['apex_trend'] # 1, -1, 0
+    gann_sig = row['gann_trend'] # 1, -1
+    vwap_sig = 1 if row['close'] > row['vwap'] else -1
     
-    # 3. Gann Status
-    gann_status = "BULLISH 🟢" if row['gann_trend'] == 1 else "BEARISH 🔴"
+    score_val = 0
+    if titan_sig == apex_sig: score_val += 1
+    if titan_sig == gann_sig: score_val += 1
+    if titan_sig == vwap_sig: score_val += 1
     
-    # 4. VWAP Status
-    vwap_status = "BULLISH (Above) 🟢" if row['close'] > row['vwap'] else "BEARISH (Below) 🔴"
-    
-    # 5. Squeeze Status
-    if row['in_squeeze']: sq_status = "SQUEEZING (Energy Building) ⚠️"
-    else: sq_status = "FIRING (Energy Released) 🚀"
+    confidence = "LOW"
+    if score_val == 3: confidence = "INSTITUTIONAL 🔥"
+    elif score_val == 2: confidence = "HIGH"
+    elif score_val == 1: confidence = "MODERATE"
 
-    # 6. Matrix & Volume
-    flow_val = row['money_flow']
-    flow_status = "INFLOW 🌊" if flow_val > 0 else "OUTFLOW 🩸"
-    vol_status = "HIGH" if row['rvol'] > 1.2 else "NORMAL"
-    
-    # Confluence Score
-    score = 0
-    if row['is_bull'] and row['apex_trend'] == 1: score += 1
-    if row['is_bull'] and row['gann_trend'] == 1: score += 1
-    if row['is_bull'] and row['close'] > row['vwap']: score += 1 # VWAP Confluence
-    
-    if not row['is_bull'] and row['apex_trend'] == -1: score += 1
-    if not row['is_bull'] and row['gann_trend'] == -1: score += 1
-    if not row['is_bull'] and row['close'] < row['vwap']: score += 1 # VWAP Confluence
-    
-    confluence = "WEAK"
-    if score >= 3: confluence = "INSTITUTIONAL 🔥"
-    elif score == 2: confluence = "MODERATE"
-    
-    # Sentiment
-    sent_txt = "NEUTRAL"
-    if fg_index > 70: sent_txt = "GREED"
-    if fg_index < 30: sent_txt = "FEAR"
+    # 2. Market Regime Analysis
+    regime = "TRENDING"
+    if row['in_squeeze']: regime = "COMPRESSION (COILING)"
+    elif abs(row['close'] - row['vwap']) / row['vwap'] > 0.05: regime = "OVER-EXTENDED"
 
-    # Report Text
-    report = (
-        f"**🤖 TITAN ANALYST REPORT: {symbol}**\n"
-        f"---------------------------\n"
-        f"**1. MARKET REGIME:**\n"
-        f"• Structure: **{confluence}**\n"
-        f"• Titan Trend: {titan_status}\n"
-        f"• Apex Cloud: {apex_status}\n"
-        f"• Gann Activator: {gann_status}\n\n"
-        f"**2. INSTITUTIONAL DATA:**\n"
-        f"• VWAP: {vwap_status}\n"
-        f"• TTM Squeeze: {sq_status}\n\n"
-        f"**3. FLOW & MOMENTUM:**\n"
-        f"• Money Flow: {flow_status} ({flow_val:.2f})\n"
-        f"• Volume: {vol_status} (RVOL: {row['rvol']:.2f})\n"
-        f"• Sentiment: {sent_txt} ({fg_index})\n\n"
-        f"**4. KEY LEVELS:**\n"
-        f"• 0.382 (Aggressive): {fibs['fib_382']:.2f}\n"
-        f"• 0.500 (Equilibrium): {fibs['fib_500']:.2f}\n"
-        f"• 0.618 (Golden Pocket): {fibs['fib_618']:.2f}\n"
-        f"• **SMART STOP:** {smart_stop:.2f}\n"
-        f"---------------------------"
-    )
-    return report
+    # 3. Institutional Flow Analysis
+    flow_state = "NEUTRAL"
+    if row['money_flow'] > 0 and is_bull: flow_state = "Valid Accumulation"
+    elif row['money_flow'] < 0 and not is_bull: flow_state = "Valid Distribution"
+    elif row['money_flow'] < 0 and is_bull: flow_state = "⚠️ DIVERGENCE (Price Up, Vol Down)"
+    elif row['money_flow'] > 0 and not is_bull: flow_state = "⚠️ ABSORPTION (Price Down, Vol Up)"
+
+    # 4. Volatility Context
+    vol_desc = "Normal"
+    if row['rvol'] > 2.0: vol_desc = "IGNITION BREAKOUT (High Vol)"
+    elif row['rvol'] < 0.6: vol_desc = "Low Liquidity / Chop"
+    
+    squeeze_txt = "Energy Building 🔋" if row['in_squeeze'] else "Energy Released ⚡"
+
+    # 5. Strategic Commentary Generation
+    bias_color = "🟢" if is_bull else "🔴"
+    vwap_dist = ((row['close'] - row['vwap']) / row['vwap']) * 100
+    
+    commentary = f"Price is currently {abs(vwap_dist):.2f}% {'above' if vwap_dist>0 else 'below'} the institutional VWAP. "
+    if confidence == "INSTITUTIONAL 🔥":
+        commentary += "All trend systems (Titan, Apex, Gann) are perfectly aligned. "
+    else:
+        commentary += "Mixed signals detected between short-term momentum and medium-term structure. "
+        
+    if row['in_squeeze']:
+        commentary += "Volatility is compressing (TTM Squeeze); expect an explosive move soon. "
+    
+    # 6. Formatting the Landscape Table for Markdown
+    # We use a markdown table structure which renders horizontally in Streamlit
+    
+    report_md = f"""
+### 💠 TITAN AI DEEP DIVE: {symbol} [{tf}]
+
+| **SIGNAL MATRIX** | **INSTITUTIONAL DATA** | **VOLATILITY & FLOW** |
+| :--- | :--- | :--- |
+| **DIR:** {direction} | **VWAP:** {row['vwap']:.4f} | **RVOL:** {row['rvol']:.2f} ({vol_desc}) |
+| **CONF:** {confidence} | **REGIME:** {regime} | **FLOW:** {flow_state} |
+| **TITAN:** {bias_color} | **SENTIMENT:** {fg_index}/100 | **SQUEEZE:** {squeeze_txt} |
+| **APEX:** {'🟢' if apex_sig==1 else '🔴' if apex_sig==-1 else '⚪'} | **GANN:** {'🟢' if gann_sig==1 else '🔴'} | **MOMENTUM:** {row['hyper_wave']:.2f} |
+
+---
+
+#### 🧠 STRATEGIC SYNTHESIS
+> **{commentary}**
+
+* **Structure:** The Apex Cloud is currently **{'Bullish' if apex_sig==1 else 'Bearish' if apex_sig==-1 else 'Flat'}**. The Gann Activator is **{'Supporting' if gann_sig == titan_sig else 'Conflicting with'}** the primary trend.
+* **Money Flow:** The Money Flow Index is at **{row['money_flow']:.2f}**. {flow_state}.
+* **Execution Zone:**
+    * **Current Price:** `{row['close']:.4f}`
+    * **Smart Stop:** `{smart_stop:.4f}` (Placed behind Market Structure & Fib 0.618)
+    * **TP1 (1.5R):** `{row['tp1']:.4f}` | **TP2 (3.0R):** `{row['tp2']:.4f}` | **TP3 (5.0R):** `{row['tp3']:.4f}`
+
+"""
+    return report_md
 
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
@@ -567,7 +599,7 @@ if not df.empty:
     else:
         smart_stop = max(last['entry_stop'], fibs['fib_618'] * 1.0005)
     
-    # GENERATE REPORT
+    # GENERATE REPORT (NEW LANDSCAPE LOGIC)
     ai_report = generate_full_report(last, symbol, timeframe, fibs, fg_index, smart_stop)
     
     # --- CALCULATE RISK METRICS ---
@@ -607,7 +639,7 @@ if not df.empty:
     m4.metric("TP3 (5R)", f"{last['tp3']:.2f}")
 
     # --- ACTION CENTER ---
-    c_act1, c_act2, c_act3 = st.columns(3)
+    c_act1, c_act2, c_act3 = st.columns([1, 2, 1])
     
     # ENHANCED SIGNAL TEXT (INCLUDES EVERYTHING)
     signal_txt = (
@@ -641,12 +673,11 @@ if not df.empty:
     
     with c_act2: 
         # BROADCAST REPORT
-        col_r1, col_r2 = st.columns(2)
-        with col_r1:
-            if st.button("🤖 VIEW REPORT", use_container_width=True):
-                st.info(ai_report)
-        with col_r2:
-            if st.button("✈️ POST REPORT TO TG", use_container_width=True):
+        # MODIFIED: Use markdown for direct display instead of info box
+        with st.expander("🤖 TITAN AI REPORT (LIVE)", expanded=True):
+            st.markdown(ai_report, unsafe_allow_html=True)
+            
+            if st.button("✈️ POST THIS REPORT TO TG", use_container_width=True):
                 if tg_token and tg_chat:
                     if send_telegram_msg(tg_token, tg_chat, ai_report, 0): st.success("REPORT SENT!")
                     else: st.error("FAILED")
