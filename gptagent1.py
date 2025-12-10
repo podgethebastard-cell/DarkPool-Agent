@@ -1,13 +1,11 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 18.0: Live TradingView Price Pane + Neon Clock + Enhanced AI Report
+Version 19.1: AI Analyst Integration + Context-Aware LLM (Secrets Edition)
 """
 import time
 import math
-import sqlite3
 import random
 from typing import Dict, Optional, List
-from contextlib import contextmanager
 
 import streamlit as st
 import pandas as pd
@@ -16,6 +14,12 @@ import requests
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from datetime import datetime, timezone
+
+# NEW IMPORT FOR AI
+try:
+    from openai import OpenAI
+except ImportError:
+    st.error("Please install openai: pip install openai")
 
 # =============================================================================
 # PAGE CONFIG
@@ -57,6 +61,13 @@ st.markdown("""
         color: #0b0c10;
     }
     
+    /* Chat Message Styling */
+    .stChatMessage {
+        background-color: rgba(31, 40, 51, 0.5);
+        border: 1px solid #45a29e;
+        border-radius: 10px;
+    }
+
     /* Report Table Styling */
     div[data-testid="stMarkdownContainer"] table {
         width: 100%;
@@ -82,9 +93,6 @@ st.markdown("""
 # CONSTANTS
 # =============================================================================
 BINANCE_API_BASE = "https://api.binance.us/api/v3"
-BYBIT_API_BASE = "https://api.bybit.com/v5/market/kline"
-COINBASE_API_BASE = "https://api.exchange.coinbase.com/products"
-
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json"
@@ -118,14 +126,12 @@ components.html(
     height=50
 )
 
-# HEADER with JS Clock (FIXED COLOR INJECTION)
+# HEADER with JS Clock
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1:
-    st.title("💠 TITAN TERMINAL v18.0")
+    st.title("💠 TITAN TERMINAL v19.1")
     st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
 with c_head2:
-    # JavaScript Clock (Updates every second client-side)
-    # STYLE IS NOW INJECTED DIRECTLY INTO IFRAME
     components.html(
         """
         <div id="live_clock"></div>
@@ -198,6 +204,16 @@ with st.sidebar:
         tp2_r = st.number_input("TP2", value=3.0, step=0.1)
         tp3_r = st.number_input("TP3", value=5.0, step=0.1)
 
+    st.markdown("---")
+    st.subheader("🤖 AI STATUS")
+    # Automatic Secret Loading
+    try:
+        openai_key = st.secrets["OPENAI_API_KEY"]
+        st.success("🟢 AI Engine: ONLINE")
+    except:
+        openai_key = ""
+        st.error("🔴 AI Engine: OFFLINE (Missing Secret)")
+    
     st.markdown("---")
     st.subheader("📊 VOL METRICS")
     hero_metric = st.selectbox("Hero Metric", ["CMF", "Volume RSI", "Volume Oscillator", "RVOL"])
@@ -362,8 +378,6 @@ def generate_full_report(row, symbol, tf, fibs, fg_index, smart_stop):
         commentary += "Volatility is compressing (TTM Squeeze); expect an explosive move soon. "
     
     # 6. Formatting the Landscape Table for Markdown
-    # We use a markdown table structure which renders horizontally in Streamlit
-    
     report_md = f"""
 ### 💠 TITAN AI DEEP DIVE: {symbol} [{tf}]
 
@@ -387,7 +401,7 @@ def generate_full_report(row, symbol, tf, fibs, fg_index, smart_stop):
     * **TP1 (1.5R):** `{row['tp1']:.4f}` | **TP2 (3.0R):** `{row['tp2']:.4f}` | **TP3 (5.0R):** `{row['tp3']:.4f}`
 
 """
-    return report_md
+    return report_md, commentary  # Return commentary as text for LLM context
 
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
@@ -600,7 +614,7 @@ if not df.empty:
         smart_stop = max(last['entry_stop'], fibs['fib_618'] * 1.0005)
     
     # GENERATE REPORT (NEW LANDSCAPE LOGIC)
-    ai_report = generate_full_report(last, symbol, timeframe, fibs, fg_index, smart_stop)
+    ai_report, ai_context_str = generate_full_report(last, symbol, timeframe, fibs, fg_index, smart_stop)
     
     # --- CALCULATE RISK METRICS ---
     entry_price = last['close']
@@ -614,7 +628,7 @@ if not df.empty:
     m1, m2, m3, m4 = st.columns(4)
     
     # ----------------------------------------------------
-    # LIVE TRADINGVIEW PRICE WIDGET (REPLACES STATIC METRIC)
+    # LIVE TRADINGVIEW PRICE WIDGET
     # ----------------------------------------------------
     with m1:
         # Generate TradingView Widget Symbol string (e.g., BINANCE:BTCUSDT)
@@ -673,7 +687,6 @@ if not df.empty:
     
     with c_act2: 
         # BROADCAST REPORT
-        # MODIFIED: Use markdown for direct display instead of info box
         with st.expander("🤖 TITAN AI REPORT (LIVE)", expanded=True):
             st.markdown(ai_report, unsafe_allow_html=True)
             
@@ -704,7 +717,7 @@ if not df.empty:
     st.plotly_chart(fig, use_container_width=True)
 
     # --- TABBED ANALYSIS ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 GANN HILO", "🌊 APEX", "💸 MATRIX", "📉 VOL", "🧠 SENTIMENT"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 GANN HILO", "🌊 APEX", "💸 MATRIX", "📉 VOL", "🧠 SENTIMENT", "🤖 AI ANALYST"])
     
     with tab1:
         fig6 = go.Figure()
@@ -758,6 +771,77 @@ if not df.empty:
         ))
         fig3.update_layout(height=400, template='plotly_dark')
         st.plotly_chart(fig3, use_container_width=True)
+
+    # --- NEW: AI ANALYST TAB ---
+    with tab6:
+        st.subheader("🤖 TITAN AI ANALYST (GPT-4o)")
+        
+        # Initialize chat history
+        if "messages" not in st.session_state:
+            st.session_state["messages"] = [{"role": "assistant", "content": f"I am TITAN AI. I am analyzing {symbol} on the {timeframe} timeframe. \n\nMy live sensors indicate: \n- **Trend:** { 'BULLISH' if last['is_bull'] else 'BEARISH' }\n- **RSI:** {last['rsi']:.2f}\n- **VWAP:** {last['vwap']:.2f}\n\nAsk me about price action, macro outlooks, or potential setups."}]
+
+        # Display chat messages from history on app rerun
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        # React to user input
+        if prompt := st.chat_input("Ask Titan about the market..."):
+            # Display user message
+            st.chat_message("user").markdown(prompt)
+            st.session_state.messages.append({"role": "user", "content": prompt})
+
+            # Check for API Key
+            if not openai_key:
+                err_msg = "⚠️ ACCESS DENIED. I cannot find your 'OPENAI_API_KEY' in the secrets.toml file."
+                st.chat_message("assistant").markdown(err_msg)
+                st.session_state.messages.append({"role": "assistant", "content": err_msg})
+            else:
+                try:
+                    client = OpenAI(api_key=openai_key)
+                    
+                    # SYSTEM CONTEXT INJECTION (THE "VALUE ADD")
+                    # We feed the calculated indicators into the AI so it knows what's happening.
+                    system_prompt = f"""
+                    You are TITAN, an elite quantitative trading assistant. 
+                    You are currently monitoring {symbol} on a {timeframe} timeframe.
+                    
+                    LIVE TECHNICAL DATA:
+                    - Current Price: {last['close']}
+                    - Trend Direction: {'UP' if last['is_bull'] else 'DOWN'}
+                    - RSI (14): {last['rsi']:.2f}
+                    - Volatility (RVOL): {last['rvol']:.2f}
+                    - Squeeze Status: {'Active Squeeze (Coiling)' if last['in_squeeze'] else 'Released'}
+                    - VWAP: {last['vwap']}
+                    - Money Flow: {last['money_flow']:.2f}
+                    - Sentiment Score: {fg_index}/100
+                    - Technical Summary: {ai_context_str}
+                    
+                    INSTRUCTIONS:
+                    - Answer concisely and professionally.
+                    - If asked about trading advice, provide a technical outlook based on the data above but disclaim financial advice.
+                    - If asked about Macro, use your general knowledge but tie it back to the current chart technicals if possible.
+                    - Be confident but risk-aware.
+                    """
+
+                    with st.chat_message("assistant"):
+                        stream = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                            ] + [
+                                {"role": m["role"], "content": m["content"]}
+                                for m in st.session_state.messages
+                            ],
+                            stream=True,
+                        )
+                        response = st.write_stream(stream)
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                
+                except Exception as e:
+                    st.error(f"AI Engine Error: {str(e)}")
+
 
     # --- FOOTER ---
     st.markdown("---")
