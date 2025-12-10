@@ -29,6 +29,7 @@ def check_connectivity():
     Uses the 'requests' library explicitly to check internet status.
     """
     try:
+        # Check a reliable public DNS or site
         response = requests.get("https://www.google.com", timeout=5)
         if response.status_code == 200:
             return True
@@ -59,9 +60,12 @@ def calculate_trend_slope(prices):
 def get_crypto_data(symbol, timeframe, limit):
     """
     Fetches Crypto data using 'ccxt'.
+    SWITCHED TO KRAKEN TO AVOID GEO-BLOCKING (451 Errors).
     """
     try:
-        exchange = ccxt.binance()
+        # Switched from binance() to kraken() for better US/Global public access
+        exchange = ccxt.kraken()
+        
         # Fetch OHLCV data
         bars = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         
@@ -70,7 +74,7 @@ def get_crypto_data(symbol, timeframe, limit):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df
     except Exception as e:
-        st.error(f"Error fetching Crypto data: {e}")
+        st.error(f"Error fetching Crypto data from Kraken: {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=600)
@@ -114,12 +118,14 @@ symbol = ""
 
 if market_type == "Cryptocurrency":
     st.sidebar.subheader("Crypto Settings")
-    symbol = st.sidebar.text_input("Symbol (e.g., BTC/USDT)", value="BTC/USDT")
+    st.sidebar.info("Using **Kraken** API (avoids Geo-blocks).")
+    # Changed default to BTC/USD which is more common on Kraken than USDT
+    symbol = st.sidebar.text_input("Symbol (e.g., BTC/USD)", value="BTC/USD")
     timeframe = st.sidebar.selectbox("Timeframe", ["1d", "4h", "1h", "15m"], index=0)
     limit = st.sidebar.slider("Data Points (Limit)", 50, 500, 100)
     
     if st.sidebar.button("Fetch Crypto Data"):
-        with st.spinner("Fetching from CCXT..."):
+        with st.spinner("Fetching from CCXT (Kraken)..."):
             data = get_crypto_data(symbol, timeframe, limit)
 
 else:
