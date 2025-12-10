@@ -8,5 +8,4 @@ requests
 scipy
 matplotlib
 ccxt
-pip
-install
+
