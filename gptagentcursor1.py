@@ -1,7 +1,7 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
 
-Version 21.0: Optimized for Pandas 2.0+, API Geo-Switching, and Error Handling.
+Version 21.1: Fixed Vectorization Errors & Optimized for Streamlit Cloud
 """
 
 import time
@@ -31,7 +31,6 @@ except ImportError:
 @dataclass
 class APIConfig:
     """API configuration constants"""
-    # Dynamic base URLs are handled in the sidebar now
     BINANCE_US: str = "https://api.binance.us/api/v3"
     BINANCE_GLOBAL: str = "https://api.binance.com/api/v3"
     HEADERS: Dict[str, str] = None
@@ -135,7 +134,7 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # =============================================================================
-# UTILITY FUNCTIONS
+# UTILITY FUNCTIONS (FIXED)
 # =============================================================================
 
 def normalize_symbol(symbol: str) -> str:
@@ -146,11 +145,28 @@ def normalize_symbol(symbol: str) -> str:
     return symbol
 
 
-def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:
-    """Safely divide two numbers, returning default if denominator is zero"""
-    if denominator == 0 or pd.isna(denominator):
+def safe_divide(numerator, denominator, default=0.0):
+    """
+    Safely divide two numbers or Series, returning default if denominator is zero/NaN.
+    Handles both scalar values and Pandas Series (vectorized).
+    """
+    # 1. Perform division (Pandas handles / by 0 automatically by returning 'inf')
+    try:
+        result = numerator / denominator
+    except ZeroDivisionError:
         return default
-    return numerator / denominator
+
+    # 2. If result is a Pandas Series (Column), clean up 'inf' and 'NaN' values
+    if isinstance(result, pd.Series):
+        # Replace infinity with NaN, then fill all NaNs with the default value
+        result = result.replace([np.inf, -np.inf], np.nan).fillna(default)
+        return result
+    
+    # 3. If result is a single number (Scalar), check for issues manually
+    if pd.isna(result) or np.isinf(result):
+        return default
+        
+    return result
 
 
 # =============================================================================
@@ -331,7 +347,7 @@ def run_engines(
     df['tp'] = (df['high'] + df['low'] + df['close']) / 3
     df['vol_tp'] = df['tp'] * df['volume']
     df['vwap'] = df['vol_tp'].cumsum() / df['volume'].cumsum().replace(0, np.nan)
-    df['vwap'] = df['vwap'].ffill() # Fixed deprecated fillna(method)
+    df['vwap'] = df['vwap'].ffill()
     
     # Squeeze Engine (TTM Style)
     bb_basis = df['close'].rolling(20, min_periods=1).mean()
@@ -454,8 +470,8 @@ def run_engines(
     # Ladder (TP Calculation)
     df['sig_id'] = (df['buy'] | df['sell']).cumsum()
     df['entry'] = np.where(df['buy'] | df['sell'], df['close'], np.nan)
-    df['entry'] = df.groupby('sig_id')['entry'].ffill() # Fixed deprecated
-    df['stop_val'] = df.groupby('sig_id')['entry_stop'].ffill() # Fixed deprecated
+    df['entry'] = df.groupby('sig_id')['entry'].ffill()
+    df['stop_val'] = df.groupby('sig_id')['entry_stop'].ffill()
     
     risk = abs(df['entry'] - df['stop_val'])
     df['tp1'] = np.where(
