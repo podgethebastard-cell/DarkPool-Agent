@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 19.3: AI Analyst Fixed + Full Original Functionality
+Version 19.4: AI Analyst Synced with Force Refresh
 """
 import time
 import math
@@ -19,8 +19,7 @@ from datetime import datetime, timezone
 try:
     from openai import OpenAI
 except ImportError:
-    OpenAI = None # Define as None to handle gracefully later
-    # We will show a warning in the sidebar instead of crashing
+    OpenAI = None 
 
 # =============================================================================
 # PAGE CONFIG
@@ -133,7 +132,7 @@ components.html(
 # HEADER with JS Clock (FIXED COLOR INJECTION)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1:
-    st.title("💠 TITAN TERMINAL v19.3")
+    st.title("💠 TITAN TERMINAL v19.4")
     st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
 with c_head2:
     # JavaScript Clock (Updates every second client-side)
@@ -173,7 +172,11 @@ with c_head2:
 with st.sidebar:
     st.header("⚙️ SYSTEM CONTROL")
     
+    # MODIFIED REFRESH LOGIC FOR AI SYNC
     if st.button("🔄 FORCE REFRESH DATA", use_container_width=True):
+        st.cache_data.clear() # Clear data cache
+        if "messages" in st.session_state:
+            del st.session_state["messages"] # Clear chat history to force re-init with new data
         st.rerun()
 
     with st.expander("📚 Engines Guide", expanded=False):
@@ -409,7 +412,7 @@ def generate_full_report(row, symbol, tf, fibs, fg_index, smart_stop):
     * **TP1 (1.5R):** `{row['tp1']:.4f}` | **TP2 (3.0R):** `{row['tp2']:.4f}` | **TP3 (5.0R):** `{row['tp3']:.4f}`
 
 """
-    return report_md, commentary # Added commentary to return for AI Context
+    return report_md, commentary
 
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
