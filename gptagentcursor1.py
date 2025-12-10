@@ -1,7 +1,7 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
 
-Version 20.0: Enhanced Architecture & Performance
+Version 21.0: Optimized for Pandas 2.0+, API Geo-Switching, and Error Handling.
 """
 
 import time
@@ -31,9 +31,9 @@ except ImportError:
 @dataclass
 class APIConfig:
     """API configuration constants"""
-    BINANCE_BASE: str = "https://api.binance.us/api/v3"
-    BYBIT_BASE: str = "https://api.bybit.com/v5/market/kline"
-    COINBASE_BASE: str = "https://api.exchange.coinbase.com/products"
+    # Dynamic base URLs are handled in the sidebar now
+    BINANCE_US: str = "https://api.binance.us/api/v3"
+    BINANCE_GLOBAL: str = "https://api.binance.com/api/v3"
     HEADERS: Dict[str, str] = None
     
     def __post_init__(self):
@@ -206,7 +206,9 @@ def calculate_fear_greed_index(df: pd.DataFrame) -> int:
             return 50
         
         df = df.copy()
-        df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
+        # Prevent log of zero/negative
+        safe_close = df['close'].replace(0, np.nan).ffill()
+        df['log_ret'] = np.log(safe_close / safe_close.shift(1))
         
         vol_30 = df['log_ret'].rolling(30, min_periods=1).std()
         vol_90 = df['log_ret'].rolling(90, min_periods=1).std()
@@ -233,9 +235,10 @@ def calculate_fear_greed_index(df: pd.DataFrame) -> int:
 # =============================================================================
 
 @st.cache_data(ttl=5)
-def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
+def get_klines(symbol_bin: str, interval: str, limit: int, use_us_api: bool) -> pd.DataFrame:
     """Fetch klines from Binance API with error handling"""
     api_config = APIConfig()
+    base_url = api_config.BINANCE_US if use_us_api else api_config.BINANCE_GLOBAL
     
     try:
         params = {
@@ -245,10 +248,10 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
         }
         
         response = requests.get(
-            f"{api_config.BINANCE_BASE}/klines",
+            f"{base_url}/klines",
             params=params,
             headers=api_config.HEADERS,
-            timeout=4
+            timeout=5
         )
         
         if response.status_code == 200:
@@ -256,6 +259,11 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
             if not data:
                 return pd.DataFrame()
             
+            # Defensive check for API error response disguised as 200 (rare but possible)
+            if isinstance(data, dict) and 'code' in data:
+                st.error(f"API Error: {data.get('msg')}")
+                return pd.DataFrame()
+
             df = pd.DataFrame(
                 data,
                 columns=['t', 'o', 'h', 'l', 'c', 'v', 'T', 'q', 'n', 'V', 'Q', 'B']
@@ -269,11 +277,11 @@ def get_klines(symbol_bin: str, interval: str, limit: int) -> pd.DataFrame:
                 'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'
             })
         else:
-            st.error(f"API Error: {response.status_code}")
+            st.error(f"API Error ({response.status_code}): Check Symbol or Region Settings.")
             return pd.DataFrame()
             
     except requests.exceptions.Timeout:
-        st.error("Request timeout - please try again")
+        st.error("Request timeout - API is slow.")
         return pd.DataFrame()
     except requests.exceptions.RequestException as e:
         st.error(f"Network error: {str(e)}")
@@ -323,7 +331,7 @@ def run_engines(
     df['tp'] = (df['high'] + df['low'] + df['close']) / 3
     df['vol_tp'] = df['tp'] * df['volume']
     df['vwap'] = df['vol_tp'].cumsum() / df['volume'].cumsum().replace(0, np.nan)
-    df['vwap'] = df['vwap'].fillna(method='ffill')
+    df['vwap'] = df['vwap'].ffill() # Fixed deprecated fillna(method)
     
     # Squeeze Engine (TTM Style)
     bb_basis = df['close'].rolling(20, min_periods=1).mean()
@@ -446,8 +454,8 @@ def run_engines(
     # Ladder (TP Calculation)
     df['sig_id'] = (df['buy'] | df['sell']).cumsum()
     df['entry'] = np.where(df['buy'] | df['sell'], df['close'], np.nan)
-    df['entry'] = df.groupby('sig_id')['entry'].ffill()
-    df['stop_val'] = df.groupby('sig_id')['entry_stop'].ffill()
+    df['entry'] = df.groupby('sig_id')['entry'].ffill() # Fixed deprecated
+    df['stop_val'] = df.groupby('sig_id')['entry_stop'].ffill() # Fixed deprecated
     
     risk = abs(df['entry'] - df['stop_val'])
     df['tp1'] = np.where(
@@ -815,7 +823,7 @@ def main():
     # Header
     c_head1, c_head2 = st.columns([3, 1])
     with c_head1:
-        st.title("💠 TITAN TERMINAL v20.0")
+        st.title("💠 TITAN TERMINAL v21.0")
         st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
     with c_head2:
         render_live_clock()
@@ -823,6 +831,9 @@ def main():
     # Sidebar
     with st.sidebar:
         st.header("⚙️ SYSTEM CONTROL")
+        
+        # ADDED: Region Selector for API Stability
+        use_us_api = st.checkbox("🇺🇸 Use Binance US API", value=True, help="Uncheck for Global")
         
         if st.button("🔄 FORCE REFRESH DATA", use_container_width=True):
             st.cache_data.clear()
@@ -926,8 +937,8 @@ def main():
                     st.error(f"Failed: {e}")
     
     # Main Content
-    with st.spinner("Initializing Terminal..."):
-        df = get_klines(symbol, timeframe, limit)
+    with st.spinner(f"Connecting to Binance {'US' if use_us_api else 'Global'}..."):
+        df = get_klines(symbol, timeframe, limit, use_us_api)
     
     if df.empty:
         st.error("❌ Failed to fetch market data. Please check your symbol and try again.")
@@ -1359,7 +1370,11 @@ def main():
                 st.session_state.messages.append({"role": "assistant", "content": err_msg})
             else:
                 try:
-                    client = OpenAI(api_key=openai_key)
+                    # Optimized: Check if client exists in session to avoid re-init
+                    if "ai_client" not in st.session_state:
+                        st.session_state["ai_client"] = OpenAI(api_key=openai_key)
+                    
+                    client = st.session_state["ai_client"]
                     
                     system_prompt = f"""
                     You are TITAN, an elite quantitative trading assistant.
