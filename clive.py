@@ -118,10 +118,15 @@ def calculate_technicals(hist):
     }
 
 # ------------------------------------------------------------------
-# 3. DATA FETCHING (ENHANCED)
+# 3. DATA FETCHING (FIXED CACHING)
 # ------------------------------------------------------------------
-@st.cache_data(ttl=3600) # Cache data for 1 hour to speed up re-runs
+@st.cache_data(ttl=3600) 
 def get_deep_financial_data(ticker_symbol):
+    """
+    Fetches fundamental data. 
+    CRITICAL FIX: Does NOT return the 'stock_obj' (yfinance Ticker) 
+    because it is not serializable.
+    """
     try:
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
@@ -131,28 +136,24 @@ def get_deep_financial_data(ticker_symbol):
         if market_cap < 2_000_000_000: return None # Skip small caps
         
         # 2. Fetch Raw Statements for Deep Analysis
-        # Note: yfinance financials calls can be slow, so we handle errors gracefully
         try:
             fin = stock.financials
-            bal = stock.balance_sheet
             cash = stock.cashflow
             has_stmts = True if (not fin.empty) else False
         except:
-            fin, bal, cash = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+            fin, cash = pd.DataFrame(), pd.DataFrame()
             has_stmts = False
 
-        # 3. Calculate CAGR (3-Year Sales) if statements exist
+        # 3. Calculate CAGR (3-Year Sales)
         sales_cagr_3y = 0.0
         if has_stmts and "Total Revenue" in fin.index:
             try:
-                # Get columns (dates) sorted ascending
                 cols = sorted(fin.columns)
                 if len(cols) >= 4:
                     rev_now = fin[cols[-1]].loc["Total Revenue"]
                     rev_3yr = fin[cols[-4]].loc["Total Revenue"]
                     sales_cagr_3y = (rev_now / rev_3yr)**(1/3) - 1
                 elif len(cols) >= 2:
-                    # Fallback to 1 year if 3 years not available
                     rev_now = fin[cols[-1]].loc["Total Revenue"]
                     rev_prev = fin[cols[0]].loc["Total Revenue"]
                     sales_cagr_3y = (rev_now / rev_prev) - 1
@@ -161,7 +162,7 @@ def get_deep_financial_data(ticker_symbol):
         else:
              sales_cagr_3y = info.get('revenueGrowth', 0)
 
-        # 4. Build Data Dictionary
+        # 4. Build Data Dictionary (ONLY SERIALIZABLE TYPES)
         data = {
             "ticker": ticker_symbol,
             "name": info.get('longName', ticker_symbol),
@@ -169,8 +170,6 @@ def get_deep_financial_data(ticker_symbol):
             "industry": info.get('industry', 'Unknown'),
             "market_cap": market_cap,
             "forward_pe": info.get('forwardPE', 0),
-            "trailing_pe": info.get('trailingPE', 0),
-            "revenue_growth_1y": info.get('revenueGrowth', 0),
             "revenue_cagr_3y": sales_cagr_3y,
             "eps_growth": info.get('earningsGrowth', 0),
             "debt_to_equity": info.get('debtToEquity', 999),
@@ -179,17 +178,16 @@ def get_deep_financial_data(ticker_symbol):
             "price_to_book": info.get('priceToBook', 999),
             "peg_ratio": info.get('pegRatio', 999),
             "profit_margin": info.get('profitMargins', 0),
-            "beta": info.get('beta', 1.0),
             "employees": info.get('fullTimeEmployees', 0),
             "avg_volume": info.get('averageVolume', 0),
-            "stock_obj": stock
+            # REMOVED "stock_obj": stock  <-- THIS CAUSED THE ERROR
         }
 
         # FCF Calculation
         try:
             fcf = info.get('freeCashflow', None)
             if fcf is None and has_stmts and "Free Cash Flow" in cash.index:
-                 fcf = cash.iloc[0]["Free Cash Flow"] # Most recent
+                 fcf = cash.iloc[0]["Free Cash Flow"] 
             
             if fcf and fcf > 0:
                 data["p_fcf"] = market_cap / fcf
@@ -201,18 +199,17 @@ def get_deep_financial_data(ticker_symbol):
             data["p_fcf"] = 999
             data["fcf_share"] = 0
 
-        # Insider Placeholder (Rarely available in free API)
         data["insider_percent"] = info.get('heldPercentInsiders', 0)
 
         return data
     except Exception as e:
         return None
 
-def get_price_history(stock_obj):
-    """Fetches 1 year of history for calculations"""
+def get_price_history(ticker_symbol):
+    """Fetches 1 year of history for calculations. Creates new Ticker obj."""
     try:
-        # Fetch slightly more than needed to ensure SMA200 is valid
-        hist = stock_obj.history(period="1y") 
+        stock = yf.Ticker(ticker_symbol) # Instantiate locally
+        hist = stock.history(period="1y") 
         return hist
     except:
         return None
@@ -242,19 +239,19 @@ def run_screening(universe):
         status_text.text(f"Deep Scanning: {ticker} ({i+1}/{total})")
         progress_bar.progress((i + 1) / total)
         
-        # 1. Get Fundamentals
+        # 1. Get Fundamentals (Cached)
         data = get_deep_financial_data(ticker)
         if not data: continue
             
-        # 2. Get Price History & Technicals
-        hist = get_price_history(data['stock_obj'])
+        # 2. Get Price History & Technicals (Live)
+        # We pass the string ticker, NOT a stock object
+        hist = get_price_history(data['ticker']) 
         technicals = calculate_technicals(hist)
         
         # Merge Technicals into Data
         data.update(technicals)
 
         # 3. Apply Filters
-        # Use safe defaults for None values
         pe = data['forward_pe'] or 999
         rev_growth = data['revenue_cagr_3y'] or -1.0
         eps_growth = data['eps_growth'] or -1.0
@@ -268,17 +265,15 @@ def run_screening(universe):
         p_fcf = data['p_fcf'] or 999
         mkt_cap = data['market_cap']
 
-        # List Logic
         l1 = (pe < 25) and (rev_growth > 0.05)
-        l2 = (eps_growth > 0.25) and (de < 15) # Relaxed DE slightly for realism
-        l3 = (ps < 4) and (insider > 0.50) # Relaxed Insider for realism
-        l4 = (div > 0.04) and (pb < 1.5) # Relaxed PB slightly
+        l2 = (eps_growth > 0.25) and (de < 15)
+        l3 = (ps < 4) and (insider > 0.50)
+        l4 = (div > 0.04) and (pb < 1.5)
         l5 = (peg < 2) and (margin > 0.20)
-        l6 = (p_fcf < 20) and (div > 0.02) # Relaxed P/FCF
+        l6 = (p_fcf < 20) and (div > 0.02)
         l7 = (2e9 <= mkt_cap <= 20e9) and (pe < 20) and (eps_growth > 0.15)
 
         if any([l1, l2, l3, l4, l5, l6, l7]):
-            # Calculate Performance Dates
             p_jan = get_price_at_date(hist, "2025-01-01")
             p_apr = get_price_at_date(hist, "2025-04-01")
             p_jun = get_price_at_date(hist, "2025-06-20")
@@ -289,9 +284,7 @@ def run_screening(universe):
             perf_jan = ((curr - p_jan) / p_jan) if p_jan else 0
             perf_apr = ((curr - p_apr) / p_apr) if p_apr else 0
 
-            # Add to results
             row = data.copy()
-            del row['stock_obj']
             row.update({
                 "price_dec24": p_dec24,
                 "price_jan25": p_jan,
@@ -312,7 +305,6 @@ def run_screening(universe):
 def analyze_with_ai_deep(row, api_key):
     client = openai.OpenAI(api_key=api_key)
     
-    # Construct a rich prompt with Technicals + Fundamentals
     prompt = f"""
     Act as a Senior Portfolio Manager. Analyze this stock deeply.
     
@@ -339,9 +331,6 @@ def analyze_with_ai_deep(row, api_key):
     2. FUNDAMENTAL THESIS: 2 sentences on valuation/growth balance.
     3. TECHNICAL VIEW: 1 sentence interpreting RSI and Trend.
     4. RISKS/CATALYSTS: 1 sentence on key upcoming risks or AI exposure.
-    
-    Example:
-    Buy (Undervalued) | Strong cash flows justify the low P/E. | Trend is bullish with RSI neutral, suggesting entry. | Risk of regulation in EU.
     """
     
     try:
@@ -383,30 +372,30 @@ def send_telegram_package(token, chat_id, text, excel_buffer, filename):
 # ------------------------------------------------------------------
 # MAIN EXECUTION
 # ------------------------------------------------------------------
+if "analysis_done" not in st.session_state:
+    st.session_state.analysis_done = False
+if "final_df" not in st.session_state:
+    st.session_state.final_df = None
+if "excel_data" not in st.session_state:
+    st.session_state.excel_data = None
+
 if st.button("🚀 Run Institutional Analysis"):
     if not api_key:
         st.error("Please provide OpenAI API Key.")
     else:
         st.subheader("1. Data Extraction & Quantitative Screening")
         
-        # 1. Run Screen
         df = run_screening(GLOBAL_UNIVERSE)
         
         if df.empty:
             st.warning("Strict filters returned 0 stocks. Try loosening criteria in code.")
         else:
-            # 2. Ranking Logic
-            # Rank Jan Performance
+            # Ranking Logic
             top_jan = df.sort_values(by='perf_since_jan', ascending=False).head(15)
-            # Rank Apr Performance
             top_apr = df.sort_values(by='perf_since_apr', ascending=False).head(15)
-            
             shortlist = pd.concat([top_jan, top_apr]).drop_duplicates(subset='ticker')
-            
-            # Final Sort by Growth Potential (Rev CAGR)
             shortlist = shortlist.sort_values(by='revenue_cagr_3y', ascending=False)
             
-            # Select Unique 10
             final_rows = []
             seen = set()
             for _, row in shortlist.iterrows():
@@ -419,13 +408,10 @@ if st.button("🚀 Run Institutional Analysis"):
             final_df = pd.DataFrame(final_rows)
             
             st.success(f"Identified {len(final_df)} High-Conviction Candidates.")
-            st.dataframe(final_df[['ticker', 'name', 'country', 'forward_pe', 'RSI_14', 'Trend']])
             
-            # 3. AI Analysis Loop
+            # AI Analysis Loop
             st.subheader("2. Generating Analyst Memos...")
-            ai_data = []
             prog = st.progress(0)
-            
             for i, idx in enumerate(final_df.index):
                 row = final_df.loc[idx]
                 insights = analyze_with_ai_deep(row, api_key)
@@ -436,76 +422,74 @@ if st.button("🚀 Run Institutional Analysis"):
                 prog.progress((i+1)/len(final_df))
             prog.empty()
             
-            # 4. Excel Formatting (Detailed)
-            st.subheader("3. Finalizing Report")
+            # Store in Session State
+            st.session_state.final_df = final_df
+            st.session_state.analysis_done = True
             
+            # Create Excel for Session
             output_df = pd.DataFrame()
-            # Info
             output_df['Ticker'] = final_df['ticker']
             output_df['Name'] = final_df['name']
             output_df['Country'] = final_df['country']
             output_df['Industry'] = final_df['industry']
-            
-            # Prices
             output_df['Price (Current)'] = final_df['price_jun25']
-            output_df['Price (Jan 1)'] = final_df['price_jan25']
             output_df['Perf YTD'] = final_df['perf_since_jan']
-            
-            # Fundamentals
             output_df['P/E (Fwd)'] = final_df['forward_pe']
-            output_df['PEG'] = final_df['peg_ratio']
-            output_df['P/S'] = final_df['price_to_sales']
-            output_df['P/FCF'] = final_df['p_fcf']
-            output_df['Rev CAGR (3Y)'] = final_df['revenue_cagr_3y']
-            output_df['Margin'] = final_df['profit_margin']
-            output_df['Debt/Eq'] = final_df['debt_to_equity']
-            
-            # Technicals
             output_df['RSI (14)'] = final_df['RSI_14']
             output_df['Trend Status'] = final_df['Trend']
-            output_df['Volatility'] = final_df['Volatility']
-            output_df['SMA 50'] = final_df['SMA_50']
-            output_df['SMA 200'] = final_df['SMA_200']
-            
-            # AI Insights
             output_df['Analyst Verdict'] = final_df['AI_Verdict']
             output_df['Fundamental Thesis'] = final_df['AI_Thesis']
-            output_df['Technical Commentary'] = final_df['AI_Technical_View']
-            output_df['Risks & AI Exposure'] = final_df['AI_Risks']
+            output_df['Risks'] = final_df['AI_Risks']
 
-            # Buffer
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 output_df.to_excel(writer, index=False, sheet_name="Deep Analysis")
-                wb = writer.book
-                ws = writer.sheets["Deep Analysis"]
-                
-                # Formatting
-                fmt_pct = wb.add_format({'num_format': '0.00%'})
-                fmt_curr = wb.add_format({'num_format': '$#,##0.00'})
-                
-                # Apply formats
-                ws.set_column('E:F', 12, fmt_curr) # Prices
-                ws.set_column('G:G', 10, fmt_pct)  # Perf
-                ws.set_column('L:M', 10, fmt_pct)  # Growth/Margin
-                ws.set_column('P:P', 25)           # Trend Status
-                ws.set_column('T:W', 40)           # AI Text
-            
             buffer.seek(0)
-            file_data = buffer.getvalue()
-            fname = f"Deep_Analysis_{date.today()}.xlsx"
-            
-            # 5. Delivery
-            if use_telegram:
-                st.info("Sending encrypted report to Telegram...")
-                top_pick = final_df.iloc[0]['name']
-                msg = f"🔔 **Institutional Alert**\n\nAnalysis complete for {len(final_df)} stocks.\n🔥 **Top High-Conviction Pick:** {top_pick}\n\nMetrics:\n- RSI: {final_df.iloc[0]['RSI_14']}\n- Trend: {final_df.iloc[0]['Trend']}\n- AI Verdict: {final_df.iloc[0]['AI_Verdict']}\n\nFull report attached."
+            st.session_state.excel_data = buffer.getvalue()
+
+# ------------------------------------------------------------------
+# DISPLAY RESULTS & SIGNALS
+# ------------------------------------------------------------------
+if st.session_state.analysis_done and st.session_state.final_df is not None:
+    final_df = st.session_state.final_df
+    
+    st.write("### 🏆 Top Institutional Picks")
+    st.dataframe(final_df[['ticker', 'name', 'country', 'forward_pe', 'RSI_14', 'Trend', 'AI_Verdict']])
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        fname = f"Deep_Analysis_{date.today()}.xlsx"
+        st.download_button("📥 Download Excel Report", data=st.session_state.excel_data, file_name=fname)
+
+    with col2:
+        if use_telegram:
+            # TELEGRAM SIGNAL BUTTON
+            if st.button("📡 Broadcast Signal to Telegram"):
+                st.info("Sending Signal...")
+                top_stock = final_df.iloc[0]
                 
-                send_buffer = io.BytesIO(file_data)
-                if send_telegram_package(tele_token, tele_chat_id, msg, send_buffer, fname):
-                    st.success("Telegram Sent!")
-            
-            st.download_button("📥 Download Institutional Report", data=file_data, file_name=fname)
-            
+                signal_msg = f"""
+🚨 **DARK POOL AGENT SIGNAL** 🚨
+
+**Top Pick:** {top_stock['name']} ({top_stock['ticker']})
+**Verdict:** {top_stock['AI_Verdict']}
+
+**Technical Profile:**
+• Price: {top_stock['price_jun25']:.2f}
+• RSI (14): {top_stock['RSI_14']}
+• Trend: {top_stock['Trend']}
+
+**Thesis:** {top_stock['AI_Thesis']}
+"""
+                send_buffer = io.BytesIO(st.session_state.excel_data)
+                
+                if send_telegram_package(tele_token, tele_chat_id, signal_msg, send_buffer, "Signal_Report.xlsx"):
+                    st.success("✅ Signal Broadcasted!")
+                else:
+                    st.error("❌ Failed to broadcast.")
+        else:
+             st.warning("Configure Telegram secrets to enable Signals.")
+
 st.markdown("---")
-st.caption("Disclaimer: This tool provides technical and fundamental data for informational purposes. It is not financial advice. Technical indicators (RSI, SMA) are calculated on 1-year daily closing data.")
+st.caption("Disclaimer: This tool provides technical and fundamental data for informational purposes.")
