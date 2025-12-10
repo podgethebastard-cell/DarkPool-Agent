@@ -79,12 +79,10 @@ class ApexEngine:
         low_close = np.abs(df['Low'] - df['Close'].shift())
         ranges = pd.concat([high_low, high_close, low_close], axis=1)
         true_range = ranges.max(axis=1)
-        # Pine Script RMA is roughly Pandas EWM alpha=1/length
         return true_range.ewm(alpha=1/length, adjust=False).mean()
 
     @staticmethod
     def calculate_adx(df, length=14):
-        # Simplified ADX calculation
         up = df['High'].diff()
         down = -df['Low'].diff()
         plus_dm = np.where((up > down) & (up > 0), up, 0.0)
@@ -93,30 +91,35 @@ class ApexEngine:
         tr = ApexEngine.calculate_atr(df, length)
         plus_di = 100 * (pd.Series(plus_dm).ewm(alpha=1/length, adjust=False).mean() / tr)
         minus_di = 100 * (pd.Series(minus_dm).ewm(alpha=1/length, adjust=False).mean() / tr)
-        dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+        
+        # Avoid division by zero
+        sum_di = plus_di + minus_di
+        sum_di = sum_di.replace(0, 1) 
+        
+        dx = 100 * np.abs(plus_di - minus_di) / sum_di
         return dx.ewm(alpha=1/length, adjust=False).mean()
 
     @staticmethod
     def calculate_wavetrend(df):
-        # LazyBear / Apex WaveTrend
         ap = (df['High'] + df['Low'] + df['Close']) / 3
         esa = ap.ewm(span=10, adjust=False).mean()
         d = (ap - esa).abs().ewm(span=10, adjust=False).mean()
+        # Avoid division by zero
+        d = d.replace(0, 0.0001)
         ci = (ap - esa) / (0.015 * d)
-        tci = ci.ewm(span=21, adjust=False).mean() # tci line
+        tci = ci.ewm(span=21, adjust=False).mean() 
         return tci
 
     @staticmethod
     def detect_smc(df):
         """Detects BOS (Break of Structure) and FVGs"""
         # 1. PIVOTS (Lookback 10)
-        # Note: In real-time we can only know a pivot occurred N bars ago
         lookback = 10
+        # Simple rolling max/min to identify local structures
         df['Pivot_High'] = df['High'].rolling(window=lookback*2+1, center=True).max()
         df['Pivot_Low'] = df['Low'].rolling(window=lookback*2+1, center=True).min()
         
         # 2. BOS Detection (Price crossing recent confirmed pivot)
-        # We perform a simplified check: Did we close above the 20-day high recently?
         recent_high = df['High'].shift(1).rolling(20).max()
         bos_bull = (df['Close'] > recent_high) & (df['Close'].shift(1) <= recent_high.shift(1))
         
@@ -141,14 +144,16 @@ class ApexEngine:
         lower = baseline - (atr * mult)
         
         # Trend State
-        # 1 = Bull, -1 = Bear
-        # We iterate to simulate the state machine
         trends = []
         curr_trend = 0
+        upper_vals = upper.values
+        lower_vals = lower.values
+        close_vals = df['Close'].values
+        
         for i in range(len(df)):
-            c = df['Close'].iloc[i]
-            u = upper.iloc[i]
-            l = lower.iloc[i]
+            c = close_vals[i]
+            u = upper_vals[i]
+            l = lower_vals[i]
             
             if c > u: curr_trend = 1
             elif c < l: curr_trend = -1
@@ -161,8 +166,7 @@ class ApexEngine:
         df['WaveTrend'] = ApexEngine.calculate_wavetrend(df)
         vol_ma = df['Volume'].rolling(20).mean()
         
-        # Buy Logic: Trend is Bullish + Momentum Oversold/Recovering + Vol OK
-        # Original script: tci < 60 and tci > tci[1] (rising)
+        # Buy Logic
         buy_signal = (
             (df['Apex_Trend'] == 1) & 
             (df['WaveTrend'] < 60) & 
@@ -180,7 +184,7 @@ class ApexEngine:
         # Return latest data point
         last = df.iloc[-1]
         
-        # Check for recent signals (last 3 days) to catch screen results
+        # Check for recent signals (last 3 days)
         recent_buy = buy_signal.tail(3).any()
         recent_bos = df['BOS_Bull'].tail(3).any()
         has_fvg = df['FVG_Bull'].iloc[-1]
@@ -201,6 +205,10 @@ class ApexEngine:
 # ------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_financials(ticker):
+    """
+    Fetches basic info. 
+    FIX: Do NOT return 'stock_obj' (yf.Ticker) to avoid pickling errors.
+    """
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
@@ -208,16 +216,19 @@ def get_financials(ticker):
             "ticker": ticker,
             "name": info.get('longName', ticker),
             "sector": info.get('sector', 'Unknown'),
-            "market_cap": info.get('marketCap', 0),
-            "stock_obj": stock
+            "market_cap": info.get('marketCap', 0)
         }
     except:
         return None
 
-def get_history(stock_obj):
+def get_history(ticker_symbol):
+    """
+    Instantiates Ticker locally to fetch history.
+    """
     try:
+        stock = yf.Ticker(ticker_symbol)
         # Need enough data for HMA 55 + ATR
-        return stock_obj.history(period="1y") 
+        return stock.history(period="1y") 
     except:
         return None
 
@@ -231,17 +242,19 @@ def run_apex_screen(universe):
         status.text(f"Running Apex Algorithm: {ticker}...")
         progress_bar.progress((i+1)/total)
         
+        # 1. Get Cached Fundamentals
         data = get_financials(ticker)
         if not data: continue
         
-        hist = get_history(data['stock_obj'])
+        # 2. Get Fresh History (Non-cached object)
+        hist = get_history(ticker)
         if hist is None or len(hist) < 60: continue
         
-        # RUN APEX ENGINE
+        # 3. RUN APEX ENGINE
         apex_data = ApexEngine.run_full_analysis(hist)
         if not apex_data: continue
         
-        # SCORING (SMC + Trend)
+        # 4. SCORING
         score = 0
         tags = []
         
@@ -262,7 +275,6 @@ def run_apex_screen(universe):
             
         if score >= 1:
             row = data.copy()
-            del row['stock_obj']
             row.update(apex_data)
             row['Score'] = score
             row['Tags'] = ", ".join(tags)
@@ -307,8 +319,6 @@ def analyze_smc_with_ai(row, api_key):
             temperature=0.7
         )
         content = response.choices[0].message.content
-        parts = content.split('|')
-        # Handle loose formatting from AI
         return content 
     except Exception as e:
         return f"Error: {e}"
