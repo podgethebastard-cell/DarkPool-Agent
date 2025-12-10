@@ -1,250 +1,209 @@
 
-
 import streamlit as st
+import ccxt
 import yfinance as yf
+import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
+import requests
+import scipy.stats as stats
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from datetime import datetime, timedelta
-import io
 
-# --- Page Configuration ---
-st.set_page_config(
-    page_title="DarkPool Titan Newsletter",
-    page_icon="🫟",
-    layout="wide"
-)
+# -----------------------------------------------------------------------------
+# 1. SETUP & CONFIGURATION
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Hybrid Financial Dashboard", layout="wide")
 
-# --- Custom CSS for DarkPool Theme ---
+st.title("📈 Hybrid Financial Dashboard")
 st.markdown("""
-    <style>
-    .main {
-        background-color: #0e1117;
-        color: #e0e0e0;
-    }
-    .stMetric {
-        background-color: #1f2937;
-        padding: 10px;
-        border-radius: 5px;
-        border: 1px solid #374151;
-    }
-    h1, h2, h3 {
-        color: #4ade80 !important; /* Matrix Green/Titan Green */
-        font-family: 'Helvetica Neue', sans-serif;
-    }
-    .report-text {
-        font-family: 'Georgia', serif;
-        line-height: 1.6;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+This dashboard integrates **Crypto** and **Stock** markets into a single view. 
+It uses `scipy` for statistical trend analysis and `plotly` for interactive visualization.
+""")
 
-# --- Helper Functions ---
+# -----------------------------------------------------------------------------
+# 2. UTILITY FUNCTIONS (Requests, Scipy, Numpy)
+# -----------------------------------------------------------------------------
 
-def get_market_data():
-    """Fetches real-time 7-day percent change for key assets."""
-    tickers = {
-        "BITCOIN": "BTC-USD",
-        "ETHEREUM": "ETH-USD",
-        "GOLD": "GC=F",
-        "NASDAQ": "NQ=F",
-        "S&P500": "ES=F",
-        "FTSE 100": "^FTSE",
-        "AUS 200": "^AXJO" 
-    }
+def check_connectivity():
+    """
+    Uses the 'requests' library explicitly to check internet status.
+    """
+    try:
+        response = requests.get("https://www.google.com", timeout=5)
+        if response.status_code == 200:
+            return True
+        return False
+    except requests.RequestException:
+        return False
+
+def calculate_trend_slope(prices):
+    """
+    Uses 'scipy.stats.linregress' to calculate the slope of the trend.
+    Returns the slope and the regression line points.
+    """
+    y = np.array(prices)
+    x = np.arange(len(y))
     
-    data_summary = {}
+    # Calculate linear regression
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
     
-    for name, ticker in tickers.items():
-        try:
-            # Fetch 1 month of data to ensure we get a clean 7-day delta
-            hist = yf.Ticker(ticker).history(period="1mo")
-            if len(hist) >= 7:
-                current = hist['Close'].iloc[-1]
-                seven_days_ago = hist['Close'].iloc[-7]
-                change_pct = ((current - seven_days_ago) / seven_days_ago) * 100
-                data_summary[name] = change_pct
-            else:
-                data_summary[name] = 0.0
-        except Exception as e:
-            data_summary[name] = 0.0
+    # Generate the line for plotting
+    trend_line = slope * x + intercept
+    return slope, trend_line, r_value
+
+# -----------------------------------------------------------------------------
+# 3. DATA LOADING FUNCTIONS (CCXT, YFinance, Pandas)
+# -----------------------------------------------------------------------------
+
+@st.cache_data(ttl=600)
+def get_crypto_data(symbol, timeframe, limit):
+    """
+    Fetches Crypto data using 'ccxt'.
+    """
+    try:
+        exchange = ccxt.binance()
+        # Fetch OHLCV data
+        bars = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        
+        # Convert to Pandas DataFrame
+        df = pd.DataFrame(bars, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df
+    except Exception as e:
+        st.error(f"Error fetching Crypto data: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=600)
+def get_stock_data(ticker, period):
+    """
+    Fetches Stock data using 'yfinance'.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period=period)
+        
+        # YFinance returns date as index, reset it to column for consistency
+        df.reset_index(inplace=True)
+        df.rename(columns={'Date': 'timestamp'}, inplace=True)
+        
+        # Ensure columns match our expected format
+        if 'Stock Splits' in df.columns:
+            df = df.drop(columns=['Dividends', 'Stock Splits'])
             
-    return data_summary
+        return df
+    except Exception as e:
+        st.error(f"Error fetching Stock data: {e}")
+        return pd.DataFrame()
 
-def create_summary_image(market_data, headlines, date_str):
-    """Generates a summary infographic using Matplotlib."""
+# -----------------------------------------------------------------------------
+# 4. SIDEBAR & INPUTS
+# -----------------------------------------------------------------------------
+
+st.sidebar.header("Configuration")
+
+# Explicit usage of requests library check
+if check_connectivity():
+    st.sidebar.success("✅ Network Status: Online (checked via `requests`)")
+else:
+    st.sidebar.error("❌ Network Status: Offline")
+
+market_type = st.sidebar.radio("Select Market", ["Cryptocurrency", "Stocks"])
+
+data = pd.DataFrame()
+symbol = ""
+
+if market_type == "Cryptocurrency":
+    st.sidebar.subheader("Crypto Settings")
+    symbol = st.sidebar.text_input("Symbol (e.g., BTC/USDT)", value="BTC/USDT")
+    timeframe = st.sidebar.selectbox("Timeframe", ["1d", "4h", "1h", "15m"], index=0)
+    limit = st.sidebar.slider("Data Points (Limit)", 50, 500, 100)
     
-    # Setup Figure
-    fig, ax = plt.subplots(figsize=(12, 8))
-    fig.patch.set_facecolor('#0e1117')
-    ax.set_facecolor('#0e1117')
+    if st.sidebar.button("Fetch Crypto Data"):
+        with st.spinner("Fetching from CCXT..."):
+            data = get_crypto_data(symbol, timeframe, limit)
+
+else:
+    st.sidebar.subheader("Stock Settings")
+    symbol = st.sidebar.text_input("Ticker (e.g., AAPL, TSLA)", value="AAPL")
+    period = st.sidebar.selectbox("Period", ["1mo", "3mo", "6mo", "1y", "2y"], index=2)
     
-    # Title Area
-    plt.text(0.5, 0.95, "DARKPOOL TITAN", color='white', fontsize=30, weight='bold', ha='center', fontname='Arial')
-    plt.text(0.5, 0.90, f"WEEKLY MARKET SUMMARY | {date_str}", color='#4ade80', fontsize=14, ha='center', fontname='Arial')
+    if st.sidebar.button("Fetch Stock Data"):
+        with st.spinner("Fetching from YFinance..."):
+            data = get_stock_data(symbol, period)
+
+# -----------------------------------------------------------------------------
+# 5. MAIN DASHBOARD LOGIC
+# -----------------------------------------------------------------------------
+
+if not data.empty:
+    # --- A. Data Processing & Statistics (Numpy/Scipy) ---
+    st.subheader(f"Analysis for {symbol}")
     
-    # Draw Market Boxes
-    y_pos = 0.75
-    x_start = 0.05
-    box_width = 0.12
-    gap = 0.01
+    # Calculate Returns using Numpy
+    data['Returns'] = data['Close'].pct_change()
     
-    for i, (asset, change) in enumerate(market_data.items()):
-        color = '#22c55e' if change >= 0 else '#ef4444' # Green or Red
-        rect = patches.FancyBboxPatch((x_start + (i * (box_width + gap)), y_pos), box_width, 0.1, 
-                                     boxstyle="round,pad=0.02", linewidth=1, edgecolor=color, facecolor='#1f2937')
-        ax.add_patch(rect)
-        
-        # Asset Name
-        plt.text(x_start + (i * (box_width + gap)) + box_width/2, y_pos + 0.07, asset, 
-                 color='white', fontsize=9, ha='center', weight='bold')
-        
-        # Percent Change
-        sign = "+" if change > 0 else ""
-        plt.text(x_start + (i * (box_width + gap)) + box_width/2, y_pos + 0.03, f"{sign}{change:.1f}%", 
-                 color=color, fontsize=14, ha='center', weight='bold')
-
-    # Headlines Section
-    plt.text(0.05, 0.65, "KEY MARKET EVENTS & INSIGHTS", color='#4ade80', fontsize=18, weight='bold')
+    # Calculate Linear Regression Trend using Scipy
+    slope, trend_line, r_squared = calculate_trend_slope(data['Close'].values)
     
-    y_text = 0.58
-    for headline in headlines:
-        plt.text(0.05, y_text, f"• {headline}", color='white', fontsize=12, wrap=True)
-        y_text -= 0.08
+    # Layout Columns
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Current Price", f"{data['Close'].iloc[-1]:.2f}")
+    col2.metric("Trend Slope (Scipy)", f"{slope:.4f}", help="Positive = Upward Trend, Negative = Downward Trend")
+    col3.metric("R-Squared", f"{r_squared**2:.4f}", help="Statistical strength of the trend")
 
-    # Footer/Branding
-    plt.text(0.5, 0.05, "Generated by DarkPool Titan App", color='#6b7280', fontsize=10, ha='center', style='italic')
+    # --- B. Interactive Chart (Plotly) ---
+    st.write("### Interactive Price Chart & Trend Line")
+    fig = go.Figure()
 
-    ax.axis('off')
+    # Candlestick Trace
+    fig.add_trace(go.Candlestick(
+        x=data['timestamp'],
+        open=data['Open'],
+        high=data['High'],
+        low=data['Low'],
+        close=data['Close'],
+        name='OHLC'
+    ))
+
+    # Trend Line Trace (Scipy result)
+    fig.add_trace(go.Scatter(
+        x=data['timestamp'],
+        y=trend_line,
+        mode='lines',
+        name='Linear Regression Trend (Scipy)',
+        line=dict(color='orange', width=2, dash='dash')
+    ))
+
+    fig.update_layout(xaxis_rangeslider_visible=False, height=500)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- C. Statistical Distribution (Matplotlib) ---
+    st.write("### Daily Returns Distribution (Matplotlib)")
     
-    # Save to BytesIO object
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor=fig.get_facecolor())
-    buf.seek(0)
-    return buf
-
-# --- Main App Interface ---
-
-def main():
-    # Sidebar for Inputs
-    st.sidebar.title("Newsletter Configuration")
-    report_date = st.sidebar.date_input("Report Date", datetime.now())
+    # Create Matplotlib Figure
+    fig_mpl, ax = plt.subplots(figsize=(10, 4))
     
-    st.sidebar.subheader("Headlines (for Image)")
-    hl1 = st.sidebar.text_input("Headline 1", "Dovish Kevin Hasset frontrunner for Fed Chair")
-    hl2 = st.sidebar.text_input("Headline 2", "Santa Rally Odds Look Favorable")
-    hl3 = st.sidebar.text_input("Headline 3", "Bitcoin Sentiment Hits 'Extreme Fear'")
-    headlines = [hl1, hl2, hl3]
-
-    # --- Header ---
-    st.title("🫟 DarkPool Titan Weekly Newsletter")
-    st.write(f"**Date:** {report_date.strftime('%B %d, %Y')}")
-    st.markdown("---")
-
-    # --- Section 1: Weekly Market Summary (Live Data) ---
-    st.subheader("WEEKLY MARKET SUMMARY (Live Data)")
+    # Clean NaNs for histogram
+    clean_returns = data['Returns'].dropna()
     
-    with st.spinner("Fetching latest market data..."):
-        market_data = get_market_data()
+    # Plot Histogram
+    ax.hist(clean_returns, bins=30, color='skyblue', edgecolor='black', alpha=0.7)
+    ax.set_title("Distribution of Daily Returns")
+    ax.set_xlabel("Return")
+    ax.set_ylabel("Frequency")
+    ax.grid(axis='y', alpha=0.5)
     
-    # Display Metrics in Columns
-    cols = st.columns(len(market_data))
-    for i, (asset, change) in enumerate(market_data.items()):
-        color = "normal" 
-        # Streamlit metric delta color logic
-        with cols[i]:
-            st.metric(label=asset, value=f"{change:.1f}%", delta=f"{change:.1f}%")
-
-    st.markdown("---")
-
-    # --- Section 2: Report Content Generator ---
+    # Add vertical line for mean
+    mean_ret = np.mean(clean_returns)
+    ax.axvline(mean_ret, color='red', linestyle='dashed', linewidth=1, label=f'Mean: {mean_ret:.4f}')
+    ax.legend()
     
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("📝 Report Editor")
-        
-        # General Market Update
-        st.markdown("### 🌍 Macro & Sentiment")
-        macro_text = st.text_area("Market Context", height=200, value="""Judging from recent news, traders and investors have many reasons to be optimistic: 
-- Dovish former White House economic adviser Kevin Hasset is the overwhelming frontrunner to replace Jerome Powell.
-- The odds of having a Santa Rally this year look favorable.
-- 85%+ probability of a 25 basis point cut by the Fed next week.
+    # Render Matplotlib in Streamlit
+    st.pyplot(fig_mpl)
 
-Despite these headlines, sentiment remains low. The CNN Fear & Greed Index remains in fear.""")
+    # --- D. Raw Data View ---
+    with st.expander("View Raw Data"):
+        st.dataframe(data)
 
-        # Bitcoin Update
-        st.markdown("### ₿ Bitcoin Update")
-        btc_text = st.text_area("Crypto Analysis", height=200, value="""Bitcoin Update: Good news is bad news.
-In stocks, good news still lifts prices. In Bitcoin, good news barely moves the needle anymore.
-Sentiment has plunged to extreme fear, levels lower than during the FTX collapse.
-
-Support 1: $81K
-Resistance 1: $93K""")
-
-        # Real Estate Update
-        st.markdown("### 🏠 Real Estate / Sectors")
-        re_text = st.text_area("Real Estate Analysis", height=150, value="""Governments are racing to build new homes, yet the units already sitting there have rarely been so empty.
-One clear example is Melbourne, Australia, with the number of empty units back above 100,000.""")
-
-    with col2:
-        st.subheader("📅 Significant Events (Upcoming)")
-        # In a real production app, we could scrape this. 
-        # For now, we allow the user to input critical upcoming dates.
-        event_1 = st.text_input("Event 1", "FOMC Meeting (Next Week)")
-        event_2 = st.text_input("Event 2", "CPI Data Release (Thursday)")
-        event_3 = st.text_input("Event 3", "NVDA Earnings (Wednesday)")
-        
-        st.subheader("📊 Options & Earnings Data")
-        earnings_list = st.text_area("Earnings Watchlist", "ADBE, COST, AVGO")
-        options_note = st.text_area("Options Flows", "High call volume on IWM. BTC puts stacking at $85k.")
-
-    st.markdown("---")
-
-    # --- Section 3: Visualization & Export ---
-    st.subheader("🖼️ Generate Newsletter Assets")
-    
-    if st.button("Generate Summary Image"):
-        image_buf = create_summary_image(market_data, headlines, report_date.strftime('%B %d, %Y'))
-        st.image(image_buf, caption="Generated Newsletter Header", use_container_width=True)
-        
-        st.download_button(
-            label="Download Image",
-            data=image_buf,
-            file_name="darkpool_weekly_summary.png",
-            mime="image/png"
-        )
-
-    # Preview Full Text
-    with st.expander("Preview Full Email Text"):
-        full_email = f"""
-Subject: 🫟 DarkPool Titan Weekly: {headlines[0]}
-
-WEEKLY MARKET SUMMARY
-{', '.join([f"{k}: {v:+.1f}%" for k,v in market_data.items()])}
-
-Hi Traders,
-
-{macro_text}
-
----
-BITCOIN UPDATE
-{btc_text}
-
----
-REAL ESTATE & SECTORS
-{re_text}
-
----
-UPCOMING EVENTS
-- {event_1}
-- {event_2}
-- {event_3}
-
-To your trading success,
-The DarkPool Titan Team
-        """
-        st.code(full_email, language="text")
-
-if __name__ == "__main__":
-    main()
+elif symbol:
+    st.info("Click the 'Fetch Data' button in the sidebar to generate the report.")
