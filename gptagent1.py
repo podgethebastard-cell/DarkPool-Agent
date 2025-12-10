@@ -1,6 +1,6 @@
 """
 TITAN INTRADAY PRO - Production-Ready Trading Dashboard
-Version 19.1: AI Analyst Integration + Context-Aware LLM (Secrets Edition)
+Version 19.2: AI Analyst Integration + Context-Aware LLM (Secrets Edition)
 """
 import time
 import math
@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from datetime import datetime, timezone
 
-# NEW IMPORT FOR AI
+# NEW IMPORT FOR AI (Wrapped to prevent crash if missing)
 try:
     from openai import OpenAI
 except ImportError:
@@ -61,7 +61,7 @@ st.markdown("""
         color: #0b0c10;
     }
     
-    /* Chat Message Styling */
+    /* Chat Message Styling (New for AI) */
     .stChatMessage {
         background-color: rgba(31, 40, 51, 0.5);
         border: 1px solid #45a29e;
@@ -93,6 +93,9 @@ st.markdown("""
 # CONSTANTS
 # =============================================================================
 BINANCE_API_BASE = "https://api.binance.us/api/v3"
+BYBIT_API_BASE = "https://api.bybit.com/v5/market/kline"
+COINBASE_API_BASE = "https://api.exchange.coinbase.com/products"
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json"
@@ -126,12 +129,13 @@ components.html(
     height=50
 )
 
-# HEADER with JS Clock
+# HEADER with JS Clock (FIXED COLOR INJECTION)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1:
-    st.title("💠 TITAN TERMINAL v19.1")
+    st.title("💠 TITAN TERMINAL v19.2")
     st.caption("FULL-SPECTRUM AI ANALYSIS ENGINE")
 with c_head2:
+    # JavaScript Clock (Updates every second client-side)
     components.html(
         """
         <div id="live_clock"></div>
@@ -206,14 +210,14 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("🤖 AI STATUS")
-    # Automatic Secret Loading
+    # Automatic Secret Loading for OpenAI
     try:
         openai_key = st.secrets["OPENAI_API_KEY"]
         st.success("🟢 AI Engine: ONLINE")
     except:
         openai_key = ""
         st.error("🔴 AI Engine: OFFLINE (Missing Secret)")
-    
+
     st.markdown("---")
     st.subheader("📊 VOL METRICS")
     hero_metric = st.selectbox("Hero Metric", ["CMF", "Volume RSI", "Volume Oscillator", "RVOL"])
@@ -324,6 +328,7 @@ def run_backtest(df):
     return total_trades, win_rate, net_r
 
 # --- THE "BRAIN" FUNCTION (RE-ENGINEERED FOR LANDSCAPE & DETAIL) ---
+# Modified to return context string for AI, but maintains original report structure
 def generate_full_report(row, symbol, tf, fibs, fg_index, smart_stop):
     # 1. Determine Confluence Score & Trend Alignment
     is_bull = row['is_bull']
@@ -401,7 +406,7 @@ def generate_full_report(row, symbol, tf, fibs, fg_index, smart_stop):
     * **TP1 (1.5R):** `{row['tp1']:.4f}` | **TP2 (3.0R):** `{row['tp2']:.4f}` | **TP3 (5.0R):** `{row['tp3']:.4f}`
 
 """
-    return report_md, commentary  # Return commentary as text for LLM context
+    return report_md, commentary
 
 def send_telegram_msg(token, chat, msg, cooldown):
     if not token or not chat: return False
@@ -717,6 +722,7 @@ if not df.empty:
     st.plotly_chart(fig, use_container_width=True)
 
     # --- TABBED ANALYSIS ---
+    # ENSURE 6 ITEMS HERE
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 GANN HILO", "🌊 APEX", "💸 MATRIX", "📉 VOL", "🧠 SENTIMENT", "🤖 AI ANALYST"])
     
     with tab1:
@@ -800,8 +806,7 @@ if not df.empty:
                 try:
                     client = OpenAI(api_key=openai_key)
                     
-                    # SYSTEM CONTEXT INJECTION (THE "VALUE ADD")
-                    # We feed the calculated indicators into the AI so it knows what's happening.
+                    # SYSTEM CONTEXT INJECTION
                     system_prompt = f"""
                     You are TITAN, an elite quantitative trading assistant. 
                     You are currently monitoring {symbol} on a {timeframe} timeframe.
