@@ -19,18 +19,63 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 # -----------------------------------------------------------------------------
 
 @st.cache_data
-def get_sp500_tickers():
-    """Fetches the current S&P 500 tickers from Wikipedia."""
+def get_index_tickers(index_name):
+    """
+    Fetches tickers for major indices from Wikipedia and formats them for yfinance.
+    """
+    tickers = []
     try:
-        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        tables = pd.read_html(url)
-        df = tables[0]
-        tickers = df['Symbol'].tolist()
-        # Clean tickers (e.g. BRK.B -> BRK-B for yfinance)
-        tickers = [t.replace('.', '-') for t in tickers]
+        if index_name == "S&P 500":
+            url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+            df = pd.read_html(url)[0]
+            tickers = df['Symbol'].tolist()
+            # Clean: BRK.B -> BRK-B
+            tickers = [t.replace('.', '-') for t in tickers]
+
+        elif index_name == "Nasdaq 100":
+            url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+            # Wikipedia table structure varies; look for table with 'Ticker' column
+            tables = pd.read_html(url)
+            for t in tables:
+                if 'Ticker' in t.columns:
+                    tickers = t['Ticker'].tolist()
+                    break
+                elif 'Symbol' in t.columns:
+                    tickers = t['Symbol'].tolist()
+                    break
+
+        elif index_name == "Dow Jones":
+            url = 'https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average'
+            tables = pd.read_html(url)
+            for t in tables:
+                if 'Symbol' in t.columns:
+                    tickers = t['Symbol'].tolist()
+                    break
+
+        elif index_name == "FTSE 100":
+            url = 'https://en.wikipedia.org/wiki/FTSE_100_Index'
+            tables = pd.read_html(url)
+            for t in tables:
+                if 'Ticker' in t.columns:
+                    # FTSE tickers on Wikipedia usually lack the .L suffix required for Yahoo
+                    raw_tickers = t['Ticker'].tolist()
+                    tickers = [f"{x}.L" if not x.endswith('.') else f"{x}L" for x in raw_tickers]
+                    break
+
+        elif index_name == "DAX 40":
+            url = 'https://en.wikipedia.org/wiki/DAX'
+            tables = pd.read_html(url)
+            for t in tables:
+                if 'Ticker' in t.columns:
+                    raw_tickers = t['Ticker'].tolist()
+                    # DAX tickers usually need .DE
+                    tickers = [f"{x}.DE" for x in raw_tickers]
+                    break
+
         return tickers
+
     except Exception as e:
-        st.error(f"Failed to fetch S&P 500 list: {e}")
+        st.error(f"Failed to fetch list for {index_name}: {e}")
         return []
 
 def fetch_alpha_vantage_financials(ticker: str, api_key: str):
@@ -126,7 +171,7 @@ def passes_list_filters(metrics: dict, params: dict) -> dict:
     try: out['list1'] = (metrics.get('forwardPE') is not None and metrics.get('forwardPE') < 25)
     except: pass
 
-    # List 2: Quality (ROE + Debt)
+    # List 2: Quality
     try: out['list2'] = (metrics.get('returnOnEquity') is not None and metrics.get('returnOnEquity') > 0) and \
                        (metrics.get('debtToEquity') is not None and metrics.get('debtToEquity') < 10) 
     except: pass
@@ -224,7 +269,9 @@ def process_universe(tickers, av_key, params, progress_bar, status_text):
     total = len(tickers)
     
     for i, t in enumerate(tickers):
-        t = t.strip().upper()
+        t = t.strip()
+        # Ensure upper case, but keep suffix case sensitive if needed (though Yahoo is usually upper)
+        t = t.upper() 
         if not t: continue
         
         status_text.text(f"Processing {i+1}/{total}: {t}")
@@ -258,7 +305,7 @@ def process_universe(tickers, av_key, params, progress_bar, status_text):
                 metrics[k] = v
                 
             results.append(metrics)
-            # Reduced sleep slightly for larger lists, but kept polite
+            # Gentle rate limiting
             time.sleep(0.1) 
             
         except Exception as e:
@@ -267,7 +314,7 @@ def process_universe(tickers, av_key, params, progress_bar, status_text):
     return pd.DataFrame(results)
 
 def main():
-    st.title("🚀 ECVS Multi-Symbol Screener")
+    st.title("🚀 ECVS Multi-Market Screener")
     st.markdown("""
     **Automated Screener**: Filters stocks through 7 fundamental lists, calculates momentum, and computes the composite **ECVS Score**.
     """)
@@ -278,32 +325,55 @@ def main():
         
         st.subheader("Universe Selection")
         
-        universe_mode = st.radio("Source:", ["Manual Input", "S&P 500 (500 Stocks)"])
+        # Expanded options
+        universe_options = [
+            "Manual Input", 
+            "S&P 500 (US)", 
+            "Nasdaq 100 (US)", 
+            "Dow Jones (US)", 
+            "FTSE 100 (UK)", 
+            "DAX 40 (Germany)"
+        ]
+        universe_mode = st.selectbox("Source:", universe_options)
         
         tickers = []
         if universe_mode == "Manual Input":
-            ticker_input = st.text_area("Enter Tickers (comma separated)", value="", placeholder="e.g. AAPL, MSFT, TSLA", height=150)
+            ticker_input = st.text_area("Enter Tickers (comma separated)", value="", placeholder="e.g. AAPL, MSFT, SHEL.L, SAP.DE", height=150)
         else:
-            st.info("ℹ️ S&P 500 mode selected. This will scan ~503 stocks and may take 5-10 minutes.")
+            st.info(f"ℹ️ Selected {universe_mode}. This will fetch current constituents from Wikipedia.")
             
         st.subheader("Thresholds")
-        min_cap_b = st.number_input("Min Market Cap ($B)", value=10.0, step=1.0)
+        min_cap_b = st.number_input("Min Market Cap ($B)", value=5.0, step=1.0)
         max_cap_b = st.number_input("List 7 Max Cap ($B)", value=50.0, step=5.0)
         
         run_btn = st.button("Run Screener", type="primary")
 
     if run_btn:
         # Determine Ticker List
-        if universe_mode == "S&P 500 (500 Stocks)":
-            with st.spinner("Fetching S&P 500 list from Wikipedia..."):
-                tickers = get_sp500_tickers()
-                st.success(f"Loaded {len(tickers)} tickers from S&P 500.")
-        else:
+        if universe_mode == "Manual Input":
             if ticker_input.strip():
                 tickers = [x.strip() for x in ticker_input.split(',')]
             else:
-                st.warning("Please enter tickers or select 'S&P 500'.")
+                st.warning("Please enter tickers or select a Market Index.")
                 return
+        else:
+            # Map selection to index name
+            index_map = {
+                "S&P 500 (US)": "S&P 500",
+                "Nasdaq 100 (US)": "Nasdaq 100",
+                "Dow Jones (US)": "Dow Jones",
+                "FTSE 100 (UK)": "FTSE 100",
+                "DAX 40 (Germany)": "DAX 40"
+            }
+            target_index = index_map[universe_mode]
+            
+            with st.spinner(f"Fetching {target_index} constituents..."):
+                tickers = get_index_tickers(target_index)
+                if tickers:
+                    st.success(f"Loaded {len(tickers)} tickers from {target_index}.")
+                else:
+                    st.error("Failed to load tickers. Please try again or use Manual Input.")
+                    return
 
         params = {
             'min_cap': min_cap_b * 1e9, 
@@ -359,12 +429,12 @@ def main():
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, sheet_name='All_Results', index=False)
                     df[df['Matches_Any']].to_excel(writer, sheet_name='Filtered_Matches', index=False)
-                    pd.DataFrame([{'Date': str(datetime.date.today()), 'Source': 'yfinance + AlphaVantage'}]).to_excel(writer, sheet_name='Metadata', index=False)
+                    pd.DataFrame([{'Date': str(datetime.date.today()), 'Source': f'yfinance ({universe_mode})'}]).to_excel(writer, sheet_name='Metadata', index=False)
                 
                 st.download_button(
                     label="Download .xlsx Workbook",
                     data=output.getvalue(),
-                    file_name=f"ecvs_screener_results_{datetime.date.today()}.xlsx",
+                    file_name=f"ecvs_screener_{universe_mode.split()[0]}_{datetime.date.today()}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
