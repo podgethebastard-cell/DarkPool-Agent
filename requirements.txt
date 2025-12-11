@@ -1,6 +1,6 @@
 streamlit
 openai
-yfinance
+yfinance>=0.2.50
 plotly
 pandas
 numpy
