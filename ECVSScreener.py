@@ -37,7 +37,10 @@ def safe_get(d, *keys, default=None):
         if d is None:
             return default
         if isinstance(d, dict) and k in d:
-            return d[k]
+            val = d[k]
+            # convert 'None' string to None type if necessary
+            if val == 'None': return default
+            return val
     return default
 
 # -----------------------------------------------------------------------------
@@ -127,7 +130,7 @@ def passes_list_filters(metrics: dict, params: dict) -> dict:
     # List 2: Clean Balance Sheet Quality
     try:
         out['list2'] = (metrics.get('returnOnEquity') is not None and metrics.get('returnOnEquity') > 0) and \
-                       (metrics.get('debtToEquity') is not None and metrics.get('debtToEquity') < 10) # Adjusted from 0 to <10 for realism
+                       (metrics.get('debtToEquity') is not None and metrics.get('debtToEquity') < 10) 
     except: pass
 
     # List 3: Low P/S
@@ -174,7 +177,6 @@ def compute_ecvs_score(row: dict) -> float:
 
     # 2. QUALITY (20%) - ROE
     if row.get('returnOnEquity'):
-        # Cap ROE score at 100% for anything over 20% ROE
         roe_score = min(1, max(0, row['returnOnEquity'] / 0.20)) * 100
         score += roe_score * 0.20
         weight += 0.20
@@ -189,7 +191,6 @@ def compute_ecvs_score(row: dict) -> float:
     if row.get('freeCashflow') and row.get('marketCap'):
         try:
             fcf_yield = row['freeCashflow'] / row['marketCap']
-            # Target 5% yield = score 100
             fcf_score = min(1, max(0, fcf_yield / 0.05)) * 100
             score += fcf_score * 0.15
             weight += 0.15
@@ -197,7 +198,6 @@ def compute_ecvs_score(row: dict) -> float:
 
     # 5. RISK (10%) - Debt/Equity
     if row.get('debtToEquity') is not None:
-        # 0 Debt = 100 score, >200 Debt = 0 score
         risk_score = max(0, 100 - (row['debtToEquity'] / 2)) 
         score += risk_score * 0.10
         weight += 0.10
@@ -218,10 +218,10 @@ def compute_ecvs_score(row: dict) -> float:
             score += 100 * 0.05
             weight += 0.05
         else:
-            weight += 0.05 # Add weight even if 0 score to normalize
+            weight += 0.05
 
     if weight > 0:
-        return score / weight # Normalize to 100
+        return score / weight
     return 0
 
 # -----------------------------------------------------------------------------
@@ -240,27 +240,22 @@ def process_universe(tickers, av_key, params, progress_bar, status_text):
         progress_bar.progress((i + 1) / total)
         
         try:
-            # 1. Fetch YFinance
             tk = yf.Ticker(t)
             info = tk.info
-            # Fetch ~1 year of data to be safe for our dynamic dates
             hist = tk.history(period="1y") 
             
-            # 2. Fetch Alpha Vantage
             av_data = fetch_alpha_vantage_financials(t, av_key)
             
-            # 3. Compute Metrics
             prices = compute_prices_dynamic(hist)
             metrics = compute_simple_metrics(info, av_data)
             metrics.update(prices)
             metrics['ticker'] = t
             
-            # 4. Filters & Scoring
             lists = passes_list_filters(metrics, params)
             metrics['lists'] = lists
             metrics['ecvs'] = compute_ecvs_score(metrics)
             
-            # 5. Calculate Performance Columns
+            # Performance Calc
             if metrics['p_current'] and metrics['p_start_year']:
                 metrics['YTD_Perf'] = (metrics['p_current'] / metrics['p_start_year']) - 1
             else:
@@ -271,12 +266,11 @@ def process_universe(tickers, av_key, params, progress_bar, status_text):
             else:
                 metrics['3Mo_Perf'] = None
                 
-            # Flatten "lists" dict for dataframe display
             for k, v in lists.items():
                 metrics[k] = v
                 
             results.append(metrics)
-            time.sleep(0.2) # Polite delay
+            time.sleep(0.2)
             
         except Exception as e:
             logging.error(f"Error processing {t}: {e}")
@@ -289,13 +283,11 @@ def main():
     **Automated Screener**: Filters stocks through 7 fundamental lists, calculates momentum, and computes the composite **ECVS Score**.
     """)
     
-    # --- SIDEBAR ---
     with st.sidebar:
         st.header("Settings")
         av_api_key = st.text_input("Alpha Vantage API Key (Optional)", type="password")
         
         st.subheader("Universe")
-        # Default universe
         default_tickers = "AAPL, MSFT, GOOGL, AMZN, TSLA, NVDA, META, BRK-B, V, JNJ"
         ticker_input = st.text_area("Enter Tickers (comma separated)", value=default_tickers, height=150)
         
@@ -305,7 +297,6 @@ def main():
         
         run_btn = st.button("Run Screener", type="primary")
 
-    # --- MAIN EXECUTION ---
     if run_btn:
         tickers = [x.strip() for x in ticker_input.split(',')]
         params = {
@@ -313,43 +304,51 @@ def main():
             'max_cap': max_cap_b * 1e9
         }
         
-        # UI Elements for progress
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Run Logic
         df = process_universe(tickers, av_api_key, params, progress_bar, status_text)
         
         status_text.text("Processing Complete!")
         progress_bar.empty()
         
         if not df.empty:
-            # Post-processing
-            # Create "Matches Any List" column
             list_cols = [f'list{i}' for i in range(1,8)]
             df['Matches_Any'] = df[list_cols].any(axis=1)
             
-            # Sort by ECVS
+            # Ensure numeric types for sorting/formatting
+            numeric_cols = ['ecvs', 'marketCap', 'forwardPE', 'YTD_Perf', '3Mo_Perf']
+            for col in numeric_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            
             df = df.sort_values(by='ecvs', ascending=False)
             
-            # Select display columns
             display_cols = ['ticker', 'ecvs', 'marketCap', 'sector', 'forwardPE', 'YTD_Perf', '3Mo_Perf', 'Matches_Any'] + list_cols
             
-            # TABS
+            # Filter valid columns only
+            display_cols = [c for c in display_cols if c in df.columns]
+
             tab1, tab2, tab3 = st.tabs(["🏆 Final Ranking", "📂 Detailed Data", "📥 Export"])
             
             with tab1:
                 st.subheader("Top Ranked Candidates (by ECVS Score)")
-                st.dataframe(
-                    df[display_cols].style.format({
-                        'ecvs': '{:.1f}',
-                        'marketCap': '${:,.0f}',
-                        'forwardPE': '{:.1f}',
-                        'YTD_Perf': '{:.1%}',
-                        '3Mo_Perf': '{:.1%}'
-                    }).background_gradient(subset=['ecvs'], cmap='Greens'),
-                    use_container_width=True
-                )
+                
+                # --- FIX: USE NA_REP TO HANDLE NONE/NAN VALUES SAFELY ---
+                styled_df = df[display_cols].style.format({
+                    'ecvs': '{:.1f}',
+                    'marketCap': '${:,.0f}',
+                    'forwardPE': '{:.1f}',
+                    'YTD_Perf': '{:.1%}',
+                    '3Mo_Perf': '{:.1%}'
+                }, na_rep="-")
+                
+                # Apply gradient only if data exists to avoid errors
+                try:
+                    styled_df = styled_df.background_gradient(subset=['ecvs'], cmap='Greens')
+                except:
+                    pass
+                    
+                st.dataframe(styled_df, use_container_width=True)
             
             with tab2:
                 st.subheader("Full Data Table")
@@ -357,14 +356,10 @@ def main():
 
             with tab3:
                 st.subheader("Download Excel Report")
-                
-                # Excel generation in memory
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, sheet_name='All_Results', index=False)
-                    # Filtered tab
                     df[df['Matches_Any']].to_excel(writer, sheet_name='Filtered_Matches', index=False)
-                    # Sources tab
                     pd.DataFrame([{'Date': str(datetime.date.today()), 'Source': 'yfinance + AlphaVantage'}]).to_excel(writer, sheet_name='Metadata', index=False)
                 
                 st.download_button(
