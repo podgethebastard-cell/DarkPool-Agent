@@ -10,7 +10,7 @@ import datetime
 # 1. SYSTEM CONFIGURATION & UI
 # ==========================================
 st.set_page_config(
-    page_title="APEX SMC MASTER v9",
+    page_title="APEX SMC MASTER v9.1",
     page_icon="🦅",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -80,6 +80,26 @@ class ApexMath:
         return ApexMath.rma(tr, length)
 
     @staticmethod
+    def calculate_adx(df, length=14):
+        """Average Directional Index (ADX) - Fixed for v9.1"""
+        up = df['High'].diff()
+        down = -df['Low'].diff()
+        
+        plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+        minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+        
+        tr = ApexMath.atr(df, length)
+        tr = tr.replace(0, np.nan) # Avoid division by zero
+        
+        # Smoothed DM
+        plus_di = 100 * (ApexMath.rma(pd.Series(plus_dm), length) / tr)
+        minus_di = 100 * (ApexMath.rma(pd.Series(minus_dm), length) / tr)
+        
+        dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = ApexMath.rma(dx, length)
+        return adx
+
+    @staticmethod
     def hma(series, length):
         """Hull Moving Average"""
         half_len = int(length / 2)
@@ -140,7 +160,6 @@ class ApexMath:
             # Bullish BOS (Close breaks last Pivot High)
             if last_ph and closes[i] > last_ph and closes[i-1] <= last_ph:
                 # Find last bearish candle before the break
-                # Look back a bit to find the origin of the move
                 for j in range(i, i-20, -1):
                     if closes[j] < opens[j]: # Bearish candle
                         ob = {
@@ -256,12 +275,11 @@ def run_apex_logic(df, config):
     # 2. Trend State
     trend = np.where(df['Close'] > df['Upper'], 1, np.where(df['Close'] < df['Lower'], -1, 0))
     # Fill zeros with previous value to filter chop (State Persistence)
-    # Using pandas ffill logic requires conversion to Series
     trend_s = pd.Series(trend).replace(0, np.nan).ffill().fillna(0).values
     df['Trend'] = trend_s
     
     # 3. Signals (WaveTrend + ADX)
-    df['ADX'] = ApexMath.calculate_adx(df)
+    df['ADX'] = ApexMath.calculate_adx(df) # Fixed call
     df['WT'] = ApexMath.wavetrend(df)
     
     wt_buy = (df['WT'] < -50) & (df['WT'] > df['WT'].shift(1))
@@ -293,7 +311,6 @@ def plot_apex_chart(ticker, df, obs, fvgs, config):
         fig.add_trace(go.Scatter(x=df.index, y=df['Lower'], fill='tonexty', fillcolor=color_fill, line=dict(width=0), name='Apex Cloud'), row=1, col=1)
 
     # -- SMC Zones (Rectangles) --
-    # Filter for active zones if requested
     shapes = []
     
     # Draw Order Blocks
@@ -342,7 +359,7 @@ def main():
     # --- HEADER ---
     c1, c2 = st.columns([3, 1])
     with c1:
-        st.title("🦅 APEX CRYPTO MASTER v9.0")
+        st.title("🦅 APEX CRYPTO MASTER v9.1")
         st.markdown("**SMC LOGIC ENGINE • HMA TREND • ACTIVE ZONE TRACKING**")
     with c2:
         if st.button("🔄 REFRESH MARKET DATA", type="primary"):
@@ -378,9 +395,6 @@ def main():
     scan_results = []
     
     progress_bar = st.progress(0)
-    
-    # We will display the chart of the first selected asset later
-    # But first, we scan everything to build the dashboard
     
     with st.spinner("Processing SMC Logic on Kraken Universe..."):
         for i, ticker in enumerate(universe):
