@@ -18,20 +18,12 @@ import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 
-# Suppress warnings
+# Suppress Warnings
 warnings.filterwarnings('ignore')
 
-# NEW IMPORT FOR AI
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-
-# =============================================================================
-# 1. GLOBAL SYSTEM CONFIGURATION & DARKPOOL CSS
-# =============================================================================
+# 1. SETUP PAGE CONFIGURATION & CSS
 st.set_page_config(
-    page_title="Titan OS | Financial Singularity",
+    page_title="Titan OS | Omega",
     page_icon="💠",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -40,14 +32,9 @@ st.set_page_config(
 # THE TITAN DARKPOOL AESTHETIC (Merged from agent4, agentIE, agentmob)
 st.markdown("""
 <style>
-    /* GLOBAL FONTS & RESET */
     @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Inter:wght@400;800&display=swap');
     
-    .stApp {
-        background-color: #050505;
-        color: #e0e0e0;
-        font-family: 'Inter', sans-serif;
-    }
+    .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Inter', sans-serif; }
     
     /* TITAN HEADER GLOW */
     .titan-header {
@@ -80,7 +67,7 @@ st.markdown("""
         border: 1px solid #222;
         border-left: 4px solid #333;
         padding: 15px;
-        border-radius: 8px;
+        border-radius: 6px;
         transition: all 0.3s ease;
     }
     div[data-testid="metric-container"]:hover {
@@ -91,8 +78,7 @@ st.markdown("""
     div[data-testid="stMetricLabel"] { font-family: 'Roboto Mono', monospace; font-size: 0.8rem; color: #888; }
     div[data-testid="stMetricValue"] { font-family: 'Inter', sans-serif; font-weight: 800; font-size: 1.6rem; color: #fff; }
 
-    /* SIDEBAR & TABS */
-    section[data-testid="stSidebar"] { background-color: #080808; border-right: 1px solid #222; }
+    /* TABS */
     .stTabs [data-baseweb="tab-list"] { gap: 8px; background-color: transparent; }
     .stTabs [data-baseweb="tab"] {
         height: 40px;
@@ -110,7 +96,10 @@ st.markdown("""
         font-weight: bold;
     }
 
-    /* BUTTONS (Mobile Optimized from agentmob) */
+    /* SIDEBAR */
+    section[data-testid="stSidebar"] { background-color: #080808; border-right: 1px solid #222; }
+    
+    /* BUTTONS */
     div.stButton > button {
         background: linear-gradient(135deg, #1f2833, #0b0c10);
         border: 1px solid #333;
@@ -120,6 +109,7 @@ st.markdown("""
         transition: all 0.2s;
         border-radius: 6px;
         height: 3em;
+        width: 100%;
     }
     div.stButton > button:hover {
         border-color: #00ffbb;
@@ -128,23 +118,16 @@ st.markdown("""
     }
 
     /* ALERTS & AI BOX */
-    .titan-alert {
-        padding: 10px; border-radius: 6px; margin-bottom: 10px; font-family: 'Roboto Mono', monospace; font-size: 0.9rem; text-align: center; font-weight: bold;
-    }
+    .titan-alert { padding: 10px; border-radius: 6px; margin-bottom: 10px; font-family: 'Roboto Mono', monospace; font-size: 0.9rem; text-align: center; font-weight: bold; }
     .alert-bull { background: rgba(0, 255, 187, 0.1); border: 1px solid #00ffbb; color: #00ffbb; }
     .alert-bear { background: rgba(255, 17, 85, 0.1); border: 1px solid #ff1155; color: #ff1155; }
-    .ai-box {
-        background: #0a0a0a; border: 1px solid #333; padding: 20px; border-radius: 5px; margin-top: 20px; border-left: 3px solid #7d00ff;
-    }
-    
-    /* TOOLTIPS */
-    .tooltip { position: relative; display: inline-block; border-bottom: 1px dotted white; }
+    .ai-box { background: #0a0a0a; border: 1px solid #333; padding: 20px; border-radius: 5px; margin-top: 20px; border-left: 3px solid #7d00ff; }
 </style>
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 2. CORE MATH & LOGIC LIBRARY (TitanMath)
-# Consolidated from agent4, gptagent1, microcaps, gemini1
+# 2. CORE LOGIC ENGINE (TitanMath)
+# Consolidating logic from agent4, gptagent1, microcaps, gemini1
 # =============================================================================
 class TitanMath:
     @staticmethod
@@ -191,11 +174,11 @@ class TitanMath:
 
     @staticmethod
     def smc_detect(df, lookback=5):
-        # From ApexCryptoSMCScout.py
+        # From ApexCryptoSMCScout.py (Order Blocks & FVG)
         df['Pivot_High'] = df['High'].rolling(window=lookback*2+1, center=True).max() == df['High']
         df['Pivot_Low'] = df['Low'].rolling(window=lookback*2+1, center=True).min() == df['Low']
         
-        # FVG Detection (Bearish and Bullish)
+        # FVG Detection
         fvg_bull = (df['Low'] > df['High'].shift(2))
         fvg_bear = (df['High'] < df['Low'].shift(2))
         return fvg_bull, fvg_bear
@@ -210,8 +193,9 @@ class TitanMath:
         
         squeeze_on = (lower > k_lower) & (upper < k_upper)
         
+        # Momentum (Linear Regression Proxy)
         x = np.arange(20)
-        # Vectorized LinReg approach for Momentum
+        # Fast vector calculation for LinReg Slope
         mom = df['Close'].rolling(20).apply(lambda y: linregress(x, y - y.mean())[0] if len(y)==20 else 0, raw=True)
         return squeeze_on, mom
 
@@ -233,6 +217,16 @@ class TitanMath:
         return elasticity * force
 
     @staticmethod
+    def wavetrend(df):
+        # From microcaps.py (WaveTrend Oscillator)
+        ap = (df['High'] + df['Low'] + df['Close']) / 3
+        esa = ap.ewm(span=10).mean()
+        d = (ap - esa).abs().ewm(span=10).mean()
+        ci = (ap - esa) / (0.015 * d)
+        tci = ci.ewm(span=21).mean()
+        return tci
+
+    @staticmethod
     def calculate_all_indicators(df):
         # Master function to apply all Titan indicators
         df['HMA'] = TitanMath.hma(df['Close'], 55)
@@ -241,17 +235,13 @@ class TitanMath:
         df['Money_Flow'] = TitanMath.money_flow(df)
         df['Squeeze'], df['Mom'] = TitanMath.squeeze_momentum(df)
         df['EVWM'] = TitanMath.evwm(df)
+        df['WaveTrend'] = TitanMath.wavetrend(df)
         df['FVG_Bull'], df['FVG_Bear'] = TitanMath.smc_detect(df)
         
         # Apex Trend Logic (HMA + ATR Bands)
         df['Upper'] = df['HMA'] + (df['ATR'] * 1.5)
         df['Lower'] = df['HMA'] - (df['ATR'] * 1.5)
         df['Apex_Trend'] = np.where(df['Close'] > df['Upper'], 1, np.where(df['Close'] < df['Lower'], -1, 0))
-        
-        # Gann HiLo Logic
-        sma_high = df['High'].rolling(3).mean()
-        sma_low = df['Low'].rolling(3).mean()
-        df['Gann_Trend'] = np.where(df['Close'] > df['High'].rolling(3).mean().shift(1), 1, -1)
         
         # RVOL
         df['RVOL'] = df['Volume'] / df['Volume'].rolling(20).mean()
@@ -285,17 +275,12 @@ class TitanFeed:
     @st.cache_data(ttl=300)
     def fetch_stock_yfinance(symbol, period, interval):
         try:
-            # Handle UK/Japan suffixes if needed
-            if "." not in symbol and len(symbol) <= 5: 
-                pass # US Stock
-            
             df = yf.download(symbol, period=period, interval=interval, progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             
             # 4H resampling for stocks (Yahoo doesn't support 4h natively)
             if interval == "4h":
-                # We fetch 1h and resample
                 df = yf.download(symbol, period=period, interval="1h", progress=False)
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
                 df = df.resample('4h').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
@@ -334,79 +319,14 @@ class Trade:
     quantity: float
     pnl: Optional[float] = None
 
-class StrategyLab:
-    @staticmethod
-    def vectorized_backtest(df, strategy="SMA Crossover", params=None):
-        """Fast Pandas-based backtest from gemini1.py"""
-        df = df.copy()
-        df['Signal'] = 0
-        
-        if strategy == "SMA Crossover":
-            fast = params.get('fast', 10)
-            slow = params.get('slow', 50)
-            df['FastMA'] = df['Close'].rolling(fast).mean()
-            df['SlowMA'] = df['Close'].rolling(slow).mean()
-            df.loc[df['FastMA'] > df['SlowMA'], 'Signal'] = 1
-            df.loc[df['FastMA'] <= df['SlowMA'], 'Signal'] = -1
-            
-        elif strategy == "RSI Mean Reversion":
-            length = params.get('length', 14)
-            rsi = TitanMath.rsi(df['Close'], length)
-            df.loc[rsi < 30, 'Signal'] = 1
-            df.loc[rsi > 70, 'Signal'] = -1
-            
-        elif strategy == "Bollinger Breakout":
-            upper, _, lower = TitanMath.bollinger_bands(df['Close'])
-            df.loc[df['Close'] > upper, 'Signal'] = 1
-            df.loc[df['Close'] < lower, 'Signal'] = -1
-
-        # Calculate Returns
-        df['Return'] = df['Close'].pct_change()
-        df['Strat_Ret'] = df['Return'] * df['Signal'].shift(1)
-        df['Equity'] = (1 + df['Strat_Ret'].fillna(0)).cumprod()
-        
-        return df
-
-    @staticmethod
-    def event_driven_backtest(df, initial_capital=10000):
-        """Detailed Portfolio Manager from cursor2.py"""
-        # Simplified for integration
-        cash = initial_capital
-        position = 0
-        trades = []
-        equity_curve = []
-        
-        # Simple Apex Trend Strategy for Event Driven
-        df = TitanMath.calculate_all_indicators(df)
-        
-        for i, row in df.iterrows():
-            price = row['Close']
-            
-            # Entry Logic (Bull Trend + Momentum)
-            if position == 0 and row['Apex_Trend'] == 1 and row['Mom'] > 0:
-                position = (cash * 0.99) / price
-                cash -= position * price
-                trades.append(Trade(i, "Asset", "BUY", price, position))
-            
-            # Exit Logic (Bear Trend or Squeeze off)
-            elif position > 0 and (row['Apex_Trend'] == -1):
-                cash += position * price
-                trades.append(Trade(i, "Asset", "SELL", price, position, (price - trades[-1].price)*position))
-                position = 0
-                
-            equity = cash + (position * price)
-            equity_curve.append(equity)
-            
-        return pd.Series(equity_curve, index=df.index), trades
-
 # =============================================================================
 # 5. MODULE: LIVE TERMINAL (Desk 1)
 # =============================================================================
 def render_live_terminal(api_key):
     st.markdown("### ⚡ Live Execution Terminal")
     
-    # 1. Configuration
-    with st.expander("📡 Market Feed Configuration", expanded=True):
+    # 1. Configuration (Ladder settings from zAi.py)
+    with st.expander("📡 Market & Strategy Configuration", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             asset_class = st.selectbox("Asset Class", ["Crypto (Kraken)", "Stocks (Yahoo)"])
@@ -417,6 +337,13 @@ def render_live_terminal(api_key):
             tf = st.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=1)
         with c4:
             limit = st.slider("Lookback Candles", 200, 2000, 500)
+            
+        st.markdown("---")
+        l1, l2, l3, l4 = st.columns(4)
+        with l1: tp1_mult = st.number_input("TP1 (ATR)", 1.0, 5.0, 1.5)
+        with l2: tp2_mult = st.number_input("TP2 (ATR)", 1.0, 10.0, 3.0)
+        with l3: tp3_mult = st.number_input("TP3 (ATR)", 1.0, 20.0, 5.0)
+        with l4: sl_mult = st.number_input("Stop Loss (ATR)", 1.0, 5.0, 2.0)
 
     # 2. Fetch Data
     if "Crypto" in asset_class:
@@ -433,21 +360,33 @@ def render_live_terminal(api_key):
     df = TitanMath.calculate_all_indicators(df)
     last = df.iloc[-1]
 
-    # 4. Ladder Logic (zAi.py)
+    # 4. Ladder Logic (Integrated from zAi.py)
     atr = last['ATR']
-    stop_loss = last['Close'] - (2 * atr) if last['Apex_Trend'] == 1 else last['Close'] + (2 * atr)
-    tp1 = last['Close'] + (1.5 * atr) if last['Apex_Trend'] == 1 else last['Close'] - (1.5 * atr)
-    tp2 = last['Close'] + (3.0 * atr) if last['Apex_Trend'] == 1 else last['Close'] - (3.0 * atr)
+    # Dynamic levels based on Apex Trend direction
+    if last['Apex_Trend'] == 1: # Bull
+        stop_price = last['Close'] - (sl_mult * atr)
+        tp1 = last['Close'] + (tp1_mult * atr)
+        tp2 = last['Close'] + (tp2_mult * atr)
+        tp3 = last['Close'] + (tp3_mult * atr)
+        trend_str = "BULLISH 🐂"
+        color = "#00ffbb"
+    else: # Bear
+        stop_price = last['Close'] + (sl_mult * atr)
+        tp1 = last['Close'] - (tp1_mult * atr)
+        tp2 = last['Close'] - (tp2_mult * atr)
+        tp3 = last['Close'] - (tp3_mult * atr)
+        trend_str = "BEARISH 🐻"
+        color = "#ff1155"
 
     # 5. HUD Metrics
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Price", f"${last['Close']:,.2f}")
-    m2.metric("Trend", "BULL" if last['Apex_Trend']==1 else "BEAR", delta="Apex")
-    m3.metric("Momentum", f"{last['Mom']:.2f}", delta="Squeeze" if last['Squeeze'] else "Open")
+    m2.metric("Trend", trend_str, delta="Apex System")
+    m3.metric("Momentum", f"{last['Mom']:.2f}", delta="Squeeze ON" if last['Squeeze'] else "Released")
     m4.metric("Money Flow", f"{last['Money_Flow']:.2f}", delta="Inflow" if last['Money_Flow']>0 else "Outflow")
     m5.metric("RVOL", f"{last['RVOL']:.1f}x")
 
-    # 6. Titan Charting
+    # 6. Titan Charting (Plotly)
     tab_chart, tab_ladder, tab_ai = st.tabs(["🕯️ God Mode Chart", "🪜 Execution Ladder", "🤖 AI Analyst"])
     
     with tab_chart:
@@ -455,9 +394,13 @@ def render_live_terminal(api_key):
         
         # Main Price + HMA + Cloud + FVG
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color='#00ffbb' if last['Apex_Trend']==1 else '#ff1155', width=2), name="Apex HMA"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['HMA'], line=dict(color=color, width=2), name="Apex HMA"), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['Upper'], line=dict(width=0), showlegend=False), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['Lower'], fill='tonexty', fillcolor='rgba(0, 255, 187, 0.1)', line=dict(width=0), name="Apex Cloud"), row=1, col=1)
+        
+        # Plot TP/SL Lines
+        fig.add_hline(y=stop_price, line_dash="dash", line_color="red", annotation_text="STOP", row=1, col=1)
+        fig.add_hline(y=tp1, line_dash="dot", line_color="green", annotation_text="TP1", row=1, col=1)
         
         # FVG Visuals (Last 50 bars)
         recent = df.iloc[-50:]
@@ -479,24 +422,56 @@ def render_live_terminal(api_key):
     with tab_ladder:
         st.markdown(f"""
         ### 🪜 Execution Ladder: {symbol}
-        **Direction:** {'LONG 🐂' if last['Apex_Trend']==1 else 'SHORT 🐻'}
+        **Direction:** {trend_str}
         
-        | Level | Price | Notes |
-        | :--- | :--- | :--- |
-        | **ENTRY** | `${last['Close']:,.2f}` | Current Market Price |
-        | **STOP** | `${stop_loss:,.2f}` | 2.0 ATR Trailing Stop |
-        | **TP1** | `${tp1:,.2f}` | 1.5 ATR (Bank 30%) |
-        | **TP2** | `${tp2:,.2f}` | 3.0 ATR (Bank 40%) |
-        
-        **Risk/Reward Ratio:** 1.5 (TP1) to 3.0 (TP2)
+        | Level | Price | Distance | R-Multiple |
+        | :--- | :--- | :--- | :--- |
+        | **ENTRY** | `${last['Close']:,.2f}` | 0.00% | 0.0R |
+        | **STOP** | `${stop_price:,.2f}` | -{(abs(last['Close']-stop_price)/last['Close'])*100:.2f}% | -1.0R |
+        | **TP1** | `${tp1:,.2f}` | +{(abs(last['Close']-tp1)/last['Close'])*100:.2f}% | +{tp1_mult}R |
+        | **TP2** | `${tp2:,.2f}` | +{(abs(last['Close']-tp2)/last['Close'])*100:.2f}% | +{tp2_mult}R |
+        | **TP3** | `${tp3:,.2f}` | +{(abs(last['Close']-tp3)/last['Close'])*100:.2f}% | +{tp3_mult}R |
         """)
         
-        # Broadcast Button
-        if st.button("📡 Broadcast Signal to Telegram"):
-            msg = f"🔥 TITAN SIGNAL: {symbol}\nTrend: {last['Apex_Trend']}\nEntry: {last['Close']}\nStop: {stop_loss:.2f}\nTP1: {tp1:.2f}"
+        # TELEGRAM BROADCAST (Fixed to include ALL data)
+        if st.button("📡 Broadcast Full Signal to Telegram"):
+            # Construct the comprehensive message
+            try:
+                from openai import OpenAI
+                # Quick AI snippet for the message if key exists
+                ai_snippet = "AI Analysis Pending..."
+                if api_key and OpenAI:
+                    client = OpenAI(api_key=api_key)
+                    r = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":f"Short sentiment analysis for {symbol} based on {trend_str} trend."}])
+                    ai_snippet = r.choices[0].message.content
+            except: ai_snippet = "AI Unavailable"
+
+            msg = f"""
+🔥 **TITAN SIGNAL: {symbol}** 🔥
+--------------------------------
+📊 **Timeframe:** {tf}
+🚀 **Trend:** {trend_str}
+💵 **Entry:** ${last['Close']:,.2f}
+
+🛑 **STOP LOSS:** ${stop_price:,.2f}
+🎯 **TP1 ({tp1_mult}R):** ${tp1:,.2f}
+🎯 **TP2 ({tp2_mult}R):** ${tp2:,.2f}
+🎯 **TP3 ({tp3_mult}R):** ${tp3:,.2f}
+
+📉 **Technicals:**
+• RSI: {last['RSI']:.1f}
+• RVOL: {last['RVOL']:.1f}x
+• Money Flow: {last['Money_Flow']:.2f}
+• Squeeze: {'Active' if last['Squeeze'] else 'Off'}
+
+🤖 **AI Insight:**
+{ai_snippet}
+
+#TitanOS #Trading
+"""
             if st.secrets.get("TELEGRAM_TOKEN"):
                 requests.post(f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendMessage", 
-                              data={"chat_id": st.secrets['TELEGRAM_CHAT_ID'], "text": msg})
+                              data={"chat_id": st.secrets['TELEGRAM_CHAT_ID'], "text": msg, "parse_mode": "Markdown"})
                 st.success("Signal Sent!")
             else:
                 st.error("Telegram Secrets Missing")
@@ -506,17 +481,24 @@ def render_live_terminal(api_key):
         if st.button("Generate Tactical Report"):
             if OpenAI and api_key:
                 client = OpenAI(api_key=api_key)
+                # Comprehensive Prompt
                 prompt = f"""
-                Analyze {symbol} on {tf} timeframe.
-                Price: {last['Close']}. Trend: {last['Apex_Trend']} (1=Bull, -1=Bear).
-                Momentum: {last['Mom']:.2f}. Money Flow: {last['Money_Flow']:.2f}.
-                FVG Detected: {last['FVG_Bull'] or last['FVG_Bear']}.
-                RVOL: {last['RVOL']:.2f}.
+                Act as a Senior Hedge Fund Analyst. Analyze {symbol} on {tf} timeframe.
                 
-                Provide a professional trading plan:
-                1. Market Structure Analysis (SMC context)
-                2. Volume/Flow Analysis
-                3. Bias (Long/Short/Neutral) with confidence level.
+                DATA FEED:
+                - Price: {last['Close']}
+                - Trend: {last['Apex_Trend']} (1=Bull, -1=Bear)
+                - Momentum: {last['Mom']:.2f}
+                - Money Flow: {last['Money_Flow']:.2f}
+                - FVG Detected: {last['FVG_Bull'] or last['FVG_Bear']}
+                - RVOL: {last['RVOL']:.2f}
+                - Volatility (ATR): {last['ATR']:.2f}
+                
+                Provide a professional report in Markdown:
+                1. **Market Structure:** Is this a trend or chop? Mention SMC context.
+                2. **Volume Analysis:** Is smart money participating? (Check Money Flow/RVOL).
+                3. **Execution Plan:** Confirm if the Ladder levels (Stop/TPs) allow for a high probability trade.
+                4. **Verdict:** BULLISH / BEARISH / NEUTRAL with Confidence Score (1-10).
                 """
                 with st.spinner("Neural Engine Processing..."):
                     try:
@@ -532,7 +514,7 @@ def render_live_terminal(api_key):
 def render_macro_desk():
     st.markdown("### 🌍 Macro Intelligence Desk")
     
-    # Ratio Definitions from agentIE.py
+    # Ratios from agent5.py
     ratios = {
         "Risk On/Off (SPY/TLT)": ("^GSPC", "TLT"),
         "Inflation (GLD/TLT)": ("GC=F", "TLT"),
@@ -564,9 +546,9 @@ def render_macro_desk():
 def render_scanner(api_key):
     st.markdown("### 🔭 Deep Factor Scanner")
     
+    # Unified Scanner Selection
     mode = st.radio("Scanner Mode", ["Institutional (ECVS)", "Miners (Clive)", "Microcaps (Apex)", "Crypto SMC"], horizontal=True)
     
-    # Pre-defined Universes
     tickers = []
     if mode == "Institutional (ECVS)":
         tickers = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "JPM", "V", "UNH", "XOM", "JNJ", "PG", "LLY", "AVGO"]
@@ -585,7 +567,7 @@ def render_scanner(api_key):
         for i, t in enumerate(tickers):
             status.text(f"Scanning {t}...")
             try:
-                # Fetch Data
+                # Fetch Data based on mode
                 if mode == "Crypto SMC":
                     df = TitanFeed.fetch_crypto_kraken(t, "1h", 200)
                     if df.empty: continue
@@ -596,10 +578,11 @@ def render_scanner(api_key):
                     if last['Apex_Trend'] == 1: score += 1
                     if last['FVG_Bull']: score += 2
                     if last['Squeeze']: score += 1
+                    if last['Money_Flow'] > 0: score += 1
                     
                     results.append({"Ticker": t, "Price": last['Close'], "Score": score, "Trend": last['Apex_Trend'], "FVG": last['FVG_Bull']})
                     
-                else: # Stocks
+                else: # Stocks (YFinance)
                     tk = yf.Ticker(t)
                     info = tk.info
                     hist = tk.history(period="6mo")
@@ -607,17 +590,29 @@ def render_scanner(api_key):
                     
                     mom = (hist['Close'].iloc[-1] / hist['Close'].iloc[0]) - 1
                     
-                    if mode == "Miners (Clive)":
+                    if mode == "Miners (Clive)": # Logic from clivesminers.py
                         cash = info.get('totalCash', 0)
                         debt = info.get('totalDebt', 0)
                         net_cash = cash - debt
                         pb = info.get('priceToBook', 0)
                         results.append({"Ticker": t, "Net Cash": net_cash, "P/B": pb, "Momentum": mom})
                         
-                    elif mode == "Institutional (ECVS)":
+                    elif mode == "Institutional (ECVS)": # Logic from ECVSScreener.py
                         pe = info.get('forwardPE', 99)
                         peg = info.get('pegRatio', 99)
-                        results.append({"Ticker": t, "P/E": pe, "PEG": peg, "Momentum": mom})
+                        margin = info.get('profitMargins', 0)
+                        
+                        score = 0
+                        if pe < 25: score += 1
+                        if peg < 1.5: score += 1
+                        if margin > 0.2: score += 1
+                        if mom > 0: score += 1
+                        
+                        results.append({"Ticker": t, "Score": score, "P/E": pe, "PEG": peg, "Momentum": mom})
+                    
+                    else: # Microcaps Logic
+                        vol = hist['Close'].pct_change().std()
+                        results.append({"Ticker": t, "Momentum": mom, "Volatility": vol})
             
             except Exception as e: pass
             bar.progress((i+1)/len(tickers))
@@ -627,6 +622,7 @@ def render_scanner(api_key):
         
         if results:
             df_res = pd.DataFrame(results)
+            if "Score" in df_res.columns: df_res = df_res.sort_values("Score", ascending=False)
             st.success(f"Scan Complete: {len(df_res)} Hits")
             st.dataframe(df_res.style.background_gradient(cmap="Greens"), use_container_width=True)
             
@@ -647,7 +643,8 @@ def render_strategy_lab():
     
     c1, c2, c3 = st.columns(3)
     with c1:
-        strat = st.selectbox("Strategy Logic", ["SMA Crossover", "RSI Mean Reversion", "Apex Trend Follower"])
+        # Selection of Logic from gemini1.py
+        strat = st.selectbox("Strategy Logic", ["SMA Crossover", "RSI Mean Reversion", "Apex Trend Follower", "Bollinger Breakout"])
     with c2:
         symbol = st.text_input("Test Symbol", "BTC-USD")
     with c3:
@@ -659,7 +656,7 @@ def render_strategy_lab():
             st.error("No Data")
             return
             
-        # Logic
+        # Apply Logic
         df = TitanMath.calculate_all_indicators(df)
         df['Signal'] = 0
         
@@ -673,14 +670,24 @@ def render_strategy_lab():
             df.loc[df['Apex_Trend'] == 1, 'Signal'] = 1
             df.loc[df['Apex_Trend'] == -1, 'Signal'] = -1
             
-        # Backtest Engine (Vectorized)
+        elif strat == "RSI Mean Reversion":
+            df.loc[df['RSI'] < 30, 'Signal'] = 1
+            df.loc[df['RSI'] > 70, 'Signal'] = -1
+            
+        elif strat == "Bollinger Breakout":
+            upper, _, lower = TitanMath.bollinger_bands(df['Close'])
+            df.loc[df['Close'] > upper, 'Signal'] = 1
+            df.loc[df['Close'] < lower, 'Signal'] = -1
+            
+        # Vectorized PnL Calculation
         df['Ret'] = df['Close'].pct_change()
         df['Strat_Ret'] = df['Ret'] * df['Signal'].shift(1)
         df['Equity'] = capital * (1 + df['Strat_Ret'].fillna(0)).cumprod()
         
         total_ret = ((df['Equity'].iloc[-1] - capital) / capital) * 100
+        dd = (df['Equity'] / df['Equity'].cummax() - 1).min() * 100
         
-        st.metric("Total Return", f"{total_ret:.2f}%", f"${df['Equity'].iloc[-1]:,.2f}")
+        st.metric("Total Return", f"{total_ret:.2f}%", f"Drawdown: {dd:.2f}%")
         st.line_chart(df['Equity'])
         
         with st.expander("Trade Log"):
@@ -706,17 +713,7 @@ def main():
         mode = st.radio("SYSTEM DESK", ["Live Terminal", "Macro Intelligence", "Deep Scanner", "Strategy Lab"])
         
         st.markdown("---")
-        
-        # Guide
-        with st.expander("ℹ️ System Manual"):
-            st.markdown("""
-            **1. Live Terminal:** Real-time charts with Apex Trend, SMC FVG, and Squeeze Momentum.
-            **2. Macro Desk:** Cross-asset ratios (e.g., SPY/TLT) to determine risk regimes.
-            **3. Deep Scanner:** Screen for Institutional (ECVS), Mining, or Crypto targets.
-            **4. Strategy Lab:** Backtest logic before deploying.
-            """)
-            
-        # Secrets
+        # SECRETS LOADING (Automatic)
         api_key = st.secrets.get("OPENAI_API_KEY", "")
         if not api_key: api_key = st.text_input("OpenAI Key", type="password")
         
