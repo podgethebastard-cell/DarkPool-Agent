@@ -510,6 +510,17 @@ with st.sidebar:
         4. **Lab:** Rapid backtesting prototype.
         """)
 
+# --- AUTH CHECK (Password) ---
+if "PASSWORD" in st.secrets:
+    pwd = st.sidebar.text_input("Access Password", type="password")
+    if pwd != st.secrets["PASSWORD"]:
+        st.error("🔒 SYSTEM LOCKED. ENTER PASSWORD.")
+        st.stop()
+
+# --- LOAD SECRETS INTO SESSION STATE ---
+if "OPENAI_API_KEY" in st.secrets and not api_key:
+    api_key = st.secrets["OPENAI_API_KEY"]
+
 # --- MAIN ROUTING ---
 st.markdown('<div class="titan-header"><h1 class="titan-title">TITAN OS</h1><div class="titan-subtitle">FINANCIAL SINGULARITY INTERFACE</div></div>', unsafe_allow_html=True)
 
