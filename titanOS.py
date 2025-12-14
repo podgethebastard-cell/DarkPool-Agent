@@ -21,15 +21,23 @@ from typing import List, Optional, Dict
 # Suppress Warnings
 warnings.filterwarnings('ignore')
 
-# 1. SETUP PAGE CONFIGURATION & CSS
+# GLOBAL AI LOADER
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
+# =============================================================================
+# 1. GLOBAL SYSTEM CONFIGURATION & DARKPOOL CSS
+# =============================================================================
 st.set_page_config(
-    page_title="Titan OS | Omega",
+    page_title="Titan OS | Financial Singularity",
     page_icon="💠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# THE TITAN DARKPOOL AESTHETIC (Merged from agent4, agentIE, agentmob)
+# THE TITAN DARKPOOL AESTHETIC
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Inter:wght@400;800&display=swap');
@@ -127,7 +135,6 @@ st.markdown("""
 
 # =============================================================================
 # 2. CORE LOGIC ENGINE (TitanMath)
-# Consolidating logic from agent4, gptagent1, microcaps, gemini1
 # =============================================================================
 class TitanMath:
     @staticmethod
@@ -174,7 +181,6 @@ class TitanMath:
 
     @staticmethod
     def smc_detect(df, lookback=5):
-        # From ApexCryptoSMCScout.py (Order Blocks & FVG)
         df['Pivot_High'] = df['High'].rolling(window=lookback*2+1, center=True).max() == df['High']
         df['Pivot_Low'] = df['Low'].rolling(window=lookback*2+1, center=True).min() == df['Low']
         
@@ -185,7 +191,6 @@ class TitanMath:
 
     @staticmethod
     def squeeze_momentum(df):
-        # From gptagent1.py / agent4.py
         upper, basis, lower = TitanMath.bollinger_bands(df['Close'], 20, 2.0)
         tr = TitanMath.atr(df, 20)
         k_upper = basis + (tr * 1.5)
@@ -193,22 +198,19 @@ class TitanMath:
         
         squeeze_on = (lower > k_lower) & (upper < k_upper)
         
-        # Momentum (Linear Regression Proxy)
         x = np.arange(20)
-        # Fast vector calculation for LinReg Slope
+        # Vectorized LinReg approach for Momentum
         mom = df['Close'].rolling(20).apply(lambda y: linregress(x, y - y.mean())[0] if len(y)==20 else 0, raw=True)
         return squeeze_on, mom
 
     @staticmethod
     def money_flow(df, length=14):
-        # From agent4.py
         rsi_src = TitanMath.rsi(df['Close'], length) - 50
         mf_vol = df['Volume'] / df['Volume'].rolling(length).mean()
         return (rsi_src * mf_vol).fillna(0).ewm(span=3).mean()
 
     @staticmethod
     def evwm(df, length=21, vol_smooth=5):
-        # Elastic Volume Weighted Momentum (from gptagent1.py)
         baseline = TitanMath.hma(df['Close'], length)
         atr = TitanMath.atr(df, length)
         elasticity = (df['Close'] - baseline) / atr
@@ -217,25 +219,23 @@ class TitanMath:
         return elasticity * force
 
     @staticmethod
-    def wavetrend(df):
-        # From microcaps.py (WaveTrend Oscillator)
-        ap = (df['High'] + df['Low'] + df['Close']) / 3
-        esa = ap.ewm(span=10).mean()
-        d = (ap - esa).abs().ewm(span=10).mean()
-        ci = (ap - esa) / (0.015 * d)
-        tci = ci.ewm(span=21).mean()
-        return tci
-
-    @staticmethod
     def calculate_all_indicators(df):
-        # Master function to apply all Titan indicators
+        if df.empty or len(df) < 55:
+            return df
+            
+        # Ensure Numeric Data
+        cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        for c in cols:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce')
+        df.dropna(subset=['Close'], inplace=True)
+
         df['HMA'] = TitanMath.hma(df['Close'], 55)
         df['ATR'] = TitanMath.atr(df, 14)
         df['RSI'] = TitanMath.rsi(df['Close'], 14)
         df['Money_Flow'] = TitanMath.money_flow(df)
         df['Squeeze'], df['Mom'] = TitanMath.squeeze_momentum(df)
         df['EVWM'] = TitanMath.evwm(df)
-        df['WaveTrend'] = TitanMath.wavetrend(df)
         df['FVG_Bull'], df['FVG_Bear'] = TitanMath.smc_detect(df)
         
         # Apex Trend Logic (HMA + ATR Bands)
@@ -250,9 +250,15 @@ class TitanMath:
 
 # =============================================================================
 # 3. UNIFIED DATA FEED (TitanFeed)
-# Handles YFinance and CCXT seamlessly
 # =============================================================================
 class TitanFeed:
+    @staticmethod
+    def _clean_yf(df):
+        # Flatten MultiIndex if present
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df
+
     @staticmethod
     @st.cache_data(ttl=60)
     def fetch_crypto_kraken(symbol, timeframe, limit):
@@ -275,14 +281,19 @@ class TitanFeed:
     @st.cache_data(ttl=300)
     def fetch_stock_yfinance(symbol, period, interval):
         try:
-            df = yf.download(symbol, period=period, interval=interval, progress=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+            # Handle UK/Japan suffixes if needed
+            if "." not in symbol and len(symbol) <= 5: 
+                pass # US Stock
             
+            df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False)
+            df = TitanFeed._clean_yf(df)
+            
+            if df.empty: return pd.DataFrame()
+
             # 4H resampling for stocks (Yahoo doesn't support 4h natively)
             if interval == "4h":
-                df = yf.download(symbol, period=period, interval="1h", progress=False)
-                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+                df = yf.download(symbol, period=period, interval="1h", progress=False, auto_adjust=False)
+                df = TitanFeed._clean_yf(df)
                 df = df.resample('4h').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
             
             return df
@@ -292,40 +303,33 @@ class TitanFeed:
 
     @staticmethod
     def get_macro_snapshot():
-        # From agentIE.py
         tickers = ['^GSPC', 'BTC-USD', 'DX-Y.NYB', '^TNX']
-        data = yf.download(tickers, period="5d", interval="1d", progress=False)['Close']
-        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-        
-        snapshot = {}
-        for t in tickers:
-            if t in data.columns:
-                curr = data[t].iloc[-1]
-                prev = data[t].iloc[-2]
-                chg = ((curr - prev) / prev) * 100
-                snapshot[t] = (curr, chg)
-        return snapshot
+        try:
+            data = yf.download(tickers, period="5d", interval="1d", progress=False)['Close']
+            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+            
+            snapshot = {}
+            for t in tickers:
+                if t in data.columns:
+                    # Check if series has enough data
+                    series = data[t].dropna()
+                    if len(series) > 1:
+                        curr = series.iloc[-1]
+                        prev = series.iloc[-2]
+                        chg = ((curr - prev) / prev) * 100
+                        snapshot[t] = (curr, chg)
+                    else:
+                        snapshot[t] = (0, 0)
+            return snapshot
+        except: return {}
 
 # =============================================================================
-# 4. BACKTESTING ENGINE (Strategy Lab)
-# Merges gemini1.py (Vectorized) and cursor2.py (Event-Driven)
-# =============================================================================
-@dataclass
-class Trade:
-    timestamp: datetime.datetime
-    symbol: str
-    side: str
-    price: float
-    quantity: float
-    pnl: Optional[float] = None
-
-# =============================================================================
-# 5. MODULE: LIVE TERMINAL (Desk 1)
+# 4. MODULE: LIVE TERMINAL (Desk 1)
 # =============================================================================
 def render_live_terminal(api_key):
     st.markdown("### ⚡ Live Execution Terminal")
     
-    # 1. Configuration (Ladder settings from zAi.py)
+    # 1. Configuration
     with st.expander("📡 Market & Strategy Configuration", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -357,10 +361,14 @@ def render_live_terminal(api_key):
         return
 
     # 3. Process Engine
-    df = TitanMath.calculate_all_indicators(df)
-    last = df.iloc[-1]
+    try:
+        df = TitanMath.calculate_all_indicators(df)
+        last = df.iloc[-1]
+    except Exception as e:
+        st.error(f"Calculation Error (Check ticker): {e}")
+        return
 
-    # 4. Ladder Logic (Integrated from zAi.py)
+    # 4. Ladder Logic
     atr = last['ATR']
     # Dynamic levels based on Apex Trend direction
     if last['Apex_Trend'] == 1: # Bull
@@ -433,18 +441,16 @@ def render_live_terminal(api_key):
         | **TP3** | `${tp3:,.2f}` | +{(abs(last['Close']-tp3)/last['Close'])*100:.2f}% | +{tp3_mult}R |
         """)
         
-        # TELEGRAM BROADCAST (Fixed to include ALL data)
+        # TELEGRAM BROADCAST
         if st.button("📡 Broadcast Full Signal to Telegram"):
             # Construct the comprehensive message
-            try:
-                from openai import OpenAI
-                # Quick AI snippet for the message if key exists
-                ai_snippet = "AI Analysis Pending..."
-                if api_key and OpenAI:
+            ai_snippet = "AI Analysis Pending..."
+            if api_key and OpenAI:
+                try:
                     client = OpenAI(api_key=api_key)
-                    r = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":f"Short sentiment analysis for {symbol} based on {trend_str} trend."}])
+                    r = client.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":f"Short sentiment analysis for {symbol} based on {trend_str} trend."}])
                     ai_snippet = r.choices[0].message.content
-            except: ai_snippet = "AI Unavailable"
+                except: pass
 
             msg = f"""
 🔥 **TITAN SIGNAL: {symbol}** 🔥
@@ -480,31 +486,32 @@ def render_live_terminal(api_key):
         st.subheader("🤖 Titan AI Analyst")
         if st.button("Generate Tactical Report"):
             if OpenAI and api_key:
-                client = OpenAI(api_key=api_key)
-                # Comprehensive Prompt
-                prompt = f"""
-                Act as a Senior Hedge Fund Analyst. Analyze {symbol} on {tf} timeframe.
-                
-                DATA FEED:
-                - Price: {last['Close']}
-                - Trend: {last['Apex_Trend']} (1=Bull, -1=Bear)
-                - Momentum: {last['Mom']:.2f}
-                - Money Flow: {last['Money_Flow']:.2f}
-                - FVG Detected: {last['FVG_Bull'] or last['FVG_Bear']}
-                - RVOL: {last['RVOL']:.2f}
-                - Volatility (ATR): {last['ATR']:.2f}
-                
-                Provide a professional report in Markdown:
-                1. **Market Structure:** Is this a trend or chop? Mention SMC context.
-                2. **Volume Analysis:** Is smart money participating? (Check Money Flow/RVOL).
-                3. **Execution Plan:** Confirm if the Ladder levels (Stop/TPs) allow for a high probability trade.
-                4. **Verdict:** BULLISH / BEARISH / NEUTRAL with Confidence Score (1-10).
-                """
-                with st.spinner("Neural Engine Processing..."):
-                    try:
+                try:
+                    client = OpenAI(api_key=api_key)
+                    # Comprehensive Prompt
+                    prompt = f"""
+                    Act as a Senior Hedge Fund Analyst. Analyze {symbol} on {tf} timeframe.
+                    
+                    DATA FEED:
+                    - Price: {last['Close']}
+                    - Trend: {last['Apex_Trend']} (1=Bull, -1=Bear)
+                    - Momentum: {last['Mom']:.2f}
+                    - Money Flow: {last['Money_Flow']:.2f}
+                    - FVG Detected: {last['FVG_Bull'] or last['FVG_Bear']}
+                    - RVOL: {last['RVOL']:.2f}
+                    - Volatility (ATR): {last['ATR']:.2f}
+                    
+                    Provide a professional trading plan in Markdown:
+                    1. **Market Structure:** Is this a trend or chop? Mention SMC context.
+                    2. **Volume Analysis:** Is smart money participating? (Check Money Flow/RVOL).
+                    3. **Execution Plan:** Confirm if the Ladder levels (Stop/TPs) allow for a high probability trade.
+                    4. **Verdict:** BULLISH / BEARISH / NEUTRAL with Confidence Score (1-10).
+                    """
+                    with st.spinner("Neural Engine Processing..."):
                         res = client.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":prompt}])
                         st.markdown(f"<div class='ai-box'>{res.choices[0].message.content}</div>", unsafe_allow_html=True)
-                    except Exception as e: st.error(f"AI Error: {e}")
+                except Exception as e:
+                    st.error(f"AI Error: {e}")
             else:
                 st.warning("OpenAI API Key Required")
 
@@ -514,7 +521,7 @@ def render_live_terminal(api_key):
 def render_macro_desk():
     st.markdown("### 🌍 Macro Intelligence Desk")
     
-    # Ratios from agent5.py
+    # Ratios
     ratios = {
         "Risk On/Off (SPY/TLT)": ("^GSPC", "TLT"),
         "Inflation (GLD/TLT)": ("GC=F", "TLT"),
@@ -524,21 +531,27 @@ def render_macro_desk():
     
     # Batch Fetch
     tickers = list(set([item for sublist in ratios.values() for item in sublist]))
-    data = yf.download(tickers, period="6mo", interval="1d", progress=False)['Close']
-    if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+    try:
+        data = yf.download(tickers, period="6mo", interval="1d", progress=False)['Close']
+        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+    except:
+        st.error("Macro Feed Failed")
+        return
     
     cols = st.columns(2)
     for i, (name, (num, den)) in enumerate(ratios.items()):
         if num in data and den in data:
             ratio = data[num] / data[den]
-            curr = ratio.iloc[-1]
-            chg = ((curr - ratio.iloc[-20]) / ratio.iloc[-20]) * 100
-            
-            with cols[i%2]:
-                st.metric(name, f"{curr:.4f}", f"{chg:.2f}% (1M)")
-                fig = px.line(ratio, title=name, template="plotly_dark")
-                fig.update_layout(height=250, margin=dict(l=0,r=0,t=30,b=0), xaxis_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
+            ratio = ratio.dropna()
+            if len(ratio) > 20:
+                curr = ratio.iloc[-1]
+                chg = ((curr - ratio.iloc[-20]) / ratio.iloc[-20]) * 100
+                
+                with cols[i%2]:
+                    st.metric(name, f"{curr:.4f}", f"{chg:.2f}% (1M)")
+                    fig = px.line(ratio, title=name, template="plotly_dark")
+                    fig.update_layout(height=250, margin=dict(l=0,r=0,t=30,b=0), xaxis_visible=False)
+                    st.plotly_chart(fig, use_container_width=True)
 
 # =============================================================================
 # 7. MODULE: DEEP SCANNER (Desk 3)
@@ -546,9 +559,9 @@ def render_macro_desk():
 def render_scanner(api_key):
     st.markdown("### 🔭 Deep Factor Scanner")
     
-    # Unified Scanner Selection
     mode = st.radio("Scanner Mode", ["Institutional (ECVS)", "Miners (Clive)", "Microcaps (Apex)", "Crypto SMC"], horizontal=True)
     
+    # Pre-defined Universes
     tickers = []
     if mode == "Institutional (ECVS)":
         tickers = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "JPM", "V", "UNH", "XOM", "JNJ", "PG", "LLY", "AVGO"]
@@ -570,52 +583,55 @@ def render_scanner(api_key):
                 # Fetch Data based on mode
                 if mode == "Crypto SMC":
                     df = TitanFeed.fetch_crypto_kraken(t, "1h", 200)
-                    if df.empty: continue
-                    df = TitanMath.calculate_all_indicators(df)
-                    last = df.iloc[-1]
-                    
-                    score = 0
-                    if last['Apex_Trend'] == 1: score += 1
-                    if last['FVG_Bull']: score += 2
-                    if last['Squeeze']: score += 1
-                    if last['Money_Flow'] > 0: score += 1
-                    
-                    results.append({"Ticker": t, "Price": last['Close'], "Score": score, "Trend": last['Apex_Trend'], "FVG": last['FVG_Bull']})
+                    if not df.empty and len(df) > 50:
+                        df = TitanMath.calculate_all_indicators(df)
+                        last = df.iloc[-1]
+                        
+                        score = 0
+                        if last['Apex_Trend'] == 1: score += 1
+                        if last['FVG_Bull']: score += 2
+                        if last['Squeeze']: score += 1
+                        if last['Money_Flow'] > 0: score += 1
+                        
+                        results.append({"Ticker": t, "Price": last['Close'], "Score": score, "Trend": last['Apex_Trend'], "FVG": last['FVG_Bull']})
                     
                 else: # Stocks (YFinance)
                     tk = yf.Ticker(t)
                     info = tk.info
                     hist = tk.history(period="6mo")
-                    if hist.empty: continue
-                    
-                    mom = (hist['Close'].iloc[-1] / hist['Close'].iloc[0]) - 1
-                    
-                    if mode == "Miners (Clive)": # Logic from clivesminers.py
-                        cash = info.get('totalCash', 0)
-                        debt = info.get('totalDebt', 0)
-                        net_cash = cash - debt
-                        pb = info.get('priceToBook', 0)
-                        results.append({"Ticker": t, "Net Cash": net_cash, "P/B": pb, "Momentum": mom})
+                    if not hist.empty:
+                        mom = (hist['Close'].iloc[-1] / hist['Close'].iloc[0]) - 1
                         
-                    elif mode == "Institutional (ECVS)": # Logic from ECVSScreener.py
-                        pe = info.get('forwardPE', 99)
-                        peg = info.get('pegRatio', 99)
-                        margin = info.get('profitMargins', 0)
+                        if mode == "Miners (Clive)":
+                            cash = info.get('totalCash', 0)
+                            debt = info.get('totalDebt', 0)
+                            net_cash = cash - debt
+                            pb = info.get('priceToBook', 0)
+                            results.append({"Ticker": t, "Net Cash": net_cash, "P/B": pb, "Momentum": mom})
+                            
+                        elif mode == "Institutional (ECVS)":
+                            pe = info.get('forwardPE', 99)
+                            peg = info.get('pegRatio', 99)
+                            margin = info.get('profitMargins', 0)
+                            
+                            score = 0
+                            if pe < 25: score += 1
+                            if peg < 1.5: score += 1
+                            if margin > 0.2: score += 1
+                            if mom > 0: score += 1
+                            
+                            results.append({"Ticker": t, "Score": score, "P/E": pe, "PEG": peg, "Momentum": mom})
                         
-                        score = 0
-                        if pe < 25: score += 1
-                        if peg < 1.5: score += 1
-                        if margin > 0.2: score += 1
-                        if mom > 0: score += 1
-                        
-                        results.append({"Ticker": t, "Score": score, "P/E": pe, "PEG": peg, "Momentum": mom})
-                    
-                    else: # Microcaps Logic
-                        vol = hist['Close'].pct_change().std()
-                        results.append({"Ticker": t, "Momentum": mom, "Volatility": vol})
+                        else: # Microcaps Logic
+                            vol = hist['Close'].pct_change().std()
+                            results.append({"Ticker": t, "Momentum": mom, "Volatility": vol})
             
-            except Exception as e: pass
+            except Exception as e:
+                # Keep scanning other tickers even if one fails
+                pass
+            
             bar.progress((i+1)/len(tickers))
+            time.sleep(0.1) # Prevent Rate Limit
             
         bar.empty()
         status.empty()
@@ -627,13 +643,16 @@ def render_scanner(api_key):
             st.dataframe(df_res.style.background_gradient(cmap="Greens"), use_container_width=True)
             
             # AI Analysis on Top Pick
-            if not df_res.empty and api_key:
+            if not df_res.empty and api_key and OpenAI:
                 top_pick = df_res.iloc[0]
                 if st.button(f"Analyze Top Pick: {top_pick['Ticker']}"):
-                    client = OpenAI(api_key=api_key)
-                    prompt = f"Analyze investment thesis for {top_pick['Ticker']} based on gathered metrics: {top_pick.to_dict()}. Be concise."
-                    res = client.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":prompt}])
-                    st.info(res.choices[0].message.content)
+                    try:
+                        client = OpenAI(api_key=api_key)
+                        prompt = f"Analyze investment thesis for {top_pick['Ticker']} based on gathered metrics: {top_pick.to_dict()}. Be concise."
+                        res = client.chat.completions.create(model="gpt-4", messages=[{"role":"user","content":prompt}])
+                        st.info(res.choices[0].message.content)
+                    except Exception as e:
+                        st.error(f"AI Error: {e}")
 
 # =============================================================================
 # 8. MODULE: STRATEGY LAB (Desk 4)
@@ -643,7 +662,6 @@ def render_strategy_lab():
     
     c1, c2, c3 = st.columns(3)
     with c1:
-        # Selection of Logic from gemini1.py
         strat = st.selectbox("Strategy Logic", ["SMA Crossover", "RSI Mean Reversion", "Apex Trend Follower", "Bollinger Breakout"])
     with c2:
         symbol = st.text_input("Test Symbol", "BTC-USD")
@@ -684,14 +702,17 @@ def render_strategy_lab():
         df['Strat_Ret'] = df['Ret'] * df['Signal'].shift(1)
         df['Equity'] = capital * (1 + df['Strat_Ret'].fillna(0)).cumprod()
         
-        total_ret = ((df['Equity'].iloc[-1] - capital) / capital) * 100
-        dd = (df['Equity'] / df['Equity'].cummax() - 1).min() * 100
-        
-        st.metric("Total Return", f"{total_ret:.2f}%", f"Drawdown: {dd:.2f}%")
-        st.line_chart(df['Equity'])
-        
-        with st.expander("Trade Log"):
-            st.dataframe(df[['Close', 'Signal', 'Equity']])
+        if not df['Equity'].dropna().empty:
+            total_ret = ((df['Equity'].iloc[-1] - capital) / capital) * 100
+            dd = (df['Equity'] / df['Equity'].cummax() - 1).min() * 100
+            
+            st.metric("Total Return", f"{total_ret:.2f}%", f"Drawdown: {dd:.2f}%")
+            st.line_chart(df['Equity'])
+            
+            with st.expander("Trade Log"):
+                st.dataframe(df[['Close', 'Signal', 'Equity']])
+        else:
+            st.error("Backtest Error: Insufficient Data for Strategy")
 
 # =============================================================================
 # 9. MAIN ORCHESTRATOR
@@ -701,19 +722,22 @@ def main():
     with st.sidebar:
         st.markdown("## 💠 TITAN OS")
         
-        # Macro Snapshot (Top Sidebar)
+        # Macro Snapshot
         try:
             macro = TitanFeed.get_macro_snapshot()
-            c1, c2 = st.columns(2)
-            c1.metric("SPX", f"{macro['^GSPC'][0]:.0f}", f"{macro['^GSPC'][1]:.1f}%")
-            c2.metric("BTC", f"{macro['BTC-USD'][0]:.0f}", f"{macro['BTC-USD'][1]:.1f}%")
+            if macro:
+                c1, c2 = st.columns(2)
+                spx_val, spx_chg = macro.get('^GSPC', (0,0))
+                btc_val, btc_chg = macro.get('BTC-USD', (0,0))
+                c1.metric("SPX", f"{spx_val:.0f}", f"{spx_chg:.1f}%")
+                c2.metric("BTC", f"{btc_val:.0f}", f"{btc_chg:.1f}%")
         except: st.caption("Macro Feed Loading...")
         
         st.markdown("---")
         mode = st.radio("SYSTEM DESK", ["Live Terminal", "Macro Intelligence", "Deep Scanner", "Strategy Lab"])
         
         st.markdown("---")
-        # SECRETS LOADING (Automatic)
+        # SECRETS LOADING
         api_key = st.secrets.get("OPENAI_API_KEY", "")
         if not api_key: api_key = st.text_input("OpenAI Key", type="password")
         
