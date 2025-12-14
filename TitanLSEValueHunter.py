@@ -5,12 +5,14 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
+import io
+from openai import OpenAI
 
 # ==========================================
 # 1. PAGE CONFIGURATION & DARKPOOL UI
 # ==========================================
 st.set_page_config(
-    page_title="LSE TITAN 50/50",
+    page_title="TITAN ARCHITECT",
     page_icon="🇬🇧",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -29,30 +31,34 @@ st.markdown("""
     /* Neon Glow Headers */
     h1, h2, h3 {
         color: #ffffff !important;
-        text-shadow: 0 0 10px rgba(0, 230, 118, 0.5);
+        text-shadow: 0 0 10px rgba(0, 255, 187, 0.6);
         font-family: 'Roboto Mono', monospace;
         font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 2px;
     }
     
     /* Custom Metric Cards */
     div[data-testid="metric-container"] {
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.2));
-        border: 1px solid rgba(0, 230, 118, 0.2);
+        border: 1px solid rgba(0, 255, 187, 0.3);
         padding: 15px;
         border-radius: 8px;
         transition: all 0.3s ease;
     }
     div[data-testid="metric-container"]:hover {
-        border-color: #00E676;
-        box-shadow: 0 0 15px rgba(0, 230, 118, 0.2);
+        border-color: #00ffbb;
+        box-shadow: 0 0 20px rgba(0, 255, 187, 0.2);
+        transform: translateY(-2px);
     }
     div[data-testid="stMetricValue"] {
-        color: #00E676 !important;
+        color: #00ffbb !important;
         font-size: 1.6rem !important;
         font-weight: 700;
     }
     div[data-testid="stMetricLabel"] {
         color: #888 !important;
+        font-size: 0.9rem !important;
     }
 
     /* Tabs Styling */
@@ -70,49 +76,58 @@ st.markdown("""
         transition: 0.2s;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #00E676 !important;
+        background-color: #00ffbb !important;
         color: #000000 !important;
-        border-color: #00E676 !important;
+        border-color: #00ffbb !important;
         font-weight: bold;
     }
     
     /* Buttons */
     .stButton > button {
         background: #1f2937;
-        color: #00E676;
-        border: 1px solid #00E676;
+        color: #00ffbb;
+        border: 1px solid #00ffbb;
         font-weight: bold;
         text-transform: uppercase;
         letter-spacing: 1px;
         width: 100%;
         border-radius: 6px;
+        transition: all 0.2s;
     }
     .stButton > button:hover {
-        background: #00E676;
+        background: #00ffbb;
         color: #000;
-        box-shadow: 0 0 15px rgba(0, 230, 118, 0.5);
+        box-shadow: 0 0 15px rgba(0, 255, 187, 0.5);
     }
     
-    /* Table Styling */
-    .stDataFrame {
+    /* Sidebar Inputs */
+    .stTextInput>div>div>input {
+        background-color: #161b22;
+        color: #00ffbb;
         border: 1px solid #333;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DARKPOOL FLOW ENGINE (50D / 50W)
+# 2. DYNAMIC MATH ENGINE
 # ==========================================
 
-class DarkPoolMath:
+class TitanMath:
     @staticmethod
-    def calculate_sma(series, length):
-        """Simple Moving Average"""
-        return series.rolling(window=length).mean()
+    def calculate_ma(series, length, ma_type="SMA"):
+        """Dynamic Moving Average Calculator"""
+        if ma_type == "SMA":
+            return series.rolling(window=length).mean()
+        elif ma_type == "EMA":
+            return series.ewm(span=length, adjust=False).mean()
+        elif ma_type == "WMA":
+            weights = np.arange(1, length + 1)
+            return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+        return series.rolling(window=length).mean() # Default to SMA
 
     @staticmethod
     def calculate_atr(df, length=14):
-        """Average True Range"""
         high_low = df['High'] - df['Low']
         high_close = np.abs(df['High'] - df['Close'].shift())
         low_close = np.abs(df['Low'] - df['Close'].shift())
@@ -121,7 +136,6 @@ class DarkPoolMath:
 
     @staticmethod
     def calculate_rsi(series, length=14):
-        """Relative Strength Index"""
         delta = series.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=length).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=length).mean()
@@ -130,98 +144,100 @@ class DarkPoolMath:
 
     @staticmethod
     def calculate_adx(df, length=14):
-        """Average Directional Index (ADX)"""
         up = df['High'].diff()
         down = -df['Low'].diff()
         plus_dm = np.where((up > down) & (up > 0), up, 0.0)
         minus_dm = np.where((down > up) & (down > 0), down, 0.0)
-        
-        tr = DarkPoolMath.calculate_atr(df, length)
-        
+        tr = TitanMath.calculate_atr(df, length)
+        # Avoid division by zero
+        tr = tr.replace(0, np.nan)
         plus_di = 100 * (pd.Series(plus_dm).rolling(length).mean() / tr)
         minus_di = 100 * (pd.Series(minus_dm).rolling(length).mean() / tr)
-        
         dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
-        adx = dx.rolling(length).mean()
-        return adx
+        return dx.rolling(length).mean()
 
     @staticmethod
-    def get_dual_anchors(daily_df):
+    def get_anchors(df, config):
         """
-        Calculates the user's preferred anchors:
-        1. 50-Day SMA (Daily Data)
-        2. 50-Week SMA (Weekly Data, resampled to Daily)
+        Calculates Fast and Slow Anchors based on user configuration.
+        Supports Daily vs Daily OR Daily vs Weekly.
         """
-        # 1. Daily Anchor (50-Day SMA)
-        daily_df['SMA_50D'] = DarkPoolMath.calculate_sma(daily_df['Close'], 50)
+        # Fast Anchor (Always on base timeframe, e.g., Daily)
+        df['Fast_Anchor'] = TitanMath.calculate_ma(df['Close'], config['fast_len'], config['fast_type'])
         
-        # 2. Weekly Anchor (50-Week SMA)
-        weekly_df = daily_df.resample('W').agg({'Close': 'last'})
-        weekly_df['SMA_50W'] = DarkPoolMath.calculate_sma(weekly_df['Close'], 50)
-        
-        # Reindex Weekly back to Daily (Forward Fill)
-        # This aligns the 50W SMA to the daily chart
-        daily_anchors = weekly_df['SMA_50W'].reindex(daily_df.index, method='ffill')
-        daily_df['SMA_50W'] = daily_anchors
-        
-        return daily_df
+        # Slow Anchor
+        if config['use_weekly_anchor']:
+            # Resample to Weekly, Calculate, Reindex
+            weekly = df.resample('W-FRI').agg({'Close': 'last'})
+            weekly['Slow_Anchor'] = TitanMath.calculate_ma(weekly['Close'], config['slow_len'], config['slow_type'])
+            # Forward fill daily to match weekly steps
+            daily_slow = weekly['Slow_Anchor'].reindex(df.index, method='ffill')
+            df['Slow_Anchor'] = daily_slow
+        else:
+            # Calculate on Daily data
+            df['Slow_Anchor'] = TitanMath.calculate_ma(df['Close'], config['slow_len'], config['slow_type'])
+            
+        return df
 
     @staticmethod
-    def calculate_flow_score(row):
+    def score_asset(row, config):
         """
-        SCORING LOGIC (50D vs 50W)
-        1. Bull Trend: 50D > 50W
-        2. Deep Value: Price inside the "Cloud" (Between 50D and 50W)
+        Dynamic Scoring Engine based on Strategy Mode.
         """
         score = 0
-        
-        # 1. Major Trend Alignment (50D > 50W)
-        # This confirms medium-term momentum is above long-term baseline
-        is_uptrend = row['SMA_50D'] > row['SMA_50W']
-        
-        if is_uptrend:
-            score += 40
-        else:
-            return 0 # Strict rule: We only want uptrends for value buying
-            
-        # 2. Value Zone Logic
         price = row['Close']
-        fast = row['SMA_50D']
-        slow = row['SMA_50W']
+        fast = row['Fast_Anchor']
+        slow = row['Slow_Anchor']
         
-        # If Price is between Slow (50W) and Fast (50D), it's a deep pullback in an uptrend.
-        if slow < price < fast:
-            # GOLDEN VALUE ZONE
-            score += 40 
-        elif price > fast:
-            # ABOVE TREND (Momentum)
-            # Check how far extended it is
-            dist_pct = (price - fast) / fast * 100
-            if dist_pct < 5.0:
-                score += 25 # Buying the breakout/support of 50D
-            else:
-                score += 10 # Extended
-        elif price < slow:
-            # BROKEN TREND (Below 50W) - High Risk
-            score -= 20
+        # 1. Trend Filter
+        bull_trend = fast > slow
+        
+        if config['strategy_mode'] == "Value Hunter (Cloud)":
+            # Strategy: Buy pullbacks into the cloud (Between Fast and Slow) in an Uptrend
+            if not bull_trend: return 0
+            
+            if slow < price < fast:
+                score += 50 # Prime Value Zone
+            elif price > fast:
+                # Check extension
+                dist = (price - fast) / fast * 100
+                if dist < 3.0: score += 30 # Near breakout
+                else: score += 10 # Extended
+            elif price < slow:
+                score -= 20 # Trend Broken
+                
+        elif config['strategy_mode'] == "Trend Momentum":
+            # Strategy: Buy Breakouts (Price > Fast > Slow)
+            if not bull_trend: return 0
+            if price > fast: score += 50
+            if slow < price < fast: score += 20 # Warning, momentum fading
+            
+        elif config['strategy_mode'] == "Deep Value (Contrarian)":
+            # Strategy: Buy when Price < Slow (Oversold logic)
+            # Dangerous, so we rely heavily on RSI
+            if price < slow: score += 40
+            if price < fast: score += 10
 
-        # 3. ADX Filter (Trend Strength)
-        if row['ADX'] > 20:
+        # 2. ADX Filter
+        if row['ADX'] > config['min_adx']:
             score += 10
             
-        # 4. RSI Check
-        if 35 < row['RSI'] < 60: # Ideal entry zone
-            score += 10
+        # 3. RSI Filter (Dynamic based on mode)
+        rsi = row['RSI']
+        if config['strategy_mode'] == "Trend Momentum":
+            if 50 < rsi < 75: score += 20 # Strong momentum
+        else:
+            if rsi < config['max_rsi_entry']: score += 20 # Not overbought
             
         return max(0, min(100, score))
 
 # ==========================================
-# 3. DATA ENGINE (FTSE UNIVERSE)
+# 3. DATA ENGINE
 # ==========================================
 
 @st.cache_data
-def get_lse_universe():
-    """Curated list of Liquid LSE Stocks."""
+def get_default_universe():
+    """Default Liquid LSE Stocks."""
     return [
         "RR.L", "SHEL.L", "BP.L", "AZN.L", "HSBA.L", "LLOY.L", "BARC.L", "GLEN.L", 
         "RIO.L", "ULVR.L", "GSK.L", "DGE.L", "BATS.L", "NG.L", "VOD.L", "TSCO.L", 
@@ -232,102 +248,92 @@ def get_lse_universe():
     ]
 
 @st.cache_data(ttl=3600)
-def scan_market(tickers):
-    """
-    Scans LSE using the 50D/50W logic.
-    """
+def scan_market(tickers, config):
     data_list = []
-    
-    # Need 2+ years for 50W SMA calculation (50 weeks ~= 1 year, plus buffer)
-    raw_data = yf.download(tickers, period="2y", interval="1d", group_by='ticker', progress=False)
+    # Download 2.5y to allow for weekly calc warmup
+    raw_data = yf.download(tickers, period="30mo", interval="1d", group_by='ticker', progress=False)
     
     for ticker in tickers:
         try:
-            df = raw_data[ticker].copy()
+            # Handle Single Ticker vs Multi Ticker return structure
+            if len(tickers) == 1:
+                df = raw_data.copy()
+            else:
+                df = raw_data[ticker].copy()
+                
             if df.empty or len(df) < 300: continue
             
             df = df.dropna(subset=['Close'])
             
-            # --- DARKPOOL ENGINE ---
-            # 1. Indicators
-            df['RSI'] = DarkPoolMath.calculate_rsi(df['Close'], 14)
-            df['ADX'] = DarkPoolMath.calculate_adx(df, 14)
+            # --- ENGINE ---
+            df['RSI'] = TitanMath.calculate_rsi(df['Close'], 14)
+            df['ADX'] = TitanMath.calculate_adx(df, 14)
+            df = TitanMath.get_anchors(df, config)
             
-            # 2. Calculate 50D and 50W Anchors
-            df = DarkPoolMath.get_dual_anchors(df)
-            
-            # 3. Get Latest State
             last = df.iloc[-1]
-            
-            # Skip if 50W hasn't calculated yet (NaN)
-            if pd.isna(last['SMA_50W']): continue
+            if pd.isna(last['Slow_Anchor']): continue
 
             info = {
                 'Ticker': ticker,
                 'Close': last['Close'],
-                'SMA_50D': last['SMA_50D'],
-                'SMA_50W': last['SMA_50W'],
+                'Fast_Anchor': last['Fast_Anchor'],
+                'Slow_Anchor': last['Slow_Anchor'],
                 'RSI': last['RSI'],
                 'ADX': last['ADX'],
                 'Volume': last['Volume']
             }
             
-            # 4. Score
-            info['Flow_Score'] = DarkPoolMath.calculate_flow_score(info)
+            info['Score'] = TitanMath.score_asset(info, config)
             
-            # 5. Status String
-            # Bullish Alignment: 50D > 50W
-            if info['SMA_50D'] > info['SMA_50W']:
-                if info['SMA_50W'] < info['Close'] < info['SMA_50D']:
-                    info['Status'] = "VALUE ZONE 💎" # Inside the cloud
-                elif info['Close'] > info['SMA_50D']:
-                    info['Status'] = "MOMENTUM 🚀" # Above both
-                else:
-                    info['Status'] = "CAUTION ⚠️" # Below 50W
+            # Status Text
+            fast, slow, price = info['Fast_Anchor'], info['Slow_Anchor'], info['Close']
+            if fast > slow:
+                if slow < price < fast: info['Status'] = "CLOUD VALUE 💎"
+                elif price > fast: info['Status'] = "MOMENTUM 🚀"
+                else: info['Status'] = "WEAK BULL ⚠️"
             else:
-                info['Status'] = "BEARISH 🐻" # 50D < 50W
+                info['Status'] = "BEAR TREND 🐻"
                 
             data_list.append(info)
             
-        except Exception as e:
+        except Exception:
             continue
             
     return pd.DataFrame(data_list)
 
 # ==========================================
-# 4. UI VISUALIZATION
+# 4. UI COMPONENTS
 # ==========================================
 
-def render_chart(ticker):
-    """Plots the 50D/50W Cloud Chart."""
-    with st.spinner(f"Rendering 50/50 Analysis for {ticker}..."):
+def render_chart(ticker, config):
+    with st.spinner(f"Architecting Charts for {ticker}..."):
         stock = yf.Ticker(ticker)
-        df = stock.history(period="2y", interval="1d")
+        df = stock.history(period="30mo", interval="1d")
         
-        # Re-calc Logic for Chart
-        df = DarkPoolMath.get_dual_anchors(df)
-        df['RSI'] = DarkPoolMath.calculate_rsi(df['Close'])
+        # Apply Config Logic to single chart
+        df = TitanMath.get_anchors(df, config)
+        df['RSI'] = TitanMath.calculate_rsi(df['Close'])
         
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                             vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
-        # CANDLESTICK
+        # Candle
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
                                      low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
         
-        # 50-DAY SMA (Fast Anchor)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50D'], line=dict(color='#00E676', width=2), name='50-Day SMA'), row=1, col=1)
+        # Anchors
+        f_name = f"Fast ({config['fast_len']} {config['fast_type']})"
+        s_name = f"Slow ({config['slow_len']} {config['slow_type']}{' W' if config['use_weekly_anchor'] else ' D'})"
         
-        # 50-WEEK SMA (Slow Anchor)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50W'], line=dict(color='#2962FF', width=2), name='50-Week SMA'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Fast_Anchor'], line=dict(color='#00ffbb', width=2), name=f_name), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Slow_Anchor'], line=dict(color='#2962FF', width=2), name=s_name), row=1, col=1)
         
-        # Cloud Fill (Between 50D and 50W)
-        # Visualizes the "Value Zone"
+        # Cloud
         fig.add_trace(go.Scatter(
             x=pd.concat([pd.Series(df.index), pd.Series(df.index)[::-1]]),
-            y=pd.concat([df['SMA_50D'], df['SMA_50W'][::-1]]),
+            y=pd.concat([df['Fast_Anchor'], df['Slow_Anchor'][::-1]]),
             fill='toself',
-            fillcolor='rgba(0, 230, 118, 0.1)',
+            fillcolor='rgba(0, 255, 187, 0.1)',
             line=dict(color='rgba(255,255,255,0)'),
             name='Value Cloud',
             showlegend=True
@@ -335,16 +341,16 @@ def render_chart(ticker):
 
         # RSI
         fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#e0e0e0', width=1), name='RSI'), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dot", line_color="#FF5252", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_color="#00E676", row=2, col=1)
+        fig.add_hline(y=config['max_rsi_entry'], line_dash="dot", line_color="#00ffbb", row=2, col=1, annotation_text="Max Entry")
+        fig.add_hline(y=30, line_dash="dot", line_color="#FF5252", row=2, col=1)
         
         fig.update_layout(
-            height=650,
+            height=600,
             template="plotly_dark",
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             xaxis_rangeslider_visible=False,
-            title=f"Titan Value Structure: {ticker} (50D vs 50W)"
+            title=f"Titan Architect View: {ticker}"
         )
         
         st.plotly_chart(fig, use_container_width=True)
@@ -354,103 +360,170 @@ def render_chart(ticker):
 # ==========================================
 
 def main():
-    # Header
+    # --- HEADER ---
     c1, c2 = st.columns([3, 1])
     with c1:
-        st.title("🇬🇧 TITAN LSE VALUE HUNTER")
-        st.caption("Strategy: 50-Day SMA vs 50-Week SMA Convergence")
+        st.title("🇬🇧 TITAN ARCHITECT v3.0")
+        st.caption("FULLY CUSTOMIZABLE ALGORITHMIC SCANNER")
     with c2:
-        if st.button("🔄 REFRESH SCAN"):
-            st.cache_data.clear()
-            st.rerun()
+        if st.button("RUN SCANNER", type="primary", use_container_width=True):
+            st.session_state['run_scan'] = True
 
-    # Sidebar
+    # --- SIDEBAR CONFIGURATION ---
     with st.sidebar:
-        st.header("⚙️ STRATEGY SETTINGS")
-        st.info("Core Logic: Finding price interacting with the 50D/50W Cloud.")
+        st.header("🛠️ STRATEGY ENGINE")
         
-        min_score = st.slider("Min Titan Score", 0, 100, 70, help="Higher = Better Technical Value Setup")
+        # 1. Strategy Mode
+        strat_mode = st.selectbox("Strategy Mode", 
+                                  ["Value Hunter (Cloud)", "Trend Momentum", "Deep Value (Contrarian)"],
+                                  index=0)
         
-        st.subheader("Filters")
-        only_cloud_retest = st.checkbox("Value Zone Only", value=False, help="Show stocks strictly inside the 50D/50W Cloud")
-        high_adx_only = st.checkbox("High Strength Only (ADX > 25)", value=True)
-
-    # Main Logic
-    universe = get_lse_universe()
-    
-    with st.spinner(f"Calculating 50D/50W Models for {len(universe)} tickers..."):
-        df = scan_market(universe)
-        
-        # Apply Sidebar Filters
-        if high_adx_only:
-            df = df[df['ADX'] > 25]
-        
-        if only_cloud_retest:
-            # Value Zone = Price between 50W and 50D
-            df = df[ (df['Close'] > df['SMA_50W']) & (df['Close'] < df['SMA_50D']) ]
+        st.markdown("---")
+        st.subheader("1. Anchor Settings")
+        c_s1, c_s2 = st.columns(2)
+        with c_s1:
+            fast_len = st.number_input("Fast Len", 10, 200, 50)
+            fast_type = st.selectbox("Fast Type", ["SMA", "EMA", "WMA"], index=0)
+        with c_s2:
+            slow_len = st.number_input("Slow Len", 20, 200, 50)
+            slow_type = st.selectbox("Slow Type", ["SMA", "EMA", "WMA"], index=0)
             
-        df = df[df['Flow_Score'] >= min_score]
-        df = df.sort_values(by="Flow_Score", ascending=False)
+        use_weekly = st.checkbox("Use Weekly Data for Slow Anchor?", value=True, help="If checked, Slow Anchor calculates on Weekly candles (e.g. 50W SMA).")
+        
+        st.markdown("---")
+        st.subheader("2. Filter Logic")
+        min_score = st.slider("Min Titan Score", 0, 100, 60)
+        min_adx = st.slider("Min ADX (Strength)", 0, 50, 20)
+        max_rsi = st.slider("Max RSI for Entry", 30, 90, 60)
+        
+        st.markdown("---")
+        st.subheader("3. Universe")
+        univ_mode = st.radio("Target Universe", ["FTSE Default", "Custom List"])
+        
+        custom_tickers = []
+        if univ_mode == "Custom List":
+            raw_txt = st.text_area("Enter Tickers (comma separated)", "AAPL, MSFT, TSLA, BTC-USD")
+            custom_tickers = [x.strip() for x in raw_txt.split(',')]
 
-    # Display
-    tab1, tab2 = st.tabs(["💎 VALUE HUNTER", "🔬 CHART INSPECTOR"])
+        # Save config dict
+        config = {
+            'strategy_mode': strat_mode,
+            'fast_len': fast_len, 'fast_type': fast_type,
+            'slow_len': slow_len, 'slow_type': slow_type,
+            'use_weekly_anchor': use_weekly,
+            'min_adx': min_adx, 'max_rsi_entry': max_rsi
+        }
 
-    with tab1:
+    # --- MAIN LOGIC ---
+    if univ_mode == "FTSE Default":
+        universe = get_default_universe()
+    else:
+        universe = custom_tickers
+
+    if 'run_scan' not in st.session_state:
+        st.info("👈 Configure your Strategy Logic in the Sidebar and hit 'RUN SCANNER'.")
+        return
+
+    # Run Scan
+    with st.spinner(f"Architecting Market Data for {len(universe)} assets..."):
+        df = scan_market(universe, config)
+        
+        # Filters
+        df = df[df['Score'] >= min_score]
+        df = df.sort_values(by="Score", ascending=False)
+
+    # --- TABS ---
+    t1, t2, t3, t4 = st.tabs(["📊 RESULTS MATRIX", "🔬 CHART LAB", "🧮 RISK CALC", "🤖 AI ANALYST"])
+
+    with t1:
         if not df.empty:
-            # Top Picks Cards
-            st.markdown("### 🏛️ Top 50D/50W Opportunities")
-            top_row = df.head(4)
-            cols = st.columns(4)
+            st.markdown(f"### 🎯 Identified {len(df)} Candidates")
             
-            for i, (idx, row) in enumerate(top_row.iterrows()):
-                with cols[i]:
-                    st.metric(
-                        label=row['Ticker'],
-                        value=f"£{row['Close']:.2f}",
-                        delta=f"{row['Status']}"
-                    )
-                    st.progress(int(row['Flow_Score']))
-                    st.caption(f"50D: {row['SMA_50D']:.2f} | 50W: {row['SMA_50W']:.2f}")
+            # Download Button
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Results (CSV)", csv, "titan_architect_scan.csv", "text/csv")
             
-            # Main Table
-            st.markdown("### 📋 Full Scan Results")
-            
-            # Color Styling Function
-            def highlight_status(val):
-                if 'VALUE' in val: color = '#FFD700' # Gold
-                elif 'MOMENTUM' in val: color = '#00E676' # Green
-                else: color = '#FF5252' # Red
+            # Styling
+            def color_status(val):
+                if "VALUE" in val: color = "#FFD700"
+                elif "MOMENTUM" in val: color = "#00ffbb"
+                elif "BEAR" in val: color = "#FF5252"
+                else: color = "white"
                 return f'color: {color}; font-weight: bold'
 
-            display_df = df[['Ticker', 'Close', 'Status', 'Flow_Score', 'SMA_50D', 'SMA_50W', 'RSI']].copy()
-            
+            show_df = df[['Ticker', 'Close', 'Status', 'Score', 'RSI', 'ADX', 'Fast_Anchor', 'Slow_Anchor']].copy()
             st.dataframe(
-                display_df.style.map(highlight_status, subset=['Status'])
-                                .background_gradient(subset=['Flow_Score'], cmap='Greens')
-                                .format({'SMA_50D': '{:.2f}', 'SMA_50W': '{:.2f}', 'RSI': '{:.1f}'}),
+                show_df.style.map(color_status, subset=['Status'])
+                             .background_gradient(subset=['Score'], cmap='Greens')
+                             .format({'Close': '{:.2f}', 'RSI': '{:.1f}', 'ADX': '{:.1f}', 'Fast_Anchor': '{:.2f}', 'Slow_Anchor': '{:.2f}'}),
                 use_container_width=True,
                 height=600
             )
         else:
-            st.warning("No assets match your current Value Filters. Try lowering the Score.")
+            st.warning("No assets matched your custom criteria.")
 
-    with tab2:
-        st.markdown("### 🔭 Institutional Chart")
+    with t2:
         if not df.empty:
-            sel = st.selectbox("Select Asset", df['Ticker'].tolist())
-            render_chart(sel)
+            c1, c2 = st.columns([1, 3])
+            with c1:
+                sel = st.selectbox("Select Asset to Inspect", df['Ticker'].tolist())
+            with c2:
+                row = df[df['Ticker'] == sel].iloc[0]
+                st.info(f"**Current Status:** {row['Status']} | **Score:** {row['Score']:.0f}")
             
-            # Logic Explanation
-            with st.expander("ℹ️ Understanding the 50/50 Strategy"):
-                st.markdown("""
-                **The Titan 50/50 System:**
-                1.  **50-Week SMA (Blue Line):** The ultimate long-term baseline. Institutions defend this level.
-                2.  **50-Day SMA (Green Line):** The medium-term institutional trend.
-                3.  **Bullish Alignment:** We only look for buys when the **50-Day > 50-Week**.
-                4.  **Value Zone (Cloud):** When price dips *below* the 50-Day but stays *above* the 50-Week, it is in the 'Value Zone'. This is often the best risk/reward entry.
-                """)
+            render_chart(sel, config)
         else:
-            st.info("Run the scan to populate the inspector.")
+            st.write("Run scan to populate.")
+
+    with t3:
+        st.markdown("### 🛡️ Position Size Architect")
+        c_r1, c_r2 = st.columns(2)
+        with c_r1:
+            acct_size = st.number_input("Account Size (£)", 1000, 1000000, 10000)
+            risk_pct = st.number_input("Risk per Trade (%)", 0.1, 5.0, 1.0)
+        with c_r2:
+            entry_p = st.number_input("Entry Price", 0.0, 10000.0, 100.0)
+            stop_p = st.number_input("Stop Loss Price", 0.0, 10000.0, 95.0)
+        
+        if entry_p > stop_p:
+            risk_amt = acct_size * (risk_pct / 100)
+            risk_per_share = entry_p - stop_p
+            shares = risk_amt / risk_per_share
+            total_cost = shares * entry_p
+            
+            st.markdown("---")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Shares to Buy", f"{int(shares)}")
+            m2.metric("Total Position Value", f"£{total_cost:,.2f}")
+            m3.metric("Risk Amount", f"£{risk_amt:.2f}")
+        else:
+            st.warning("Stop Loss must be below Entry Price for Long positions.")
+
+    with t4:
+        st.markdown("### 🤖 Titan AI Analyst")
+        api_key = st.text_input("OpenAI API Key (Optional)", type="password")
+        
+        if st.button("Generate Strategy Report"):
+            if not df.empty and api_key:
+                sel_ai = df.iloc[0] # Analyze top pick
+                client = OpenAI(api_key=api_key)
+                
+                prompt = f"""
+                Analyze {sel_ai['Ticker']} based on Titan Architect Data.
+                Price: {sel_ai['Close']}. 
+                Strategy Mode: {config['strategy_mode']}.
+                Fast Anchor: {sel_ai['Fast_Anchor']}. Slow Anchor: {sel_ai['Slow_Anchor']}.
+                RSI: {sel_ai['RSI']}. ADX: {sel_ai['ADX']}.
+                Titan Score: {sel_ai['Score']}. Status: {sel_ai['Status']}.
+                
+                Provide a professional trade thesis (Bullish/Bearish), key risks, and whether the technicals support the strategy mode selected.
+                """
+                
+                with st.spinner("AI Architect is thinking..."):
+                    res = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content":prompt}])
+                    st.markdown(res.choices[0].message.content)
+            else:
+                st.error("Need Scan Results and API Key.")
 
 if __name__ == "__main__":
     main()
