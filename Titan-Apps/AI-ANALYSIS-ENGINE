@@ -1,6 +1,6 @@
 """
 AI-ANALYSIS-ENGINE - Production-Ready Trading Dashboard
-Version 19.4: AI Analyst Synced with Force Refresh
+Version 1.4: AI Analyst Synced with Force Refresh
 """
 import time
 import math
