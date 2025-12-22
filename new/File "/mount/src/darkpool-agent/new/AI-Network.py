@@ -5,8 +5,6 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Generator
-from google import genai
-from google.genai import types
 
 # --- 1. System Configuration & DPC Architecture ---
 st.set_page_config(
@@ -15,6 +13,21 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- 2. Resilience Layer: Import Safety ---
+try:
+    from google import genai
+    from google.genai import types
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+    # Mock classes to prevent runtime crashes before user sees error
+    class genai:
+        class Client:
+            def __init__(self, api_key): pass
+    class types:
+        class GenerateContentConfig:
+            def __init__(self, **kwargs): pass
 
 def _inject_dpc_css():
     st.markdown("""
@@ -149,7 +162,7 @@ def _inject_dpc_css():
 
 _inject_dpc_css()
 
-# --- 2. Data Structures & Loading ---
+# --- 3. Data Structures & Loading ---
 @dataclass(frozen=True)
 class Role:
     key: str
@@ -161,43 +174,53 @@ class Role:
     focus: str
     capabilities: List[str]
 
+# FALLBACK DATA in case JSON is missing
+DEFAULT_ROLES = [
+    Role("a2", 2, 2, "💀", "Architect", "Systems Architect", "Structure & Strategy", ["System Design"]),
+    Role("a1", 1, 1, "🛡️", "Sentinel", "Security Sentinel", "Risk & Threat", ["Veto Power"]),
+    Role("a5", 5, 3, "🚀", "Growth", "Growth Operator", "Scale & GTM", ["Marketing"]),
+    Role("a11", 11, 1, "⚖️", "Auditor", "Ethics Compass", "Compliance", ["Oversight"])
+]
+
 def load_roles() -> Tuple[str, str, List[Role]]:
     here = os.path.dirname(__file__)
     json_path = os.path.join(here, "roles.json")
     
     if not os.path.exists(json_path):
-        st.error(f"CRITICAL: System integrity compromised. Missing {json_path}")
-        return "", "", []
+        # Graceful fallback instead of crash
+        return "SYSTEM_META: Default Fallback", "PROTOCOLS: None", DEFAULT_ROLES
 
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-        
-    roles = [
-        Role(
-            key=r["key"],
-            id=int(r["id"]),
-            tier=int(r["tier"]),
-            icon=r.get("icon", "🔹"),
-            name=r["name"],
-            title=r["title"],
-            focus=r["focus"],
-            capabilities=list(r.get("capabilities", [])),
-        )
-        for r in data["roles"]
-    ]
-    return data.get("global_meta", ""), data.get("override_protocols", ""), roles
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        roles = [
+            Role(
+                key=r["key"],
+                id=int(r["id"]),
+                tier=int(r["tier"]),
+                icon=r.get("icon", "🔹"),
+                name=r["name"],
+                title=r["title"],
+                focus=r["focus"],
+                capabilities=list(r.get("capabilities", [])),
+            )
+            for r in data["roles"]
+        ]
+        return data.get("global_meta", ""), data.get("override_protocols", ""), roles
+    except Exception as e:
+        return f"Error loading roles: {e}", "", DEFAULT_ROLES
 
 GLOBAL_META, OVERRIDE_PROTOCOLS, ROLES = load_roles()
 ROLE_BY_KEY = {r.key: r for r in ROLES}
 TIER_NAMES = {1: "Sovereign", 2: "Strategic", 3: "Execution", 4: "Support"}
 
-# --- 3. Logic Core (Streaming Enabled) ---
+# --- 4. Logic Core ---
 def init_state():
     defaults = {
         "selected_analyst_key": "a2", # Architect
         "selected_council": ["a1", "a2", "a5", "a11"],
         "chat_logs": {r.key: [] for r in ROLES},
-        "council_log": [], # Shared log for council
+        "council_log": [], 
         "last_decision": "",
         "api_key": os.environ.get("GEMINI_API_KEY", ""),
         "model_name": "gemini-2.0-flash-exp"
@@ -208,9 +231,10 @@ def init_state():
 
 init_state()
 
-def get_client() -> Optional[genai.Client]:
+def get_client():
+    if not HAS_GENAI:
+        return None
     if not st.session_state.api_key:
-        st.sidebar.error("⚠️ NEURAL LINK SEVERED: Missing API Key")
         return None
     return genai.Client(api_key=st.session_state.api_key)
 
@@ -234,8 +258,20 @@ def build_system_prompt(role: Role, context: str = "") -> str:
     {context}
     """
 
-def stream_agent_response(client: genai.Client, role_key: str, user_prompt: str) -> Generator[str, None, None]:
+def stream_agent_response(client, role_key: str, user_prompt: str) -> Generator[str, None, None]:
     """Streams the agent's response chunk by chunk."""
+    
+    # --- SIMULATION MODE (If Lib missing) ---
+    if not HAS_GENAI:
+        time.sleep(0.5)
+        yield "⚠️ **SYSTEM ALERT**: `google-genai` library not found.\n\n"
+        yield "Please ensure `requirements.txt` contains `google-genai>=0.3.0` and redeploy."
+        return
+
+    if not client:
+        yield "⚠️ **ACCESS DENIED**: Missing API Key in Sidebar Config."
+        return
+
     role = ROLE_BY_KEY[role_key]
     sys_prompt = build_system_prompt(role)
     
@@ -255,13 +291,19 @@ def stream_agent_response(client: genai.Client, role_key: str, user_prompt: str)
     except Exception as e:
         yield f"**[SYSTEM FAILURE]**: {str(e)}"
 
-# --- 4. UI Layout ---
+# --- 5. UI Layout ---
 
 # Sidebar
 with st.sidebar:
     st.markdown("## 💀 THE ARCHITECT")
-    st.caption(f"Status: **ONLINE** | `v2.3.0-dpc`")
     
+    # Status Check
+    if HAS_GENAI:
+        st.caption("Status: **ONLINE** | `v2.4-dpc`")
+    else:
+        st.error("MISSING LIB: google-genai")
+        st.caption("Running in Safe Mode")
+
     with st.expander("⚙️ System Config"):
         st.session_state.api_key = st.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
         st.session_state.model_name = st.selectbox("Model", ["gemini-2.0-flash-exp", "gemini-1.5-pro"], index=0)
@@ -275,7 +317,6 @@ with st.sidebar:
             
         st.markdown(f"### {TIER_NAMES[tier]}")
         for r in tier_roles:
-            # Highlight selected
             kind = "primary" if st.session_state.selected_analyst_key == r.key else "secondary"
             if st.button(f"{r.icon} {r.name}", key=f"btn_{r.key}", use_container_width=True, type=kind):
                 st.session_state.selected_analyst_key = r.key
@@ -319,36 +360,41 @@ with tabs[0]:
     
     if user_text:
         client = get_client()
-        if client:
-            # 1. Log User Input
-            st.session_state.council_log.append({"role": "user", "content": user_text, "avatar": "👤"})
+        
+        # 1. Log User Input
+        st.session_state.council_log.append({"role": "user", "content": user_text, "avatar": "👤"})
+        with feed_container:
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(user_text)
+
+        # 2. Execute Agents Sequentially
+        agent_outputs = {}
+        for k in st.session_state.selected_council:
+            r = ROLE_BY_KEY[k]
             with feed_container:
-                with st.chat_message("user", avatar="👤"):
-                    st.markdown(user_text)
+                with st.chat_message("assistant", avatar=r.icon):
+                    st.markdown(f"**{r.name}** is processing...")
+                    response_text = st.write_stream(stream_agent_response(client, k, user_text))
+                    agent_outputs[k] = response_text
+                    
+            st.session_state.council_log.append({"role": "assistant", "content": f"**{r.name}**: {response_text}", "avatar": r.icon})
 
-            # 2. Execute Agents Sequentially
-            agent_outputs = {}
-            for k in st.session_state.selected_council:
-                r = ROLE_BY_KEY[k]
-                with feed_container:
-                    with st.chat_message("assistant", avatar=r.icon):
-                        st.markdown(f"**{r.name}** is processing...")
-                        response_text = st.write_stream(stream_agent_response(client, k, user_text))
-                        agent_outputs[k] = response_text
-                        
-                st.session_state.council_log.append({"role": "assistant", "content": f"**{r.name}**: {response_text}", "avatar": r.icon})
-
-            # 3. Synthesize
+        # 3. Synthesize
+        if HAS_GENAI and client:
             st.markdown("---")
             with st.spinner("Synthesizing Decision Card..."):
-                # Quick synthesis prompt
                 final_prompt = f"Summarize these reports into a decision card: {json.dumps(agent_outputs)}"
-                resp = client.models.generate_content(
-                    model=st.session_state.model_name,
-                    contents=final_prompt
-                )
-                st.session_state.last_decision = resp.text
-                st.rerun()
+                try:
+                    resp = client.models.generate_content(
+                        model=st.session_state.model_name,
+                        contents=final_prompt
+                    )
+                    st.session_state.last_decision = resp.text
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Synthesis Error: {e}")
+        else:
+             st.warning("Synthesis disabled (Library or Key missing).")
 
     if st.session_state.last_decision:
         st.success("SYNTHESIS COMPLETE")
@@ -382,17 +428,15 @@ with tabs[1]:
     # Input
     if msg := st.chat_input(f"Direct link to {target.name}..."):
         client = get_client()
-        if client:
-            st.session_state.chat_logs[target.key].append(("user", msg))
-            with chat_container:
-                with st.chat_message("user", avatar="👤"):
-                    st.markdown(msg)
-                
-                with st.chat_message("assistant", avatar=target.icon):
-                    # Stream the response
-                    full_response = st.write_stream(stream_agent_response(client, target.key, msg))
+        st.session_state.chat_logs[target.key].append(("user", msg))
+        with chat_container:
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(msg)
             
-            st.session_state.chat_logs[target.key].append(("assistant", full_response))
+            with st.chat_message("assistant", avatar=target.icon):
+                full_response = st.write_stream(stream_agent_response(client, target.key, msg))
+        
+        st.session_state.chat_logs[target.key].append(("assistant", full_response))
 
 # --- TAB 3: LOGS ---
 with tabs[2]:
