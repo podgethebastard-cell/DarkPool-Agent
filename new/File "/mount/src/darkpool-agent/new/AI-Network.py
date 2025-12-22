@@ -1,10 +1,14 @@
 
 import streamlit as st
-from dataclasses import dataclass
+import json
+import os
 import time
-import base64
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Generator
+from google import genai
+from google.genai import types
 
-# --- 1. System Configuration ---
+# --- 1. System Configuration & DPC Architecture ---
 st.set_page_config(
     page_title="SOLO AI // ARCHITECT",
     page_icon="💀",
@@ -12,7 +16,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. DPC CSS Architecture (Dark Pool Compliant) ---
 def _inject_dpc_css():
     st.markdown("""
         <style>
@@ -27,7 +30,8 @@ def _inject_dpc_css():
             --neon-green: #00ff41;
             --neon-blue: #00d2ff;
             --neon-purple: #bc13fe;
-            --border-glow: 0 0 5px rgba(0, 210, 255, 0.3);
+            --neon-red: #ff0055;
+            --glass-panel: rgba(22, 27, 34, 0.9);
         }
 
         /* Global Resets */
@@ -37,33 +41,54 @@ def _inject_dpc_css():
             font-family: 'Roboto Mono', monospace;
         }
         
+        /* Chat Message Styling */
+        [data-testid="stChatMessage"] {
+            background-color: var(--panel-dark);
+            border-left: 3px solid #30363d;
+            border-radius: 4px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
+        }
+        [data-testid="stChatMessage"]:hover {
+            border-left-color: var(--neon-blue);
+            box-shadow: 0 0 15px rgba(0, 210, 255, 0.1);
+        }
+        
+        /* User Message Distinction */
+        [data-testid="stChatMessage"][data-test-user="true"] {
+            background-color: rgba(0, 210, 255, 0.05);
+            border-left-color: var(--neon-blue);
+        }
+
         /* Typography */
-        h1, h2, h3, h4, h5, h6, p, div, span {
+        h1, h2, h3, h4, h5, h6, p, div, span, label, .stMarkdown {
             font-family: 'Roboto Mono', monospace !important;
             color: var(--text-main) !important;
         }
-
-        /* Sidebar */
+        
+        /* Sidebar Styling */
         [data-testid="stSidebar"] {
             background-color: var(--panel-dark);
             border-right: 1px solid #30363d;
         }
-
-        /* Custom Buttons */
+        
+        /* Button Architecture */
         div.stButton > button {
             background-color: var(--panel-dark);
             color: var(--neon-blue);
-            border: 1px solid var(--neon-blue);
-            box-shadow: 0 0 5px rgba(0, 210, 255, 0.1);
+            border: 1px solid #30363d;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 0.8rem;
             transition: all 0.3s ease;
         }
         div.stButton > button:hover {
-            background-color: var(--neon-blue);
-            color: var(--background-dark) !important;
-            box-shadow: 0 0 15px var(--neon-blue);
+            border-color: var(--neon-blue);
+            color: var(--neon-blue);
+            box-shadow: 0 0 10px rgba(0, 210, 255, 0.2);
         }
-        
-        /* Primary Action Button */
         div.stButton > button[kind="primary"] {
             background-color: rgba(0, 255, 65, 0.1);
             color: var(--neon-green);
@@ -72,81 +97,110 @@ def _inject_dpc_css():
         div.stButton > button[kind="primary"]:hover {
             background-color: var(--neon-green);
             color: var(--background-dark) !important;
-            box-shadow: 0 0 15px var(--neon-green);
+            box-shadow: 0 0 20px var(--neon-green);
         }
 
-        /* Text Areas & Inputs */
-        .stTextArea textarea, .stTextInput input {
-            background-color: #0d1117;
-            border: 1px solid #30363d;
-            color: #c9d1d9;
+        /* Input Fields */
+        .stTextArea textarea, .stTextInput input, .stChatInput textarea {
+            background-color: #0d1117 !important;
+            border: 1px solid #30363d !important;
+            color: #c9d1d9 !important;
+            border-radius: 4px;
         }
-        .stTextArea textarea:focus, .stTextInput input:focus {
-            border-color: var(--neon-purple);
-            box-shadow: 0 0 5px var(--neon-purple);
+        .stTextArea textarea:focus, .stTextInput input:focus, .stChatInput textarea:focus {
+            border-color: var(--neon-purple) !important;
+            box-shadow: 0 0 8px rgba(188, 19, 254, 0.3) !important;
         }
 
-        /* Tabs */
+        /* Tab Architecture */
         .stTabs [data-baseweb="tab-list"] {
-            gap: 2px;
+            gap: 4px;
             background-color: transparent;
         }
         .stTabs [data-baseweb="tab"] {
-            height: 50px;
-            white-space: pre-wrap;
+            height: 45px;
             background-color: var(--panel-dark);
-            border-radius: 4px 4px 0px 0px;
-            color: #8b949e;
             border: 1px solid transparent;
+            border-radius: 4px 4px 0 0;
+            color: #8b949e;
+            transition: all 0.2s;
         }
         .stTabs [aria-selected="true"] {
             background-color: var(--background-dark);
             color: var(--neon-blue);
             border-top: 2px solid var(--neon-blue);
-        }
-
-        /* Containers (Cards) */
-        [data-testid="stVerticalBlock"] > div > div {
-           /* Subtle separation for cards could go here */
+            border-left: 1px solid #30363d;
+            border-right: 1px solid #30363d;
         }
         
+        /* Status Badges */
+        .badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            border: 1px solid;
+        }
+        .badge-sovereign { color: #ff0055; border-color: #ff0055; background: rgba(255, 0, 85, 0.1); }
+        .badge-strategic { color: #00d2ff; border-color: #00d2ff; background: rgba(0, 210, 255, 0.1); }
+        .badge-execution { color: #00ff41; border-color: #00ff41; background: rgba(0, 255, 65, 0.1); }
         </style>
     """, unsafe_allow_html=True)
 
 _inject_dpc_css()
 
-# --- 3. Data Structures ---
-@dataclass
-class Analyst:
+# --- 2. Data Structures & Loading ---
+@dataclass(frozen=True)
+class Role:
     key: str
-    name: str
+    id: int
     tier: int
+    icon: str
+    name: str
     title: str
     focus: str
-    color: str  # Added for UI accent
+    capabilities: List[str]
 
-ANALYSTS = [
-    Analyst("a1", "Sentinel", 1, "Security Sentinel", "Risk & Threat Modeling", "#ff0000"),
-    Analyst("a2", "Architect", 2, "Systems Architect", "Architecture & Strategy", "#00d2ff"),
-    Analyst("a5", "Growth", 3, "Growth Operator", "Distribution & GTM", "#00ff41"),
-    Analyst("a11", "Auditor", 2, "Compliance Auditor", "Controls & Policy", "#bc13fe"),
-]
+def load_roles() -> Tuple[str, str, List[Role]]:
+    here = os.path.dirname(__file__)
+    json_path = os.path.join(here, "roles.json")
+    
+    if not os.path.exists(json_path):
+        st.error(f"CRITICAL: System integrity compromised. Missing {json_path}")
+        return "", "", []
 
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        
+    roles = [
+        Role(
+            key=r["key"],
+            id=int(r["id"]),
+            tier=int(r["tier"]),
+            icon=r.get("icon", "🔹"),
+            name=r["name"],
+            title=r["title"],
+            focus=r["focus"],
+            capabilities=list(r.get("capabilities", [])),
+        )
+        for r in data["roles"]
+    ]
+    return data.get("global_meta", ""), data.get("override_protocols", ""), roles
+
+GLOBAL_META, OVERRIDE_PROTOCOLS, ROLES = load_roles()
+ROLE_BY_KEY = {r.key: r for r in ROLES}
 TIER_NAMES = {1: "Sovereign", 2: "Strategic", 3: "Execution", 4: "Support"}
-ANALYST_MAP = {a.key: a for a in ANALYSTS}
 
-# --- 4. Logic Core ---
+# --- 3. Logic Core (Streaming Enabled) ---
 def init_state():
-    """Initialize session state with default values."""
     defaults = {
-        "active_tab": "Council",
-        "selected_analyst": "a2",
+        "selected_analyst_key": "a2", # Architect
         "selected_council": ["a1", "a2", "a5", "a11"],
-        "chat_logs": {a.key: [] for a in ANALYSTS},
+        "chat_logs": {r.key: [] for r in ROLES},
+        "council_log": [], # Shared log for council
         "last_decision": "",
-        "current_image": None,
-        "edited_image": None,
-        "processing": False
+        "api_key": os.environ.get("GEMINI_API_KEY", ""),
+        "model_name": "gemini-2.0-flash-exp"
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -154,182 +208,193 @@ def init_state():
 
 init_state()
 
-def generate_response(system_prompt: str, user_text: str, agent_key: str):
-    """
-    Simulated Inference Engine.
-    Integration: Connect this to `agentmob.py` or `deepseekagent.py` logic.
-    """
-    # Simulate processing latency for realism
-    time.sleep(0.3) 
-    
-    # Placeholder logic
-    prefix = f"**[{ANALYST_MAP[agent_key].name} Protocol]**"
-    return f"{prefix}\n\nAnalyzing parameters: `{user_text}`...\n\nInsight: The architectural pattern requires immediate vectorization. Recommended moving from loop-based execution to matrix operations."
+def get_client() -> Optional[genai.Client]:
+    if not st.session_state.api_key:
+        st.sidebar.error("⚠️ NEURAL LINK SEVERED: Missing API Key")
+        return None
+    return genai.Client(api_key=st.session_state.api_key)
 
-def synthesize_council(user_text: str, responses: dict):
-    """Synthesize multiple analyst outputs into a decision card."""
-    bullets = "\n".join([f"- **{ANALYST_MAP[k].name}**: {v.splitlines()[-1]}" for k, v in responses.items()])
-    
+def build_system_prompt(role: Role, context: str = "") -> str:
+    caps = "\n".join([f"- {c}" for c in role.capabilities])
     return f"""
-### 💠 Council Consensus
-**Directive:** `{user_text}`
+    IDENTITY: {role.title} ({role.name})
+    FOCUS: {role.focus}
+    CAPABILITIES:
+    {caps}
+    
+    SYSTEM CONTEXT:
+    {GLOBAL_META}
+    
+    PROTOCOLS:
+    {OVERRIDE_PROTOCOLS}
+    
+    MISSION:
+    You are an elite component of the Solo AI Neural Network. 
+    Act strictly according to your role. Be concise, technical, and high-signal.
+    {context}
+    """
 
----
-{bullets}
+def stream_agent_response(client: genai.Client, role_key: str, user_prompt: str) -> Generator[str, None, None]:
+    """Streams the agent's response chunk by chunk."""
+    role = ROLE_BY_KEY[role_key]
+    sys_prompt = build_system_prompt(role)
+    
+    try:
+        response = client.models.generate_content_stream(
+            model=st.session_state.model_name,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=sys_prompt,
+                temperature=0.7,
+                max_output_tokens=1000
+            )
+        )
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+    except Exception as e:
+        yield f"**[SYSTEM FAILURE]**: {str(e)}"
 
----
-### ⚠️ Executive Action Required
-1. **Approve** the vectorized deployment.
-2. **Override** safety protocols for `a1`.
-3. **Commit** changes to `main`.
-"""
-
-# --- 5. UI Layout ---
+# --- 4. UI Layout ---
 
 # Sidebar
 with st.sidebar:
     st.markdown("## 💀 THE ARCHITECT")
-    st.caption(f"System Status: **ONLINE** | Protocol 2.1")
-    st.divider()
-
-    # Tiered Analyst Selection
-    for tier in sorted(TIER_NAMES.keys()):
-        tier_analysts = [a for a in ANALYSTS if a.tier == tier]
-        if not tier_analysts:
-            continue
+    st.caption(f"Status: **ONLINE** | `v2.3.0-dpc`")
+    
+    with st.expander("⚙️ System Config"):
+        st.session_state.api_key = st.text_input("Gemini API Key", value=st.session_state.api_key, type="password")
+        st.session_state.model_name = st.selectbox("Model", ["gemini-2.0-flash-exp", "gemini-1.5-pro"], index=0)
         
-        st.markdown(f"### {TIER_NAMES[tier]}")
-        for a in tier_analysts:
-            # Custom styled button logic via callback
-            if st.button(f"{a.name} // {a.title}", key=f"btn_{a.key}", use_container_width=True):
-                st.session_state.selected_analyst = a.key
-                # Optional: Force switch tab if needed, or just update state
-                
     st.divider()
-    st.markdown("`v2.1.0-darkpool`")
+    
+    # Vectorized Role Render
+    for tier in sorted(TIER_NAMES.keys()):
+        tier_roles = [r for r in ROLES if r.tier == tier]
+        if not tier_roles: continue
+            
+        st.markdown(f"### {TIER_NAMES[tier]}")
+        for r in tier_roles:
+            # Highlight selected
+            kind = "primary" if st.session_state.selected_analyst_key == r.key else "secondary"
+            if st.button(f"{r.icon} {r.name}", key=f"btn_{r.key}", use_container_width=True, type=kind):
+                st.session_state.selected_analyst_key = r.key
 
 # Main Interface
-tab_names = ["⚔️ Council", "🧠 Expert", "📡 Live", "👁️ Vision"]
+tab_names = ["⚔️ COUNCIL", "🧠 EXPERT", "📡 LOGS"]
 tabs = st.tabs(tab_names)
 
-# --- Tab 1: Council (Multi-Agent Synthesis) ---
+# --- TAB 1: COUNCIL (Sequential Synthesis) ---
 with tabs[0]:
-    col_header, col_status = st.columns([3, 1])
-    with col_header:
-        st.markdown("## Neural Council Grid")
+    col_head, col_stat = st.columns([3, 1])
+    with col_head:
+        st.markdown("## NEURAL COUNCIL GRID")
         st.caption("Decentralized Execution Protocol // Multi-Agent Consensus")
-    with col_status:
-        st.markdown(f"<div style='text-align: right; color: #00ff41;'>ACTIVE NODES: {len(st.session_state.selected_council)}</div>", unsafe_allow_html=True)
+    with col_stat:
+        st.markdown(f"<div style='text-align: right; color: #00ff41; font-size: 24px; font-weight: bold;'>{len(st.session_state.selected_council)} ACTIVE</div>", unsafe_allow_html=True)
 
-    # Analyst Toggle Grid
-    cols = st.columns(len(ANALYSTS))
-    for i, a in enumerate(ANALYSTS):
-        with cols[i]:
-            container = st.container()
-            is_selected = a.key in st.session_state.selected_council
-            
-            # Stylized Card
-            st.markdown(f"**{a.name}**", help=a.focus)
-            if st.checkbox("Active", value=is_selected, key=f"toggle_{a.key}", label_visibility="collapsed"):
-                if a.key not in st.session_state.selected_council:
-                    st.session_state.selected_council.append(a.key)
-            else:
-                if a.key in st.session_state.selected_council:
-                    st.session_state.selected_council.remove(a.key)
+    # Grid Selection
+    with st.expander("Configure Neural Grid", expanded=False):
+        cols = st.columns(4)
+        for i, r in enumerate(ROLES):
+            col = cols[i % 4]
+            with col:
+                checked = r.key in st.session_state.selected_council
+                if st.checkbox(f"{r.icon} {r.name}", value=checked, key=f"chk_{r.key}"):
+                    if not checked: st.session_state.selected_council.append(r.key)
+                else:
+                    if checked: st.session_state.selected_council.remove(r.key)
 
     st.divider()
+
+    # Council Feed
+    feed_container = st.container(height=400)
+    with feed_container:
+        for entry in st.session_state.council_log:
+             with st.chat_message(entry["role"], avatar=entry.get("avatar")):
+                 st.markdown(entry["content"])
+
+    # Input
+    user_text = st.chat_input("Broadcast strategic parameters to Council...")
     
-    # Input & Execution
-    user_text = st.text_area("BROADCAST DIRECTIVES", height=120, placeholder="Enter strategic parameters...", key="council_input")
+    if user_text:
+        client = get_client()
+        if client:
+            # 1. Log User Input
+            st.session_state.council_log.append({"role": "user", "content": user_text, "avatar": "👤"})
+            with feed_container:
+                with st.chat_message("user", avatar="👤"):
+                    st.markdown(user_text)
 
-    if st.button("EXECUTE SYNTHESIS", type="primary", use_container_width=True, disabled=not user_text.strip()):
-        st.session_state.processing = True
-        
-        with st.spinner("Encrypting payload..."):
-            responses = {}
-            progress_bar = st.progress(0)
-            
-            for idx, k in enumerate(st.session_state.selected_council):
-                a = ANALYST_MAP[k]
-                resp = generate_response(a.title, user_text, k)
-                responses[k] = resp
-                
-                # Log to individual history
-                st.session_state.chat_logs[k].append(("user", user_text))
-                st.session_state.chat_logs[k].append(("assistant", resp))
-                
-                progress_bar.progress((idx + 1) / len(st.session_state.selected_council))
+            # 2. Execute Agents Sequentially
+            agent_outputs = {}
+            for k in st.session_state.selected_council:
+                r = ROLE_BY_KEY[k]
+                with feed_container:
+                    with st.chat_message("assistant", avatar=r.icon):
+                        st.markdown(f"**{r.name}** is processing...")
+                        response_text = st.write_stream(stream_agent_response(client, k, user_text))
+                        agent_outputs[k] = response_text
+                        
+                st.session_state.council_log.append({"role": "assistant", "content": f"**{r.name}**: {response_text}", "avatar": r.icon})
 
-            st.session_state.last_decision = synthesize_council(user_text, responses)
-        
-        st.session_state.processing = False
-        st.rerun()
+            # 3. Synthesize
+            st.markdown("---")
+            with st.spinner("Synthesizing Decision Card..."):
+                # Quick synthesis prompt
+                final_prompt = f"Summarize these reports into a decision card: {json.dumps(agent_outputs)}"
+                resp = client.models.generate_content(
+                    model=st.session_state.model_name,
+                    contents=final_prompt
+                )
+                st.session_state.last_decision = resp.text
+                st.rerun()
 
-    # Results Display
     if st.session_state.last_decision:
+        st.success("SYNTHESIS COMPLETE")
         st.markdown(st.session_state.last_decision)
 
-# --- Tab 2: Expert (Single Agent Deep Dive) ---
+# --- TAB 2: EXPERT (Deep Dive) ---
 with tabs[1]:
-    target = ANALYST_MAP[st.session_state.selected_analyst]
+    target = ROLE_BY_KEY[st.session_state.selected_analyst_key]
     
     # Header
-    c1, c2 = st.columns([1, 6])
+    c1, c2 = st.columns([1, 10])
     with c1:
-        # Simulated Avatar
-        st.markdown(f"<div style='background:{target.color}; width:50px; height:50px; border-radius:50%; box-shadow: 0 0 10px {target.color};'></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size: 40px;'>{target.icon}</div>", unsafe_allow_html=True)
     with c2:
         st.markdown(f"## {target.name}")
-        st.markdown(f"`{target.title}` | Focus: **{target.focus}**")
-
+        st.caption(f"**{target.title}** | {target.focus}")
+        
     st.divider()
 
-    # Chat Log Container
-    chat_container = st.container()
+    # Chat Feed
+    chat_container = st.container(height=500)
     with chat_container:
+        if not st.session_state.chat_logs[target.key]:
+            st.info(f"Secure channel established with {target.name}. Awaiting input.")
+        
         for role, content in st.session_state.chat_logs[target.key]:
-            with st.chat_message(role):
+            avatar = "👤" if role == "user" else target.icon
+            with st.chat_message(role, avatar=avatar):
                 st.markdown(content)
 
     # Input
-    msg = st.chat_input(f"Interrogate {target.name}...")
-    if msg:
-        st.session_state.chat_logs[target.key].append(("user", msg))
-        resp = generate_response(target.title, msg, target.key)
-        st.session_state.chat_logs[target.key].append(("assistant", resp))
-        st.rerun()
+    if msg := st.chat_input(f"Direct link to {target.name}..."):
+        client = get_client()
+        if client:
+            st.session_state.chat_logs[target.key].append(("user", msg))
+            with chat_container:
+                with st.chat_message("user", avatar="👤"):
+                    st.markdown(msg)
+                
+                with st.chat_message("assistant", avatar=target.icon):
+                    # Stream the response
+                    full_response = st.write_stream(stream_agent_response(client, target.key, msg))
+            
+            st.session_state.chat_logs[target.key].append(("assistant", full_response))
 
-# --- Tab 3: Live (Realtime Data) ---
+# --- TAB 3: LOGS ---
 with tabs[2]:
-    st.markdown("## 📡 Voice War Room")
-    st.info("Audio uplink requires `streamlit-webrtc` module. Secure channel standby.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Latency", "24ms", "-2ms", delta_color="inverse")
-    with col2:
-        st.metric("Packets", "1.2M", "5%", delta_color="normal")
-
-# --- Tab 4: Vision (Image Analysis) ---
-with tabs[3]:
-    st.markdown("## 👁️ Neural Vision Lab")
-    
-    col_upload, col_result = st.columns(2)
-    
-    with col_upload:
-        up = st.file_uploader("Upload Recon Image", type=["png", "jpg", "jpeg"])
-        if up:
-            st.session_state.current_image = up.getvalue()
-            st.image(st.session_state.current_image, caption="Source Input", use_container_width=True)
-
-    with col_result:
-        prompt = st.text_area("Vision Directives", height=100, key="img_prompt")
-        
-        if st.button("DEPLOY VISION MATRIX", use_container_width=True, disabled=not (prompt.strip() and st.session_state.current_image)):
-            with st.spinner("Processing visual data..."):
-                time.sleep(1) # Sim processing
-                st.session_state.edited_image = st.session_state.current_image
-                st.success("Analysis Complete")
-
-        if st.session_state.edited_image:
-            st.image(st.session_state.edited_image, caption="Analysis Output", use_container_width=True)
+    st.markdown("## 📡 SYSTEM LOGS")
+    st.json(st.session_state.chat_logs)
