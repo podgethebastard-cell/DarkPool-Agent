@@ -1,0 +1,16 @@
+streamlit
+pandas
+numpy
+plotly
+yfinance>=0.2.50
+ccxt
+requests
+scipy
+openai
+openpyxl
+xlsxwriter
+matplotlib
+tweepy
+pillow
+streamlit-cropper
+watchdog
