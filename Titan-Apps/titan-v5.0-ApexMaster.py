@@ -4,79 +4,103 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timezone
+from datetime import datetime, time
 from openai import OpenAI
 import requests
+import time as time_lib
 
 # ==========================================
 # 1. PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Titan v5.2 Omni-Terminal",
+    page_title="Titan v7.0 Omni-Terminal",
     layout="wide",
     page_icon="⚡",
     initial_sidebar_state="expanded",
 )
 
 # ==========================================
-# 2. UI THEME
+# 2. UI THEME & CSS (GLASSMORPHISM)
 # ==========================================
 st.markdown(
     """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
 
 :root{
-  --bg:#000;
-  --panel:#090909;
-  --panel2:#0e0e0e;
-  --border:#222;
-  --text:#e6e6e6;
-  --bull:#00E676;
-  --bear:#FF1744;
-  --cyan:#00E5FF;
-  --vio:#D500F9;
+  --bg: #000000;
+  --card: #090909;
+  --border: #1f1f1f;
+  --text: #e0e0e0;
+  --bull: #00E676;
+  --bear: #FF1744;
+  --cyan: #00E5FF;
+  --vio: #D500F9;
+  --glass: rgba(20, 20, 20, 0.6);
 }
 
-.stApp { background: var(--bg); color: var(--text); font-family: 'Roboto Mono', monospace; }
-.block-container { padding-top: 1rem; }
+.stApp { background-color: var(--bg); font-family: 'JetBrains Mono', monospace; }
 
-/* Custom Metric Box */
-.metric-box {
-    background: var(--panel);
+/* Metrics & Cards */
+div[data-testid="metric-container"] {
+    background-color: var(--glass);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    backdrop-filter: blur(10px);
     padding: 15px;
-    margin-bottom: 10px;
-    text-align: center;
-}
-.metric-lbl { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
-.metric-val { font-size: 1.4rem; font-weight: 700; color: var(--text); }
-.metric-sub { font-size: 0.75rem; color: #666; margin-top: 4px; }
-
-.c-bull { color: var(--bull) !important; }
-.c-bear { color: var(--bear) !important; }
-.c-cyan { color: var(--cyan) !important; }
-.c-vio  { color: var(--vio) !important; }
-
-/* Analysis Box */
-.analysis-box {
-    border-left: 3px solid var(--cyan);
-    background: #050505;
-    padding: 12px;
-    border-radius: 0 8px 8px 0;
-    font-size: 0.85rem;
-    color: #ccc;
-    margin-top: 10px;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
 }
 
-/* Sidebar Log */
-.log-entry {
-    font-size: 0.8rem;
+/* Custom Analysis Panel */
+.titan-panel {
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    backdrop-filter: blur(10px);
+}
+.titan-h { 
+    color: #666; 
+    font-size: 0.7rem; 
+    text-transform: uppercase; 
+    letter-spacing: 2px; 
+    font-weight: 700; 
+    margin-bottom: 10px; 
     border-bottom: 1px solid #222;
-    padding: 6px 0;
-    color: #aaa;
+    padding-bottom: 5px;
 }
+.titan-txt { color: #ccc; font-size: 0.95rem; line-height: 1.6; }
+
+/* Status Pills */
+.pill {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 99px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    margin-right: 8px;
+    letter-spacing: 1px;
+}
+.p-bull { background: rgba(0, 230, 118, 0.15); color: var(--bull); border: 1px solid var(--bull); box-shadow: 0 0 10px rgba(0,230,118,0.1); }
+.p-bear { background: rgba(255, 23, 68, 0.15); color: var(--bear); border: 1px solid var(--bear); box-shadow: 0 0 10px rgba(255,23,68,0.1); }
+.p-neut { background: rgba(85, 85, 85, 0.15); color: #888; border: 1px solid #444; }
+
+/* Log Feed */
+.log-item {
+    padding: 8px 0;
+    border-bottom: 1px solid #111;
+    color: #aaa;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.8rem;
+}
+.log-ts { font-family: monospace; color: #555; font-size: 0.7rem; }
+
+/* Plotly Fix */
+.js-plotly-plot .plotly .modebar { opacity: 0.5 !important; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -91,441 +115,362 @@ def rma(series, length):
 def double_smooth(src, long_len, short_len):
     return src.ewm(span=long_len, adjust=False).mean().ewm(span=short_len, adjust=False).mean()
 
-def hma(series, length):
-    half_length = int(length / 2)
-    sqrt_length = int(np.sqrt(length))
-    
-    def wma(s, l):
-        weights = np.arange(1, l + 1)
-        return s.rolling(l).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
-
-    wma_half = wma(series, half_length)
-    wma_full = wma(series, length)
-    diff = 2 * wma_half - wma_full
-    return wma(diff, sqrt_length)
-
-# --- APEX VECTOR v4.1 ---
-def calc_apex_vector(df, p):
+# --- INDICATORS ---
+def calc_all_indicators(df, p):
     df = df.copy()
-    # Efficiency
+    
+    # 1. APEX VECTOR
     rng = df["high"] - df["low"]
     body = (df["close"] - df["open"]).abs()
     eff = (body / (rng + 1e-10)).ewm(span=int(p["len_vec"])).mean()
-    df["efficiency"] = eff
-
-    # Flux
+    df["eff"] = eff
     vol_fact = df["volume"] / (df["volume"].rolling(int(p["vol_norm"])).mean() + 1e-10)
     raw = np.sign(df["close"] - df["open"]) * eff * vol_fact
     df["flux"] = raw.ewm(span=int(p["len_sm"])).mean()
-
-    # State
+    
     th_s = p["eff_super"] * p["strictness"]
-    th_r = p["eff_resist"] * p["strictness"]
-    cond = [(df["flux"] > th_s), (df["flux"] < -th_s), (df["flux"].abs() < th_r)]
-    df["apex_state"] = np.select(cond, [2, -2, 0], default=1)
-    
-    # Divergence
-    src = df["flux"]
-    df["pivot_low"] = (src.shift(1) < src.shift(2)) & (src.shift(1) < src)
-    df["pivot_high"] = (src.shift(1) > src.shift(2)) & (src.shift(1) > src)
-    
-    df["div_bull"] = df["pivot_low"] & (df["close"] < df["close"].shift(5)) & (df["flux"] > df["flux"].shift(5))
-    df["div_bear"] = df["pivot_high"] & (df["close"] > df["close"].shift(5)) & (df["flux"] < df["flux"].shift(5))
-    
-    return df
+    df["apex_state"] = np.select(
+        [(df["flux"] > th_s), (df["flux"] < -th_s), (df["flux"].abs() < (p["eff_resist"]*p["strictness"]))], 
+        [2, -2, 0], default=1
+    )
 
-# --- DARK TREND ---
-def calc_dark_trend(df, p):
-    df = df.copy()
+    # 2. DARK TREND
     atr = rma(df["high"] - df["low"], int(p["len_main"]))
-    
     hl2 = (df["high"] + df["low"]) / 2
     up = hl2 + (p["st_mult"] * atr)
     dn = hl2 - (p["st_mult"] * atr)
     
     trend = np.zeros(len(df))
-    t_up = np.zeros(len(df))
-    t_dn = np.zeros(len(df))
-    
-    t_up[0] = up.iloc[0]
-    t_dn[0] = dn.iloc[0]
-    
+    stop = np.zeros(len(df))
     close = df["close"].values
-    up_val = up.values
-    dn_val = dn.values
+    
+    t_curr = 1
+    s_curr = dn.iloc[0]
     
     for i in range(1, len(df)):
-        if up_val[i] < t_up[i-1] or close[i-1] > t_up[i-1]:
-            t_up[i] = up_val[i]
+        if close[i] > stop[i-1] and trend[i-1] == -1:
+            t_curr = 1
+            s_curr = dn.iloc[i]
+        elif close[i] < stop[i-1] and trend[i-1] == 1:
+            t_curr = -1
+            s_curr = up.iloc[i]
         else:
-            t_up[i] = t_up[i-1]
-            
-        if dn_val[i] > t_dn[i-1] or close[i-1] < t_dn[i-1]:
-            t_dn[i] = dn_val[i]
-        else:
-            t_dn[i] = t_dn[i-1]
-            
-        prev = trend[i-1]
-        if prev == -1 and close[i] > t_up[i-1]:
-            trend[i] = 1
-        elif prev == 1 and close[i] < t_dn[i-1]:
-            trend[i] = -1
-        else:
-            trend[i] = prev if prev != 0 else 1
-
+            t_curr = trend[i-1]
+            if t_curr == 1:
+                s_curr = max(stop[i-1], dn.iloc[i])
+            else:
+                s_curr = min(stop[i-1], up.iloc[i])
+        
+        trend[i] = t_curr
+        stop[i] = s_curr
+        
     df["trend"] = trend
-    df["stop_line"] = np.where(trend==1, t_dn, t_up)
+    df["stop"] = stop
     df["chop"] = 100 * np.log10(atr.rolling(14).sum() / (df["high"].rolling(14).max() - df["low"].rolling(14).min())) / np.log10(14)
-    return df
 
-# --- MATRIX ---
-def calc_matrix(df, p):
-    df = df.copy()
+    # 3. MATRIX
     chg = df["close"].diff()
-    rsi = 100 - (100 / (1 + (rma(chg.clip(lower=0), 14) / rma(-chg.clip(upper=0), 14))))
-    df["mfi"] = ((rsi - 50) * (df["volume"]/df["volume"].rolling(20).mean())).ewm(span=3).mean()
-    
-    src = df["close"].diff()
-    hw = 100 * (double_smooth(src, 25, 13) / (double_smooth(src.abs(), 25, 13) + 1e-10))
-    df["hyperwave"] = hw / 2 
-    
-    df["matrix_score"] = np.sign(df["mfi"]) + np.sign(df["hyperwave"])
-    return df
+    rsi_src = 100 - (100 / (1 + (rma(chg.clip(lower=0), 14) / rma(-chg.clip(upper=0), 14))))
+    df["mfi"] = ((rsi_src - 50) * (df["volume"]/df["volume"].rolling(20).mean())).ewm(span=3).mean()
+    hw_src = df["close"].diff()
+    df["hw"] = (100 * (double_smooth(hw_src, 25, 13) / (double_smooth(hw_src.abs(), 25, 13) + 1e-10))) / 2
+    df["matrix"] = np.sign(df["mfi"]) + np.sign(df["hw"])
 
-# --- QUANTUM ---
-def calc_quantum(df, p):
-    df = df.copy()
-    src = df["close"]
-    norm = (src - src.rolling(100).min()) / (src.rolling(100).max() - src.rolling(100).min() + 1e-10)
-    df["entropy"] = df["close"].pct_change().rolling(20).std() * 100 
+    # 4. QUANTUM
+    norm = (df["close"] - df["close"].rolling(100).min()) / (df["close"].rolling(100).max() - df["close"].rolling(100).min() + 1e-10)
+    df["entropy"] = df["close"].pct_change().rolling(20).std() * 100
     df["rqzo"] = (norm - 0.5) * 10 * (1 - df["entropy"]/10)
+
     return df
 
 # ==========================================
-# 4. DATA & SETTINGS
+# 4. DATA HANDLING (MULTI-EXCHANGE)
 # ==========================================
-@st.cache_resource
-def get_exchange():
+def get_exchange(name):
+    if name == 'Binance': return ccxt.binance({"enableRateLimit": True})
+    if name == 'Coinbase': return ccxt.coinbase({"enableRateLimit": True})
+    if name == 'Bybit': return ccxt.bybit({"enableRateLimit": True})
+    if name == 'OKX': return ccxt.okx({"enableRateLimit": True})
     return ccxt.kraken({"enableRateLimit": True})
 
-@st.cache_data(ttl=30)
-def get_data(sym, tf, lim):
-    return pd.DataFrame(get_exchange().fetch_ohlcv(sym, tf, limit=lim), columns=["timestamp", "open", "high", "low", "close", "volume"])
+@st.cache_data(ttl=10) # Short TTL for live feel
+def fetch_data(exch_name, sym, tf, lim):
+    ex = get_exchange(exch_name)
+    return pd.DataFrame(ex.fetch_ohlcv(sym, tf, limit=lim), columns=["timestamp", "open", "high", "low", "close", "volume"])
 
-def init_settings():
+def init_session():
+    try: ai_key = st.secrets["OPENAI_API_KEY"]
+    except: ai_key = ""
+    try: tg_tok = st.secrets["TG_TOKEN"]
+    except: tg_tok = ""
+    try: tg_id = st.secrets["TG_CHAT_ID"]
+    except: tg_id = ""
+
     defaults = {
-        "symbol": "BTC/USD", "timeframe": "15m", "limit": 500,
+        "exchange": "Kraken", "symbol": "BTC/USD", "timeframe": "15m", "limit": 500,
         "len_main": 55, "st_mult": 4.0, "eff_super": 0.6, "eff_resist": 0.3,
-        "webhook_url": "", "vol_norm": 55, "len_vec": 14, "len_sm": 5, "strictness": 1.0
+        "vol_norm": 55, "len_vec": 14, "len_sm": 5, "strictness": 1.0,
+        "api_key": ai_key, "tg_token": tg_tok, "tg_chat": tg_id, "auto_refresh": False
     }
     if "cfg" not in st.session_state:
         st.session_state.cfg = defaults
     else:
-        for k,v in defaults.items():
+        for k, v in defaults.items():
             if k not in st.session_state.cfg: st.session_state.cfg[k] = v
 
-init_settings()
+init_session()
 cfg = st.session_state.cfg
 
 # ==========================================
-# 5. SIDEBAR & SETTINGS
+# 5. SIDEBAR CONFIG
 # ==========================================
 with st.sidebar:
-    st.header("Titan Config")
-    with st.form("settings"):
-        cfg["symbol"] = st.text_input("Symbol", cfg["symbol"])
-        c1, c2 = st.columns(2)
-        cfg["timeframe"] = c1.selectbox("Timeframe", ["1m","5m","15m","1h","4h"], index=2)
-        cfg["limit"] = c2.slider("Lookback", 200, 1000, cfg["limit"])
+    st.markdown("### ⚡ Titan v7.0")
+    
+    # Auto Refresh Logic
+    if st.checkbox("🔄 Auto-Refresh (60s)", value=cfg["auto_refresh"]):
+        st.caption("Live Monitoring Active")
+        time_lib.sleep(60)
+        st.rerun()
+
+    with st.form("main_cfg"):
+        c_ex, c_tf = st.columns(2)
+        cfg["exchange"] = c_ex.selectbox("Exchange", ["Kraken", "Binance", "Bybit", "Coinbase", "OKX"], index=["Kraken", "Binance", "Bybit", "Coinbase", "OKX"].index(cfg["exchange"]))
+        cfg["timeframe"] = c_tf.selectbox("Time", ["1m","5m","15m","1h","4h","1d"], index=2)
         
-        st.divider()
-        st.caption("Strategy Params")
-        cfg["eff_super"] = st.slider("Apex Super Thresh", 0.1, 1.0, cfg["eff_super"])
-        cfg["st_mult"] = st.number_input("Dark Trend Mult", 1.0, 10.0, cfg["st_mult"])
+        cfg["symbol"] = st.text_input("Asset Pair", cfg["symbol"], help="Format depends on exchange (e.g. BTC/USDT for Binance)")
+        cfg["limit"] = st.number_input("Lookback", 200, 1000, cfg["limit"])
         
-        st.divider()
-        st.caption("Broadcasting")
-        cfg["webhook_url"] = st.text_input("Discord Webhook URL", cfg["webhook_url"], type="password")
+        st.markdown("---")
+        st.caption("Strategy Fine-Tuning")
+        cfg["eff_super"] = st.slider("Apex Thresh", 0.1, 1.0, cfg["eff_super"])
+        cfg["st_mult"] = st.slider("Trend Width", 1.0, 6.0, cfg["st_mult"])
         
-        if st.form_submit_button("Update System"):
-            st.toast("System Updated", icon="🔄")
-            get_data.clear()
+        st.markdown("---")
+        cfg["api_key"] = st.text_input("OpenAI Key", cfg["api_key"], type="password")
+        cfg["tg_token"] = st.text_input("TG Token", cfg["tg_token"], type="password")
+        cfg["tg_chat"] = st.text_input("TG Chat ID", cfg["tg_chat"], type="password")
+        
+        if st.form_submit_button("APPLY SETTINGS"):
+            st.toast("Settings Updated", icon="✅")
+            fetch_data.clear()
+
+    st.markdown("---")
+    st.markdown("### 📡 Live Feed")
+    log_container = st.container()
 
 # ==========================================
-# 6. LOGIC & BROADCAST ENGINE
+# 6. MAIN EXECUTION
 # ==========================================
 try:
-    df = get_data(cfg["symbol"], cfg["timeframe"], cfg["limit"])
+    df = fetch_data(cfg["exchange"], cfg["symbol"], cfg["timeframe"], cfg["limit"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    df = calc_all_indicators(df, cfg)
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
 except Exception as e:
-    st.error(f"Data Connection Error: {e}")
+    st.error(f"Data Error: {e} - Check Symbol Format for {cfg['exchange']}")
     st.stop()
 
-# Calculate All Indicators
-params = cfg 
-try:
-    df = calc_apex_vector(df, params)
-    df = calc_dark_trend(df, params)
-    df = calc_matrix(df, params)
-    df = calc_quantum(df, params)
-except Exception as e:
-    st.error(f"Calculation Error: {e}")
-    st.stop()
-
-last = df.iloc[-1]
-prev = df.iloc[-2]
-
-# --- BROADCASTER ---
+# ==========================================
+# 7. TELEGRAM BROADCAST LOGIC
+# ==========================================
 signals = []
+# Trend Flip
 if last["trend"] == 1 and prev["trend"] == -1:
-    signals.append(f"🌊 DARK TREND: BULLISH FLIP ({last['close']})")
+    signals.append(("🚀", f"DARK TREND: BULLISH FLIP ({last['close']})"))
 elif last["trend"] == -1 and prev["trend"] == 1:
-    signals.append(f"🌊 DARK TREND: BEARISH FLIP ({last['close']})")
+    signals.append(("🔻", f"DARK TREND: BEARISH FLIP ({last['close']})"))
 
+# Apex State Change
 if last["apex_state"] == 2 and prev["apex_state"] != 2:
-    signals.append("⚡ APEX: SUPER BULL START")
+    signals.append(("⚡", "APEX: SUPER BULL START"))
 if last["apex_state"] == -2 and prev["apex_state"] != -2:
-    signals.append("⚡ APEX: SUPER BEAR START")
+    signals.append(("⚡", "APEX: SUPER BEAR START"))
 
-if last["div_bull"]: signals.append("💎 APEX: BULLISH DIVERGENCE")
-if last["div_bear"]: signals.append("💎 APEX: BEARISH DIVERGENCE")
+# Matrix Flip
+if last["matrix"] > 0 and prev["matrix"] <= 0:
+    signals.append(("💠", "MATRIX: BUY SIGNAL"))
+if last["matrix"] < 0 and prev["matrix"] >= 0:
+    signals.append(("💠", "MATRIX: SELL SIGNAL"))
 
-# Sidebar Log Display
-with st.sidebar:
-    st.divider()
-    st.subheader("🔔 Signal Log")
+with log_container:
     if signals:
-        st.markdown(f"**Latest ({datetime.now().strftime('%H:%M')}):**")
-        for s in signals:
-            st.markdown(f"<div class='log-entry' style='color:#00E676'>• {s}</div>", unsafe_allow_html=True)
-            if cfg["webhook_url"]:
-                try: pass # requests.post(cfg["webhook_url"], json={"content": s})
+        for icon, msg in signals:
+            st.markdown(f"""
+            <div class="log-item">
+                <span class="log-ts">{datetime.now().strftime('%H:%M')}</span>
+                <span style="color:#e0e0e0;">{icon} {msg}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if cfg["tg_token"] and cfg["tg_chat"]:
+                try:
+                    requests.post(f"https://api.telegram.org/bot{cfg['tg_token']}/sendMessage", json={"chat_id": cfg["tg_chat"], "text": f"{icon} {msg}"})
                 except: pass
     else:
-        st.caption("No signals on current candle.")
+        st.caption(f"Monitoring {cfg['exchange']} stream...")
 
 # ==========================================
-# 7. VISUALIZATION TABS
+# 8. VISUALIZATION HELPERS
 # ==========================================
-st.title(f"⚡ Titan v5.2 // {cfg['symbol']}")
+def style_chart(fig):
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)", # Transparent background
+        plot_bgcolor="rgba(0,0,0,0)",  # Transparent plot area
+        margin=dict(l=0, r=0, t=20, b=0),
+        height=500,
+        xaxis_rangeslider_visible=False,
+        showlegend=False,
+        font=dict(family="JetBrains Mono", size=10, color="#888"),
+    )
+    # Remove grid lines for cleaner look
+    fig.update_xaxes(showgrid=False, zeroline=False, color="#444")
+    fig.update_yaxes(showgrid=True, gridcolor="#222", zeroline=False, color="#444")
+    return fig
 
-t_main, t_apex, t_dark, t_mat, t_quant, t_ai = st.tabs([
-    "Overview", "Apex Vector", "Dark Trend", "Matrix", "Quantum", "Analyst"
-])
+# ==========================================
+# 9. TABS & DASHBOARD
+# ==========================================
+def get_apex_analysis(row):
+    flux = row["flux"]
+    if flux > cfg["eff_super"]: 
+        return "super_bull", f"Flux is extremely high ({flux:.2f}). Market is in a **Superconductor State** (Low Resistance)."
+    elif flux < -cfg["eff_super"]: 
+        return "super_bear", f"Flux is extremely negative ({flux:.2f}). Sellers dominate efficiently."
+    elif abs(flux) < cfg["eff_resist"]:
+        return "chop", "Flux is near zero. The market is **Resistive/Choppy**."
+    else:
+        return "heat", "Flux is moderate (**High Heat**). Volatility is present without direction."
+
+def get_dark_analysis(row):
+    chop = row["chop"]
+    trend = "Bullish" if row["trend"] == 1 else "Bearish"
+    state = "Trending" if chop < 45 else ("Consolidating" if chop < 60 else "Choppy")
+    return (1 if row["trend"]==1 else -1), f"Trend is **{trend}**. Chop Index: {chop:.1f} ({state})."
+
+def get_combo_analysis(row):
+    score = 0
+    if row["flux"] > cfg["eff_super"]: score += 1
+    if row["trend"] == 1: score += 1
+    if row["matrix"] > 0: score += 1
+    
+    if row["flux"] < -cfg["eff_super"]: score -= 1
+    if row["trend"] == -1: score -= 1
+    if row["matrix"] < 0: score -= 1
+    
+    if score >= 3: return "bull", "💎 TRIPLE CONFLUENCE BULL"
+    if score <= -3: return "bear", "💎 TRIPLE CONFLUENCE BEAR"
+    return "neut", "No major confluence."
+
+apex_state, apex_txt = get_apex_analysis(last)
+dark_state, dark_txt = get_dark_analysis(last)
+combo_state, combo_txt = get_combo_analysis(last)
+
+st.title(f"⚡ {cfg['symbol']} // {cfg['timeframe']}")
+
+t1, t2, t3, t4, t5 = st.tabs(["Overview", "Apex Vector", "Dark Trend", "Matrix", "AI Analyst"])
 
 # --- TAB 1: OVERVIEW ---
-with t_main:
-    # Key Metrics Row
+with t1:
+    if combo_state != "neut":
+        c_color = "#00E676" if combo_state == "bull" else "#FF1744"
+        st.markdown(f"""<div style="background:{c_color}10; border:1px solid {c_color}; padding:15px; border-radius:8px; text-align:center; color:{c_color}; font-weight:bold; margin-bottom:15px; box-shadow:0 0 15px {c_color}20;">{combo_txt}</div>""", unsafe_allow_html=True)
+
     c1, c2, c3, c4 = st.columns(4)
-    
-    trend_c = "c-bull" if last["trend"]==1 else "c-bear"
-    flux_c = "c-bull" if last["flux"]>0 else "c-bear"
-    
-    c1.markdown(f"""
-    <div class="metric-box">
-        <div class="metric-lbl">Master Trend</div>
-        <div class="metric-val {trend_c}">{("BULLISH" if last["trend"]==1 else "BEARISH")}</div>
-        <div class="metric-sub">Stop: {last['stop_line']:.2f}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    c2.markdown(f"""
-    <div class="metric-box">
-        <div class="metric-lbl">Apex Vector</div>
-        <div class="metric-val {flux_c}">{last['flux']:.2f}</div>
-        <div class="metric-sub">Eff: {last['efficiency']*100:.0f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    mat_score = int(last["matrix_score"])
-    mat_txt = "STRONG BUY" if mat_score==2 else ("STRONG SELL" if mat_score==-2 else "NEUTRAL")
-    mat_c = "c-bull" if mat_score==2 else ("c-bear" if mat_score==-2 else "c-cyan")
-    
-    c3.markdown(f"""
-    <div class="metric-box">
-        <div class="metric-lbl">Matrix Score</div>
-        <div class="metric-val {mat_c}">{mat_txt}</div>
-        <div class="metric-sub">Raw: {mat_score}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    c4.markdown(f"""
-    <div class="metric-box">
-        <div class="metric-lbl">Active Signals</div>
-        <div class="metric-val" style="font-size:1.1rem">{len(signals)}</div>
-        <div class="metric-sub">Last Scan: {datetime.now().strftime('%H:%M:%S')}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    c1.metric("Apex Flux", f"{last['flux']:.2f}", delta=("Bull" if last['flux']>0 else "Bear"))
+    c2.metric("Trend", ("UP" if last['trend']==1 else "DOWN"), f"Stop: {last['stop']:.2f}")
+    c3.metric("Matrix", int(last['matrix']), ("Buy" if last['matrix']>0 else "Sell"))
+    c4.metric("Entropy", f"{last['entropy']:.2f}", ("Chaos" if last['entropy']>2.0 else "Stable"))
 
-    # Main Chart
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"))
-    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"], mode='lines', line=dict(color='gray', dash='dot'), name="Stop"))
-    
-    buys = df[(df["trend"]==1) & (df["trend"].shift(1)==-1)]
-    sells = df[(df["trend"]==-1) & (df["trend"].shift(1)==1)]
-    fig.add_trace(go.Scatter(x=buys["timestamp"], y=buys["low"], mode="markers", marker=dict(symbol="triangle-up", color="#00E676", size=12), name="Trend Buy"))
-    fig.add_trace(go.Scatter(x=sells["timestamp"], y=sells["high"], mode="markers", marker=dict(symbol="triangle-down", color="#FF1744", size=12), name="Trend Sell"))
-    
-    fig.update_layout(height=550, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
-    st.plotly_chart(fig, use_container_width=True)
+    fig.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price",
+                                 increasing_line_color="#00E676", decreasing_line_color="#FF1744"))
+    color_trend = "#00E676" if last["trend"] == 1 else "#FF1744"
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["stop"], mode="lines", line=dict(color=color_trend, width=2), name="Stop"))
+    st.plotly_chart(style_chart(fig), use_container_width=True)
 
-# --- TAB 2: APEX VECTOR DETAILED ---
-with t_apex:
+# --- TAB 2: APEX VECTOR ---
+with t2:
     col_l, col_r = st.columns([3, 1])
     with col_l:
-        # Dual Pane: Price + Flux
-        fig_av = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.05)
-        fig_av.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"]), row=1, col=1)
-        
-        colors = ["#00E676" if s == 2 else ("#FF1744" if s == -2 else ("#546E7A" if s == 0 else "#FFD600")) for s in df["apex_state"]]
-        fig_av.add_trace(go.Bar(x=df["timestamp"], y=df["flux"], marker_color=colors, name="Flux"), row=2, col=1)
-        
-        th = cfg["eff_super"]
-        fig_av.add_hline(y=th, line_dash="dot", line_color="gray", row=2, col=1)
-        fig_av.add_hline(y=-th, line_dash="dot", line_color="gray", row=2, col=1)
-        
-        fig_av.update_layout(height=600, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
-        st.plotly_chart(fig_av, use_container_width=True)
-        
+        fig_av = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.03)
+        fig_av.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+                                        increasing_line_color="#00E676", decreasing_line_color="#FF1744"), row=1, col=1)
+        colors = ["#00E676" if x == 2 else ("#FF1744" if x == -2 else ("#546E7A" if x == 0 else "#FFD600")) for x in df["apex_state"]]
+        fig_av.add_trace(go.Bar(x=df["timestamp"], y=df["flux"], marker_color=colors), row=2, col=1)
+        fig_av.add_hline(y=cfg["eff_super"], row=2, col=1, line=dict(color="#333", dash="dot"))
+        fig_av.add_hline(y=-cfg["eff_super"], row=2, col=1, line=dict(color="#333", dash="dot"))
+        st.plotly_chart(style_chart(fig_av), use_container_width=True)
+    
     with col_r:
-        st.markdown("#### 🔍 Regime Map")
-        # Regime Map: Efficiency vs Flux
-        fig_map = go.Figure()
-        fig_map.add_trace(go.Scatter(
-            x=df["efficiency"].tail(100), 
-            y=df["flux"].tail(100),
-            mode='markers',
-            marker=dict(
-                size=8,
-                color=df["flux"].tail(100),
-                colorscale='RdYlGn',
-                showscale=False
-            )
-        ))
-        # Add 'current' marker
-        fig_map.add_trace(go.Scatter(
-            x=[last["efficiency"]], y=[last["flux"]],
-            mode='markers+text', text=["NOW"], textposition="top center",
-            marker=dict(size=14, color='white', line=dict(width=2, color='black'))
-        ))
-        fig_map.update_layout(
-            title="Eff vs Flux (Last 100)",
-            xaxis_title="Efficiency", yaxis_title="Flux",
-            height=300, template="plotly_dark",
-            margin=dict(l=0,r=0,t=30,b=0),
-            paper_bgcolor="rgba(0,0,0,0)"
-        )
-        st.plotly_chart(fig_map, use_container_width=True)
-        
-        # Rule Based Text Logic
-        flux_val = last["flux"]
-        state_str = "neutral"
-        if flux_val > cfg["eff_super"]: state_str = "super_bull"
-        elif flux_val < -cfg["eff_super"]: state_str = "super_bear"
-        elif abs(flux_val) < cfg["eff_resist"]: state_str = "resistive"
-        
-        analysis_text = ""
-        if state_str == "super_bull":
-            analysis_text = "Market is in **Superconductor State (Bullish)**. Efficiency is high, meaning price is moving with low resistance. Volume supports the move."
-        elif state_str == "super_bear":
-            analysis_text = "Market is in **Superconductor State (Bearish)**. Sellers are dominating with high efficiency. Expect continuation down."
-        elif state_str == "resistive":
-            analysis_text = "Market is **Resistive (Choppy)**. Flux is too low to sustain a trend. Avoid trading or use mean-reversion tactics."
-        else:
-            analysis_text = "Market is in **High Heat**. Volatility is present but direction is not fully efficient yet. Caution advised."
-            
+        pill_class = "p-bull" if apex_state=="super_bull" else ("p-bear" if apex_state=="super_bear" else "p-neut")
+        pill_text = apex_state.replace("_", " ").upper()
         st.markdown(f"""
-        <div class="analysis-box">
-            {analysis_text}
+        <div class="titan-panel">
+            <div class="titan-h">Status</div>
+            <div class="pill {pill_class}">{pill_text}</div>
+            <br><br>
+            <div class="titan-h">Analysis</div>
+            <div class="titan-txt">{apex_txt}</div>
         </div>
         """, unsafe_allow_html=True)
 
-# --- TAB 3: DARK TREND DETAILED ---
-with t_dark:
-    fig_dk = go.Figure()
-    fig_dk.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"))
-    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"], line=dict(color="#00E5FF", width=2), name="Trend Line"))
-    
-    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"] + (df["stop_line"]*0.005), line=dict(width=0), showlegend=False))
-    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"] - (df["stop_line"]*0.005), fill="tonexty", 
-                                fillcolor=("rgba(0, 230, 118, 0.15)" if last["trend"]==1 else "rgba(255, 23, 68, 0.15)"), 
-                                line=dict(width=0), name="Cloud"))
-    
-    fig_dk.update_layout(height=550, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
-    st.plotly_chart(fig_dk, use_container_width=True)
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        chop = last["chop"]
-        chop_state = "TRENDING" if chop < 50 else "CHOPPY/RANGING"
-        chop_color = "c-bull" if chop < 50 else "c-bear"
-        
+# --- TAB 3: DARK TREND ---
+with t3:
+    col_l, col_r = st.columns([3, 1])
+    with col_l:
+        fig_dt = go.Figure()
+        fig_dt.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+                                        increasing_line_color="#00E676", decreasing_line_color="#FF1744"))
+        fig_dt.add_trace(go.Scatter(x=df["timestamp"], y=df["stop"], line=dict(color=color_trend, width=2)))
+        st.plotly_chart(style_chart(fig_dt), use_container_width=True)
+    with col_r:
+        pill_class = "p-bull" if dark_state == 1 else "p-bear"
         st.markdown(f"""
-        <div class="analysis-box">
-            <b>Chop Index:</b> {chop:.1f} <span class="{chop_color}">({chop_state})</span><br>
-            Values below 38 indicate strong trends. Values above 61 indicate intense consolidation.
+        <div class="titan-panel">
+            <div class="titan-h">Trend State</div>
+            <div class="pill {pill_class}">{'BULLISH' if dark_state==1 else 'BEARISH'}</div>
+            <br><br>
+            <div class="titan-h">Context</div>
+            <div class="titan-txt">{dark_txt}</div>
         </div>
         """, unsafe_allow_html=True)
 
-# --- TAB 4: MATRIX DETAILED ---
-with t_mat:
-    fig_m = make_subplots(rows=2, cols=1, shared_xaxes=True)
-    fig_m.add_trace(go.Scatter(x=df["timestamp"], y=df["mfi"], fill="tozeroy", line=dict(color="#D500F9"), name="Money Flow"), row=1, col=1)
-    fig_m.add_trace(go.Bar(x=df["timestamp"], y=df["hyperwave"], marker_color="#00E5FF", name="HyperWave"), row=2, col=1)
-    fig_m.update_layout(height=550, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig_m, use_container_width=True)
-    
-    st.info("Matrix combines **Money Flow** (Volume+RSI) and **HyperWave** (Double Smoothed Momentum). When both align, the signal is strongest.")
+# --- TAB 4: MATRIX ---
+with t4:
+    col_l, col_r = st.columns([3, 1])
+    with col_l:
+        fig_mx = make_subplots(rows=2, cols=1, shared_xaxes=True)
+        fig_mx.add_trace(go.Scatter(x=df["timestamp"], y=df["mfi"], fill="tozeroy", line=dict(color="#D500F9", width=2), name="MFI"), row=1, col=1)
+        fig_mx.add_trace(go.Bar(x=df["timestamp"], y=df["hw"], marker_color="#00E5FF", name="HyperWave"), row=2, col=1)
+        st.plotly_chart(style_chart(fig_mx), use_container_width=True)
+    with col_r:
+        st.markdown("""<div class="titan-panel"><div class="titan-h">Matrix Logic</div><div class="titan-txt"><span style='color:#D500F9'>Purple</span>: Money Flow (Volume + RSI).<br><span style='color:#00E5FF'>Cyan</span>: HyperWave (Momentum).<br><br>When both align, moves expand.</div></div>""", unsafe_allow_html=True)
 
-# --- TAB 5: QUANTUM ---
-with t_quant:
-    fig_q = go.Figure()
-    fig_q.add_trace(go.Scatter(x=df["timestamp"], y=df["rqzo"], line=dict(color="white"), name="RQZO"))
-    
-    chaos_zone = df[df["entropy"] > 2.0]
-    fig_q.add_trace(go.Scatter(x=chaos_zone["timestamp"], y=chaos_zone["rqzo"], mode="markers", marker=dict(color="red", size=4), name="High Entropy"))
-    
-    fig_q.update_layout(height=500, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig_q, use_container_width=True)
-    
-    st.markdown("Red dots indicate **High Entropy (Chaos)** areas where price prediction is statistically unreliable.")
-
-# --- TAB 6: AI ANALYST ---
-with t_ai:
+# --- TAB 5: AI ANALYST ---
+with t5:
     st.subheader("🤖 GPT-4o Quant Synthesis")
+    user_prompt = f"""
+    Analyze this Crypto Market State:
+    Asset: {cfg['symbol']} ({cfg['timeframe']})
+    1. Apex Flux: {last['flux']:.2f} (State: {apex_state})
+    2. Trend: {('Bull' if last['trend']==1 else 'Bear')} (Stop: {last['stop']:.2f})
+    3. Matrix Score: {last['matrix']}
+    4. Confluence: {combo_txt}
     
-    prompt_txt = f"""
-    ASSET: {cfg['symbol']} ({cfg['timeframe']})
-    
-    1. APEX VECTOR:
-    - Flux: {last['flux']:.3f} (Threshold {cfg['eff_super']})
-    - Efficiency: {last['efficiency']:.2f}
-    - Divergence: {('BULL' if last['div_bull'] else ('BEAR' if last['div_bear'] else 'NONE'))}
-    
-    2. DARK TREND:
-    - Direction: {('UP' if last['trend']==1 else 'DOWN')}
-    - Chop Index: {last['chop']:.1f}
-    
-    3. MATRIX SCORE: {last['matrix_score']}
-    
-    TASK: Provide a 3-sentence executive summary on BIAS, ENTRY, and RISK.
+    Output: Executive Summary (Bias, Entry Tactic, Risk Level).
     """
-    
-    st.code(prompt_txt, language="text")
-    
-    ai_key = st.text_input("OpenAI API Key (Optional)", type="password")
-    if st.button("Generate Report"):
-        if not ai_key:
-            st.error("Please provide an API Key.")
+    st.code(user_prompt, language="text")
+    if st.button("Generate Strategy"):
+        if not cfg["api_key"]:
+            st.error("API Key required. Check secrets or sidebar.")
         else:
-            with st.spinner("Analyzing market physics..."):
+            with st.spinner("Synthesizing..."):
                 try:
-                    client = OpenAI(api_key=ai_key)
-                    resp = client.chat.completions.create(
-                        model="gpt-4o",
-                        messages=[{"role":"user", "content": prompt_txt}]
-                    )
+                    client = OpenAI(api_key=cfg["api_key"])
+                    resp = client.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content": user_prompt}])
                     st.success(resp.choices[0].message.content)
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(str(e))
