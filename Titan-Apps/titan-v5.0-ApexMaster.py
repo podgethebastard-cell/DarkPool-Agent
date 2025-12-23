@@ -480,17 +480,37 @@ def get_data(sym, tf, lim):
     return pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 # ==========================================
-# 6. SETTINGS MODEL
+# 6. SETTINGS MODEL (WITH FIX FOR KEYERROR)
 # ==========================================
+# Define ALL required keys and their defaults here:
+default_cfg = {
+    "symbol": "BTC/USD", 
+    "preset": "Swing", 
+    "timeframe": "15m", 
+    "limit": 600,
+    "len_main": 55, 
+    "st_mult": 4.0, 
+    "zeta_n": 25,
+    # APEX VECTOR v4.1 New Keys
+    "eff_super": 0.60, 
+    "eff_resist": 0.30, 
+    "len_vec": 14, 
+    "sm_type": "EMA", 
+    "len_sm": 5, 
+    "strictness": 1.0, 
+    "div_look": 5,
+    "show_reg": True, 
+    "show_hid": False
+}
+
+# 1. Initialize if not present
 if "cfg" not in st.session_state:
-    st.session_state.cfg = {
-        "symbol": "BTC/USD", "preset": "Swing", "timeframe": "15m", "limit": 600,
-        "len_main": 55, "st_mult": 4.0, "zeta_n": 25,
-        # NEW APEX VECTOR VARS
-        "eff_super": 0.60, "eff_resist": 0.30, "len_vec": 14, 
-        "sm_type": "EMA", "len_sm": 5, "strictness": 1.0, "div_look": 5,
-        "show_reg": True, "show_hid": False
-    }
+    st.session_state.cfg = default_cfg.copy()
+else:
+    # 2. MIGRATION/MERGE: If 'cfg' exists but lacks new keys (e.g. from prev run), add them.
+    for k, v in default_cfg.items():
+        if k not in st.session_state.cfg:
+            st.session_state.cfg[k] = v
 
 def settings_panel():
     cfg = st.session_state.cfg
