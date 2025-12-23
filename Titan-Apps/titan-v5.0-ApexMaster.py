@@ -528,6 +528,112 @@ with t_ai:
                     )
                     st.success(resp.choices[0].message.content)
                 except Exception as e:
+                    st.error(str(e))        elif flux_val < -cfg["eff_super"]: state_str = "super_bear"
+        elif abs(flux_val) < cfg["eff_resist"]: state_str = "resistive"
+        
+        analysis_text = ""
+        if state_str == "super_bull":
+            analysis_text = "Market is in **Superconductor State (Bullish)**. Efficiency is high, meaning price is moving with low resistance. Volume supports the move."
+        elif state_str == "super_bear":
+            analysis_text = "Market is in **Superconductor State (Bearish)**. Sellers are dominating with high efficiency. Expect continuation down."
+        elif state_str == "resistive":
+            analysis_text = "Market is **Resistive (Choppy)**. Flux is too low to sustain a trend. Avoid trading or use mean-reversion tactics."
+        else:
+            analysis_text = "Market is in **High Heat**. Volatility is present but direction is not fully efficient yet. Caution advised."
+            
+        st.markdown(f"""
+        <div class="analysis-box">
+            {analysis_text}
+        </div>
+        """, unsafe_allow_html=True)
+
+# --- TAB 3: DARK TREND DETAILED ---
+with t_dark:
+    fig_dk = go.Figure()
+    fig_dk.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"))
+    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"], line=dict(color="#00E5FF", width=2), name="Trend Line"))
+    
+    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"] + (df["stop_line"]*0.005), line=dict(width=0), showlegend=False))
+    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"] - (df["stop_line"]*0.005), fill="tonexty", 
+                                fillcolor=("rgba(0, 230, 118, 0.15)" if last["trend"]==1 else "rgba(255, 23, 68, 0.15)"), 
+                                line=dict(width=0), name="Cloud"))
+    
+    fig_dk.update_layout(height=550, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig_dk, use_container_width=True)
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        chop = last["chop"]
+        chop_state = "TRENDING" if chop < 50 else "CHOPPY/RANGING"
+        chop_color = "c-bull" if chop < 50 else "c-bear"
+        
+        st.markdown(f"""
+        <div class="analysis-box">
+            <b>Chop Index:</b> {chop:.1f} <span class="{chop_color}">({chop_state})</span><br>
+            Values below 38 indicate strong trends. Values above 61 indicate intense consolidation.
+        </div>
+        """, unsafe_allow_html=True)
+
+# --- TAB 4: MATRIX DETAILED ---
+with t_mat:
+    fig_m = make_subplots(rows=2, cols=1, shared_xaxes=True)
+    fig_m.add_trace(go.Scatter(x=df["timestamp"], y=df["mfi"], fill="tozeroy", line=dict(color="#D500F9"), name="Money Flow"), row=1, col=1)
+    fig_m.add_trace(go.Bar(x=df["timestamp"], y=df["hyperwave"], marker_color="#00E5FF", name="HyperWave"), row=2, col=1)
+    fig_m.update_layout(height=550, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig_m, use_container_width=True)
+    
+    st.info("Matrix combines **Money Flow** (Volume+RSI) and **HyperWave** (Double Smoothed Momentum). When both align, the signal is strongest.")
+
+# --- TAB 5: QUANTUM ---
+with t_quant:
+    fig_q = go.Figure()
+    fig_q.add_trace(go.Scatter(x=df["timestamp"], y=df["rqzo"], line=dict(color="white"), name="RQZO"))
+    
+    chaos_zone = df[df["entropy"] > 2.0]
+    fig_q.add_trace(go.Scatter(x=chaos_zone["timestamp"], y=chaos_zone["rqzo"], mode="markers", marker=dict(color="red", size=4), name="High Entropy"))
+    
+    fig_q.update_layout(height=500, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig_q, use_container_width=True)
+    
+    st.markdown("Red dots indicate **High Entropy (Chaos)** areas where price prediction is statistically unreliable.")
+
+# --- TAB 6: AI ANALYST ---
+with t_ai:
+    st.subheader("🤖 GPT-4o Quant Synthesis")
+    
+    prompt_txt = f"""
+    ASSET: {cfg['symbol']} ({cfg['timeframe']})
+    
+    1. APEX VECTOR:
+    - Flux: {last['flux']:.3f} (Threshold {cfg['eff_super']})
+    - Efficiency: {last['efficiency']:.2f}
+    - Divergence: {('BULL' if last['div_bull'] else ('BEAR' if last['div_bear'] else 'NONE'))}
+    
+    2. DARK TREND:
+    - Direction: {('UP' if last['trend']==1 else 'DOWN')}
+    - Chop Index: {last['chop']:.1f}
+    
+    3. MATRIX SCORE: {last['matrix_score']}
+    
+    TASK: Provide a 3-sentence executive summary on BIAS, ENTRY, and RISK.
+    """
+    
+    st.code(prompt_txt, language="text")
+    
+    ai_key = st.text_input("OpenAI API Key (Optional)", type="password")
+    if st.button("Generate Report"):
+        if not ai_key:
+            st.error("Please provide an API Key.")
+        else:
+            with st.spinner("Analyzing market physics..."):
+                try:
+                    client = OpenAI(api_key=ai_key)
+                    resp = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[{"role":"user", "content": prompt_txt}]
+                    )
+                    st.success(resp.choices[0].message.content)
+                except Exception as e:
                     st.error(str(e))  --cyan:#00E5FF;
   --vio:#D500F9;
 }
