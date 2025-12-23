@@ -66,16 +66,21 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { background: transparent; color: #666; border: none; }
     .stTabs [aria-selected="true"] { color: var(--cyan); border-bottom: 2px solid var(--cyan); }
     
-    /* Custom Brain HUD */
-    .brain-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px; }
-    .b-card { background: #111; border: 1px solid #333; padding: 10px; border-radius: 6px; text-align: center; }
-    .b-head { font-size: 0.65rem; color: #666; text-transform: uppercase; letter-spacing: 1px; }
-    .b-val { font-size: 1rem; font-weight: bold; margin-top: 4px; }
+    /* Custom Pentagram HUD */
+    .penta-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 15px; }
+    .p-card { background: #111; border: 1px solid #333; padding: 10px; border-radius: 6px; text-align: center; }
+    .p-head { font-size: 0.65rem; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+    .p-val { font-size: 0.95rem; font-weight: bold; margin-top: 4px; }
     
-    .st-bull { color: var(--bull); }
-    .st-bear { color: var(--bear); }
-    .st-neut { color: #666; }
+    .st-bull { color: var(--bull); border-bottom: 2px solid var(--bull); }
+    .st-bear { color: var(--bear); border-bottom: 2px solid var(--bear); }
+    .st-neut { color: #888; border-bottom: 2px solid #888; }
     
+    /* AI Box */
+    .ai-response {
+        background: #090909; border-left: 3px solid var(--vio);
+        padding: 15px; border-radius: 0 8px 8px 0; color: #ccc; line-height: 1.6; font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -101,35 +106,47 @@ def double_smooth(src, l1, l2):
 
 # --- CORE 1: APEX VECTOR (PHYSICS) ---
 def calc_apex_vector(df, p):
+    """Core Physics: Flux, Efficiency, Divergence"""
     df = df.copy()
+    
+    # Efficiency
     rng = df["high"] - df["low"]
     body = (df["close"] - df["open"]).abs()
     raw_eff = np.where(rng==0, 0, body/rng)
     df["eff"] = pd.Series(raw_eff).ewm(span=p["vec_len"]).mean()
     
+    # Flux
     vol_avg = df["volume"].rolling(p["vol_norm"]).mean()
     vol_fact = np.where(vol_avg==0, 1, df["volume"]/vol_avg)
     raw_vec = np.sign(df["close"] - df["open"]) * df["eff"] * vol_fact
     df["flux"] = raw_vec.ewm(span=p["vec_sm"]).mean()
     
+    # State Logic
     th_s = p["eff_super"] * p["strict"]
     th_r = p["eff_resist"] * p["strict"]
     
     conditions = [(df["flux"] > th_s), (df["flux"] < -th_s), (df["flux"].abs() < th_r)]
-    df["vec_state"] = np.select(conditions, [2, -2, 0], default=1) 
+    df["vec_state"] = np.select(conditions, [2, -2, 0], default=1) # 2=Bull, -2=Bear, 0=Resist, 1=Heat
 
-    # Divergence
+    # Divergence (Simplified Peak Detection)
     src = df["flux"]
     lb = p["div_look"]
+    
+    # Local Extrema
     df["pl"] = (src.shift(1) < src.shift(2)) & (src.shift(1) < src)
     df["ph"] = (src.shift(1) > src.shift(2)) & (src.shift(1) > src)
+    
+    # Regular Div
     df["div_bull"] = df["pl"] & (df["close"] < df["close"].shift(lb)) & (df["flux"] > df["flux"].shift(lb))
     df["div_bear"] = df["ph"] & (df["close"] > df["close"].shift(lb)) & (df["flux"] < df["flux"].shift(lb))
+    
     return df
 
 # --- CORE 2: APEX BRAIN (LOGIC) ---
 def calc_apex_brain(df, p):
     df = df.copy()
+    
+    # Core 1: Cortex (Trend Cloud)
     base = hma(df["close"], p["brain_len"])
     atr = rma(df["high"]-df["low"], p["brain_len"])
     df["cortex_u"] = base + (atr * p["brain_mult"])
@@ -145,18 +162,24 @@ def calc_apex_brain(df, p):
         else: trend[i] = trend[i-1]
     df["brain_trend"] = trend
     
+    # Core 2: Amygdala (Entropy Gate)
     ret = df["close"].pct_change()
     df["ent_proxy"] = ret.rolling(p["ent_len"]).std() * 100
     df["gate_safe"] = df["ent_proxy"] < p["ent_th"]
+    
+    # Core 3: Motor (Vector) - Reuse Flux
     df["motor_bull"] = df["flux"] > 0.5
     df["motor_bear"] = df["flux"] < -0.5
     
+    # Core 4: Occipital (Liquidity Flow / FLI)
     rng = df["high"] - df["low"]
     wick = np.where(rng==0, 0, ((np.minimum(df["open"], df["close"]) - df["low"]) - (df["high"] - np.maximum(df["open"], df["close"])))/rng)
+    
     vz = (df["volume"] - df["volume"].rolling(80).mean()) / (df["volume"].rolling(80).std() + 1e-10)
     raw_flow = wick + (vz * 0.5) + ((df["close"]-df["open"])/(rma(rng, 14)+1e-10))
     df["flow"] = raw_flow.ewm(span=34).mean()
     
+    # Synaptic Firing
     df["brain_buy"] = (df["brain_trend"]==1) & df["gate_safe"] & df["motor_bull"] & (df["flow"] > 0)
     df["brain_sell"] = (df["brain_trend"]==-1) & df["gate_safe"] & df["motor_bear"] & (df["flow"] < 0)
     return df
@@ -197,7 +220,7 @@ def calc_apex_smc(df, p):
     """Smart Money Concepts, Order Blocks, FVG, WaveTrend"""
     df = df.copy()
     
-    # 1. HMA Trend (Redundant with Cortex but kept for signal logic)
+    # 1. HMA Trend
     df["smc_base"] = hma(df["close"], p["smc_len"])
     atr = rma(df["high"]-df["low"], 14)
     df["smc_u"] = df["smc_base"] + (atr * p["smc_mult"])
@@ -213,18 +236,16 @@ def calc_apex_smc(df, p):
         else: smc_trend[i] = smc_trend[i-1]
     df["smc_trend"] = smc_trend
 
-    # 2. WaveTrend Signals
+    # 2. WaveTrend
     ap = (df["high"] + df["low"] + df["close"]) / 3
     esa = ap.ewm(span=10).mean()
     d = (ap - esa).abs().ewm(span=10).mean()
     ci = (ap - esa) / (0.015 * d + 1e-10)
     tci = ci.ewm(span=21).mean()
-    
-    # Momentum check
     df["mom_buy"] = (tci < 60) & (tci > tci.shift(1))
     df["mom_sell"] = (tci > -60) & (tci < tci.shift(1))
     
-    # ADX Check
+    # 3. ADX & Volume
     plus_dm = df["high"].diff()
     minus_dm = -df["low"].diff()
     plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
@@ -235,24 +256,15 @@ def calc_apex_smc(df, p):
     dx = 100 * (pdi - mdi).abs() / (pdi + mdi + 1e-10)
     df["adx"] = rma(dx, 14)
     adx_ok = df["adx"] > 20
-    
-    # Volume Check
     vol_ok = df["volume"] > df["volume"].rolling(20).mean()
     
-    # Combined Signals
+    # 4. Signals
     df["smc_buy"] = (df["smc_trend"]==1) & (df["smc_trend"].shift(1)!=1) & vol_ok & df["mom_buy"] & adx_ok
     df["smc_sell"] = (df["smc_trend"]==-1) & (df["smc_trend"].shift(1)!=-1) & vol_ok & df["mom_sell"] & adx_ok
     
-    # 3. Fair Value Gaps (FVG)
-    # Bull FVG: Low[0] > High[2]
-    # Bear FVG: High[0] < Low[2]
+    # 5. FVG
     df["fvg_bull"] = (df["low"] > df["high"].shift(2))
     df["fvg_bear"] = (df["high"] < df["low"].shift(2))
-    
-    # Order Block Approximation (Last candle of opposing color before impulse)
-    # We will just mark recent swing pivots as POI zones
-    df["ph"] = df["high"].rolling(5, center=True).max() == df["high"]
-    df["pl"] = df["low"].rolling(5, center=True).min() == df["low"]
     
     return df
 
@@ -283,14 +295,16 @@ def init_session():
     except: tg_t = ""
     try: tg_c = st.secrets["TG_CHAT_ID"]
     except: tg_c = ""
+    try: ai_key = st.secrets["OPENAI_API_KEY"]
+    except: ai_key = ""
     
     defaults = {
         "exch": "Kraken", "sym": "BTC/USD", "tf": "15m", "lim": 500,
         "vec_len": 14, "vol_norm": 55, "vec_sm": 5, "eff_super": 0.6, "eff_resist": 0.3, "strict": 1.0,
-        "div_look": 5, "show_reg": True, "show_hid": False,
+        "div_look": 5,
         "brain_len": 55, "brain_mult": 1.5, "ent_len": 64, "ent_th": 2.0, "fli_len": 34,
-        "smc_len": 55, "smc_mult": 1.5, # New SMC params
-        "tg_t": tg_t, "tg_c": tg_c, "auto": False
+        "smc_len": 55, "smc_mult": 1.5,
+        "tg_t": tg_t, "tg_c": tg_c, "ai_key": ai_key, "auto": False
     }
     if "cfg" not in st.session_state: st.session_state.cfg = defaults
     else:
@@ -304,7 +318,7 @@ cfg = st.session_state.cfg
 # 5. SIDEBAR CONTROLS
 # ==========================================
 with st.sidebar:
-    st.markdown("### 🌌 TITAN OMEGA")
+    st.markdown("### 🌌 TITAN PENTAGRAM")
     
     with st.expander("📡 Data & Auto-Pilot", expanded=True):
         cfg["exch"] = st.selectbox("Exchange", ["Kraken", "Binance", "Bybit", "Coinbase", "OKX"])
@@ -329,7 +343,8 @@ with st.sidebar:
         cfg["smc_len"] = st.number_input("Trend Length", 10, 200, 55)
         cfg["smc_mult"] = st.slider("ATR Mult", 0.5, 5.0, 1.5)
 
-    with st.expander("📢 Alerts"):
+    with st.expander("🤖 & 📢 Connections"):
+        cfg["ai_key"] = st.text_input("OpenAI Key", cfg["ai_key"], type="password")
         cfg["tg_t"] = st.text_input("Bot Token", cfg["tg_t"], type="password")
         cfg["tg_c"] = st.text_input("Chat ID", cfg["tg_c"], type="password")
 
@@ -349,7 +364,7 @@ if df.empty:
     st.error("Data Connection Failed.")
     st.stop()
 
-# CHAIN PROCESSING
+# CHAIN PROCESSING (ALL 5 CORES)
 df = calc_apex_vector(df, cfg)  # Core 1
 df = calc_apex_brain(df, cfg)   # Core 2
 df = calc_rqzo(df, cfg)         # Core 3
@@ -391,7 +406,7 @@ with log_cont:
 # ==========================================
 st.title(f"🌌 {cfg['sym']} // {cfg['tf']}")
 
-# --- 5-CORE HUD ---
+# --- PENTAGRAM HUD ---
 c_trend = "BULL" if last["brain_trend"] == 1 else "BEAR"
 s_trend = "st-bull" if last["brain_trend"] == 1 else "st-bear"
 
@@ -408,17 +423,17 @@ c_smc = "BUY" if last["smc_buy"] else ("SELL" if last["smc_sell"] else "WAIT")
 s_smc = "st-bull" if last["smc_buy"] else ("st-bear" if last["smc_sell"] else "st-neut")
 
 st.markdown(f"""
-<div class="brain-grid">
-    <div class="b-card"><div class="b-head">CORTEX (Trend)</div><div class="b-val {s_trend}">{c_trend}</div></div>
-    <div class="b-card"><div class="b-head">AMYGDALA (Gate)</div><div class="b-val {s_gate}">{c_gate}</div></div>
-    <div class="b-card"><div class="b-head">MOTOR (Vector)</div><div class="b-val {s_vec}">{c_vec}</div></div>
-    <div class="b-card"><div class="b-head">OCCIPITAL (Flow)</div><div class="b-val {s_flow}">{c_flow}</div></div>
-    <div class="b-card"><div class="b-head">SMC (Signal)</div><div class="b-val {s_smc}">{c_smc}</div></div>
+<div class="penta-grid">
+    <div class="p-card"><div class="p-head">CORTEX (Trend)</div><div class="p-val {s_trend}">{c_trend}</div></div>
+    <div class="p-card"><div class="p-head">AMYGDALA (Gate)</div><div class="p-val {s_gate}">{c_gate}</div></div>
+    <div class="p-card"><div class="p-head">MOTOR (Vector)</div><div class="p-val {s_vec}">{c_vec}</div></div>
+    <div class="p-card"><div class="p-head">OCCIPITAL (Flow)</div><div class="p-val {s_flow}">{c_flow}</div></div>
+    <div class="p-card"><div class="p-head">SMC (Signal)</div><div class="p-val {s_smc}">{c_smc}</div></div>
 </div>
 """, unsafe_allow_html=True)
 
 # --- TABS ---
-t1, t2, t3, t4, t5 = st.tabs(["🧠 Brain & Cortex", "🏛️ SMC & Liquidity", "⚡ Apex Vector", "💠 Matrix & RQZO", "📘 Manual"])
+t1, t2, t3, t4, t5 = st.tabs(["🧠 Brain & Cortex", "🏛️ SMC & Liquidity", "⚡ Apex Vector", "💠 Matrix & RQZO", "🤖 AI Council"])
 
 def dark_plot():
     return go.Layout(
@@ -453,7 +468,6 @@ with t2: # SMC & Liquidity
     fvg_b = df[df["fvg_bull"]]
     fvg_s = df[df["fvg_bear"]]
     
-    # Plot recent FVGs as markers (full rects require shapes, using markers for speed)
     fig_s.add_trace(go.Scatter(x=fvg_b["timestamp"], y=fvg_b["low"], mode="markers", marker=dict(symbol="square", color="rgba(0,230,118,0.4)", size=8), name="Bull FVG"))
     fig_s.add_trace(go.Scatter(x=fvg_s["timestamp"], y=fvg_s["high"], mode="markers", marker=dict(symbol="square", color="rgba(255,23,68,0.4)", size=8), name="Bear FVG"))
     
@@ -497,17 +511,32 @@ with t4: # Matrix/RQZO
     st.plotly_chart(fig_m, use_container_width=True)
 
 with t5:
-    st.markdown("### 📘 Titan Omega Manual")
-    with st.expander("🧠 The Brain (Quad-Core)", expanded=True):
-        st.write("""
-        **1. CORTEX:** Trend bias.
-        **2. AMYGDALA:** Entropy/Chaos Gate.
-        **3. MOTOR:** Vector Momentum.
-        **4. OCCIPITAL:** Liquidity Flow.
-        """)
-    with st.expander("🏛️ SMC (Smart Money)"):
-        st.write("""
-        **SMC Trend:** HMA + ATR Volatility Bands.
-        **FVG:** Fair Value Gaps (Inefficiency).
-        **Signals:** WaveTrend Momentum + Volume + ADX Confirmation.
-        """)
+    st.markdown("### 🤖 The Council of Five")
+    
+    persona = st.selectbox("Choose Your Analyst", ["The Grand Strategist (All)", "The Physicist (Vector)", "The Neurologist (Brain)", "The Quant (Matrix/RQZO)", "The Banker (SMC)"])
+    
+    if st.button("Consult Analyst"):
+        if not cfg["ai_key"]:
+            st.error("AI Key Missing.")
+        else:
+            with st.spinner(f"{persona} is analyzing..."):
+                base_prompt = f"Market: {cfg['sym']} {cfg['tf']} | Price: {last['close']}\n"
+                
+                if "Physicist" in persona:
+                    spec_prompt = f"Focus on Vector Physics. Flux: {last['flux']:.2f}, Eff: {last['eff']:.2f}. Div Bull: {last['div_bull']}, Div Bear: {last['div_bear']}."
+                elif "Neurologist" in persona:
+                    spec_prompt = f"Focus on Brain Logic. Trend: {last['brain_trend']}, Gate Safe: {last['gate_safe']}, Flow: {last['flow']:.2f}."
+                elif "Quant" in persona:
+                    spec_prompt = f"Focus on Math. RQZO: {last['rqzo']:.2f}, Matrix Sig: {last['matrix_sig']}."
+                elif "Banker" in persona:
+                    spec_prompt = f"Focus on Smart Money. SMC Signal: {c_smc}, FVG Bull: {last['fvg_bull']}, FVG Bear: {last['fvg_bear']}."
+                else:
+                    spec_prompt = f"Synthesize ALL 5 Cores. Flux {last['flux']:.2f}, Brain Trend {last['brain_trend']}, Gate {last['gate_safe']}, RQZO {last['rqzo']:.2f}, SMC {c_smc}."
+                
+                final_prompt = base_prompt + spec_prompt + "\nOutput: BIAS, ENTRY, RISK, NUANCE."
+                
+                try:
+                    c = OpenAI(api_key=cfg["ai_key"])
+                    r = c.chat.completions.create(model="gpt-4o", messages=[{"role":"user", "content": final_prompt}])
+                    st.markdown(f"<div class='ai-response'>{r.choices[0].message.content}</div>", unsafe_allow_html=True)
+                except Exception as e: st.error(str(e))
