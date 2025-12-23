@@ -8,7 +8,6 @@ from plotly.subplots import make_subplots
 import plotly.express as px
 from datetime import datetime, timedelta
 import requests
-from openai import OpenAI
 import json
 import time
 from typing import Dict, List, Tuple, Optional
@@ -19,6 +18,106 @@ from scipy.stats import entropy as scipy_entropy
 import streamlit.components.v1 as components
 
 warnings.filterwarnings('ignore')
+
+# ==========================================
+# 0. CONFIGURATION & STYLING
+# ==========================================
+
+st.set_page_config(
+    page_title="QUANTUM ALPHA SUITE - HZQEO", 
+    layout="wide", 
+    page_icon="⚛️", 
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://quantum-alpha.io/docs',
+        'Report a bug': 'https://quantum-alpha.io/bug',
+        'About': '# Quantum Alpha Suite v4.0\nHyperbolic Zeta-Quantum Entropy Oscillator Integration'
+    }
+)
+
+# QUANTUM CSS THEME (Inlined for reliability)
+QUANTUM_CSS = """
+<style>
+    :root {
+        --quantum-bg: #0a0a12;
+        --quantum-card: #14141f;
+        --quantum-primary: #00f5d4;
+        --quantum-secondary: #7209b7;
+        --quantum-accent: #f72585;
+        --quantum-text: #e2e2ff;
+        --quantum-dim: #8b8b9e;
+        --quantum-success: #00ff9d;
+        --quantum-warning: #ffd60a;
+        --quantum-danger: #ff006e;
+    }
+    
+    .stApp {
+        background-color: var(--quantum-bg);
+        color: var(--quantum-text);
+    }
+    
+    .quantum-header {
+        padding: 1.5rem;
+        background: linear-gradient(180deg, rgba(20,20,31,0.8) 0%, rgba(10,10,18,0) 100%);
+        border-bottom: 1px solid rgba(114, 9, 183, 0.2);
+        margin-bottom: 2rem;
+    }
+    
+    .quantum-card {
+        background: var(--quantum-card);
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        margin-bottom: 1rem;
+        transition: transform 0.2s ease;
+    }
+    
+    .quantum-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(0, 245, 212, 0.3);
+    }
+    
+    .quantum-metric {
+        background: rgba(255,255,255,0.03);
+        padding: 1rem;
+        border-radius: 8px;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+    
+    .quantum-metric .label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--quantum-dim);
+        margin-bottom: 0.5rem;
+    }
+    
+    .quantum-metric .value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: var(--quantum-bg); 
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #333; 
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--quantum-primary); 
+    }
+</style>
+"""
+st.markdown(QUANTUM_CSS, unsafe_allow_html=True)
 
 # ==========================================
 # 1. QUANTUM HZQEO ENGINE
@@ -73,7 +172,16 @@ class HZQEOEngine:
             )
             
             # Complex exponent for Zeta function
-            log_returns = np.log(df.iloc[idx-19:idx+1]['close'] / df.iloc[idx-20:idx]['close'].values)
+            # Use iloc safely for log returns
+            prev_prices = df.iloc[idx-20:idx]['close'].values
+            curr_prices = df.iloc[idx-19:idx+1]['close'].values
+            
+            # Ensure arrays are same length before division
+            min_len = min(len(prev_prices), len(curr_prices))
+            if min_len < 2:
+                continue
+                
+            log_returns = np.log(curr_prices[-min_len:] / prev_prices[-min_len:])
             s_real = 0.5 + 0.1 * log_returns.std() / 0.01
             
             # Simplified zeta calculation
@@ -208,10 +316,7 @@ class HZQEOEngine:
         
         # Calculate final HZQEO
         results['hzqeo_raw'] = (
-            results['zeta_osc'] * 
-            results['tunnel_prob'] * 
-            results['entropy_factor'] * 
-            results['fluid_factor']
+            results['zeta_osc'] * results['tunnel_prob'] * results['entropy_factor'] * results['fluid_factor']
         )
         
         # Normalize to [-1, 1]
@@ -231,30 +336,8 @@ class HZQEOEngine:
         return results
 
 # ==========================================
-# 2. ENHANCED QUANTUM DASHBOARD
+# 2. ENHANCED QUANTUM DASHBOARD DATA ENGINE
 # ==========================================
-
-# Use the existing CSS from the provided file
-st.set_page_config(
-    page_title="QUANTUM ALPHA SUITE - HZQEO", 
-    layout="wide", 
-    page_icon="⚛️", 
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': 'https://quantum-alpha.io/docs',
-        'Report a bug': 'https://quantum-alpha.io/bug',
-        'About': '# Quantum Alpha Suite v4.0\nHyperbolic Zeta-Quantum Entropy Oscillator Integration'
-    }
-)
-
-# Inject the existing CSS
-with open('deepseek_python_20251223_02aa11.py', 'r') as f:
-    content = f.read()
-    # Extract CSS from the original file (simplified - in reality would parse better)
-    css_start = content.find('<style>')
-    css_end = content.find('</style>') + 8
-    if css_start != -1 and css_end != -1:
-        st.markdown(content[css_start:css_end], unsafe_allow_html=True)
 
 class EnhancedQuantumDataEngine:
     """Extended data engine with HZQEO capabilities"""
