@@ -127,6 +127,8 @@ hr { border: none; border-top: 1px solid var(--border); margin: 0.8rem 0; }
 .c-bear{ color: var(--bear); }
 .c-heat{ color: var(--heat); }
 .c-cyan{ color: var(--cyan); }
+.c-div-bull { color: #00B0FF; }
+.c-div-bear { color: #FF4081; }
 
 /* AI box */
 .ai-box{
@@ -150,15 +152,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 0.8rem 0; }
 )
 
 # ==========================================
-# 3. MATH ENGINE (YOUR ORIGINAL FUNCTIONS)
+# 3. MATH ENGINE & HELPERS
 # ==========================================
 def rma(series, length):
     return series.ewm(alpha=1 / length, adjust=False).mean()
-
-def double_smooth(src, long_len, short_len):
-    smooth1 = src.ewm(span=long_len, adjust=False).mean()
-    smooth2 = smooth1.ewm(span=short_len, adjust=False).mean()
-    return smooth2
 
 def wma(series, length):
     weights = np.arange(1, length + 1)
@@ -172,30 +169,147 @@ def hma(series, length):
     diff = 2 * wma_half - wma_full
     return wma(diff, sqrt_length)
 
-def calc_apex_vector(df, p):
+def vwma(series, volume, length):
+    return (series * volume).rolling(window=length).mean() / volume.rolling(window=length).mean()
+
+def apply_smoothing(series, type_str, length, vol_series=None):
+    if type_str == "EMA":
+        return series.ewm(span=length, adjust=False).mean()
+    elif type_str == "SMA":
+        return series.rolling(window=length).mean()
+    elif type_str == "RMA":
+        return rma(series, length)
+    elif type_str == "WMA":
+        return wma(series, length)
+    elif type_str == "VWMA" and vol_series is not None:
+        return vwma(series, vol_series, length)
+    else:
+        return series.ewm(span=length, adjust=False).mean() # Fallback EMA
+
+def double_smooth(src, long_len, short_len):
+    smooth1 = src.ewm(span=long_len, adjust=False).mean()
+    smooth2 = smooth1.ewm(span=short_len, adjust=False).mean()
+    return smooth2
+
+# ==========================================
+# 4. APEX VECTOR v4.1 LOGIC (Full Port)
+# ==========================================
+def calc_apex_vector_v4(df, p):
     df = df.copy()
-    df["range"] = df["high"] - df["low"]
-    df["body"] = (df["close"] - df["open"]).abs()
-    df["raw_eff"] = np.where(df["range"] == 0, 0.0, df["body"] / df["range"])
-    df["efficiency"] = df["raw_eff"].ewm(span=p["vec_len"], adjust=False).mean()
+    
+    # --- 1. Geometric Efficiency ---
+    df["range_abs"] = df["high"] - df["low"]
+    df["body_abs"] = (df["close"] - df["open"]).abs()
+    # Avoid div by zero
+    df["raw_eff"] = np.where(df["range_abs"] == 0, 0.0, df["body_abs"] / df["range_abs"])
+    df["efficiency"] = df["raw_eff"].ewm(span=p["len_vec"], adjust=False).mean()
 
+    # --- 2. Volume Flux ---
     df["vol_avg"] = df["volume"].rolling(p["vol_norm"]).mean()
-    df["vol_fact"] = np.where(df["vol_avg"] == 0, 1.0, df["volume"] / df["vol_avg"])
+    if p["use_vol"]:
+        df["vol_fact"] = np.where(df["vol_avg"] == 0, 1.0, df["volume"] / df["vol_avg"])
+    else:
+        df["vol_fact"] = 1.0
 
+    # --- 3. The Apex Vector ---
     df["direction"] = np.sign(df["close"] - df["open"])
+    df["vector_raw"] = df["direction"] * df["efficiency"] * df["vol_fact"]
+
+    # --- 4. Smoothing Kernel ---
+    df["flux"] = apply_smoothing(df["vector_raw"], p["sm_type"], p["len_sm"], df["volume"])
+
+    # --- 5. Logic & State Machine ---
     th_super = p["eff_super"] * p["strictness"]
     th_resist = p["eff_resist"] * p["strictness"]
 
-    df["vector_raw"] = df["direction"] * df["efficiency"] * df["vol_fact"]
-    df["apex_flux"] = df["vector_raw"].ewm(span=p["flux_sm"], adjust=False).mean()
-
     conditions = [
-        (df["apex_flux"] > th_super),
-        (df["apex_flux"] < -th_super),
-        (df["apex_flux"].abs() < th_resist),
+        (df["flux"] > th_super),           # Super Bull
+        (df["flux"] < -th_super),          # Super Bear
+        (df["flux"].abs() < th_resist)     # Resistive
     ]
-    choices = [2, -2, 0]
+    # 2=Bull, -2=Bear, 0=Resist, 1=Heat (Default/Else)
+    choices = [2, -2, 0] 
     df["apex_state"] = np.select(conditions, choices, default=1)
+
+    # --- 6. Divergence Engine (Fixed Loop) ---
+    # We need to simulate Pine's 'pivothigh/low' which identifies a pivot 
+    # at index `i` only after `right` bars have passed.
+    look = p["div_look"]
+    
+    # Initialize output columns
+    df["div_bull_reg"] = False
+    df["div_bull_hid"] = False
+    df["div_bear_reg"] = False
+    df["div_bear_hid"] = False
+    
+    # We iterate carefully to replicate Pine state memory
+    flux = df["flux"].values
+    highs = df["high"].values
+    lows = df["low"].values
+    n = len(df)
+    
+    prev_pl_flux = np.nan
+    prev_pl_price = np.nan
+    prev_ph_flux = np.nan
+    prev_ph_price = np.nan
+    
+    # Arrays for vector assignment later
+    div_bull_reg_arr = np.zeros(n, dtype=bool)
+    div_bull_hid_arr = np.zeros(n, dtype=bool)
+    div_bear_reg_arr = np.zeros(n, dtype=bool)
+    div_bear_hid_arr = np.zeros(n, dtype=bool)
+
+    # Simple rolling window check for pivots (center of window is max/min)
+    # Range: look to n - look
+    for i in range(look, n - look):
+        # 1. Pivot Low Detection
+        window_fl = flux[i-look : i+look+1]
+        if flux[i] == np.min(window_fl):
+            # Pivot Low found at 'i'
+            pl = flux[i]
+            price_at_pivot = lows[i] # In Pine: low[div_look] from the perspective of confirmation
+            
+            if not np.isnan(prev_pl_flux):
+                # Regular Bull: Lower Price, Higher Flux
+                if p["show_reg"] and (price_at_pivot < prev_pl_price) and (pl > prev_pl_flux):
+                    div_bull_reg_arr[i] = True
+                # Hidden Bull: Higher Price, Lower Flux
+                if p["show_hid"] and (price_at_pivot > prev_pl_price) and (pl < prev_pl_flux):
+                    div_bull_hid_arr[i] = True
+            
+            # Update Memory
+            prev_pl_flux = pl
+            prev_pl_price = price_at_pivot
+
+        # 2. Pivot High Detection
+        if flux[i] == np.max(window_fl):
+            # Pivot High found at 'i'
+            ph = flux[i]
+            price_at_pivot = highs[i]
+            
+            if not np.isnan(prev_ph_flux):
+                # Regular Bear: Higher Price, Lower Flux
+                if p["show_reg"] and (price_at_pivot > prev_ph_price) and (ph < prev_ph_flux):
+                    div_bear_reg_arr[i] = True
+                # Hidden Bear: Lower Price, Higher Flux
+                if p["show_hid"] and (price_at_pivot < prev_ph_price) and (ph > prev_ph_flux):
+                    div_bear_hid_arr[i] = True
+            
+            prev_ph_flux = ph
+            prev_ph_price = price_at_pivot
+
+    df["div_bull_reg"] = div_bull_reg_arr
+    df["div_bull_hid"] = div_bull_hid_arr
+    df["div_bear_reg"] = div_bear_reg_arr
+    df["div_bear_hid"] = div_bear_hid_arr
+
+    # Helper for Alert Text
+    df["div_status"] = np.select(
+        [df["div_bull_reg"], df["div_bear_reg"], df["div_bull_hid"], df["div_bear_hid"]],
+        ["Bull Reg", "Bear Reg", "Bull Hid", "Bear Hid"],
+        default="None"
+    )
+
     return df
 
 def calc_dark_vector(df, p):
@@ -243,15 +357,12 @@ def calc_dark_vector(df, p):
     return df
 
 def calc_matrix(df, p):
-    # (Leaving your logic shape intact; only making it safe & readable.)
     df = df.copy()
     change = df["close"].diff()
     up, down = change.clip(lower=0), -change.clip(upper=0)
-
     rs = (rma(up, p["mf_len"]) / (rma(down, p["mf_len"]) + 1e-12))
     rsi = 100 - (100 / (1 + rs))
-    rsi_src = rsi - 50  # centered RSI
-
+    rsi_src = rsi - 50 
     mf_vol = df["volume"] / (df["volume"].rolling(p["mf_len"]).mean() + 1e-12)
     df["money_flow"] = (rsi_src * mf_vol).ewm(span=p["mf_smooth"], adjust=False).mean()
 
@@ -302,7 +413,6 @@ def calc_rqzo(df, p):
         zeta += np.where(n <= n_eff, term, 0)
 
     df["rqzo"] = zeta * np.exp(-2 * np.abs(df["entropy"] - 0.6)) * 10
-
     ma = df["rqzo"].rolling(20).mean()
     std = df["rqzo"].rolling(20).std()
     w = (2.5 - df["fdi"]) * std
@@ -364,11 +474,10 @@ def calc_apex_master(df, p):
     return df
 
 # ==========================================
-# 4. DATA ACCESS (CACHE + HEALTH)
+# 5. DATA ACCESS
 # ==========================================
 @st.cache_resource
 def get_exchange():
-    # enableRateLimit improves stability UX (fewer random fetch fails)
     return ccxt.kraken({"enableRateLimit": True})
 
 @st.cache_data(ttl=15)
@@ -378,165 +487,149 @@ def get_data(sym, tf, lim):
     return pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 # ==========================================
-# 5. SETTINGS MODEL (FORM + PRESETS)
+# 6. SETTINGS MODEL
 # ==========================================
-def preset_params(name: str):
-    if name == "Scalp":
-        return dict(timeframe="1m", limit=400, len_main=34, eff_super=0.72, st_mult=3.2, zeta_n=18)
-    if name == "Swing":
-        return dict(timeframe="15m", limit=650, len_main=55, eff_super=0.60, st_mult=4.0, zeta_n=25)
-    if name == "Long":
-        return dict(timeframe="4h", limit=800, len_main=89, eff_super=0.52, st_mult=4.8, zeta_n=34)
-    return {}
-
 if "cfg" not in st.session_state:
     st.session_state.cfg = {
-        "symbol": "BTC/USD",
-        "preset": "Swing",
-        "timeframe": "15m",
-        "limit": 500,
-        "len_main": 55,
-        "eff_super": 0.6,
-        "st_mult": 4.0,
-        "zeta_n": 25,
+        "symbol": "BTC/USD", "preset": "Swing", "timeframe": "15m", "limit": 600,
+        "len_main": 55, "st_mult": 4.0, "zeta_n": 25,
+        # NEW APEX VECTOR VARS
+        "eff_super": 0.60, "eff_resist": 0.30, "len_vec": 14, 
+        "sm_type": "EMA", "len_sm": 5, "strictness": 1.0, "div_look": 5,
+        "show_reg": True, "show_hid": False
     }
 
 def settings_panel():
     cfg = st.session_state.cfg
     with st.form("settings_form", border=False):
         st.caption("Terminal Config")
-
         colA, colB = st.columns([1.1, 0.9])
         with colA:
-            symbol = st.text_input("Symbol", cfg["symbol"], help="Exchange symbol (Kraken). Example: BTC/USD")
+            symbol = st.text_input("Symbol", cfg["symbol"])
         with colB:
-            preset = st.selectbox("Preset", ["Scalp", "Swing", "Long", "Custom"], index=["Scalp","Swing","Long","Custom"].index(cfg["preset"]))
+            preset = st.selectbox("Preset", ["Scalp", "Swing", "Custom"], index=["Scalp", "Swing", "Custom"].index(cfg["preset"]))
+        
+        # Default Logic
+        if preset == "Scalp":
+            p_def = {"timeframe": "1m", "limit": 400, "len_main": 34, "eff_super": 0.72}
+        elif preset == "Swing":
+            p_def = {"timeframe": "15m", "limit": 650, "len_main": 55, "eff_super": 0.60}
+        else:
+            p_def = cfg
 
         if preset != "Custom":
-            p = preset_params(preset)
-            timeframe = st.selectbox("Timeframe", ['1m','5m','15m','1h','4h','1d'], index=['1m','5m','15m','1h','4h','1d'].index(p["timeframe"]))
-            limit = st.slider("Lookback", 200, 1000, p["limit"], help="More candles = slower, but more stable indicators.")
-            len_main = st.number_input("Apex Trend Length", 10, 200, p["len_main"])
-            eff_super = st.number_input("Vector: Super Thresh", 0.1, 1.0, float(p["eff_super"]))
-            st_mult = st.number_input("Dark: Trend Factor", 1.0, 10.0, float(p["st_mult"]))
-            zeta_n = st.number_input("Quantum: Harmonics", 5, 100, int(p["zeta_n"]))
+            timeframe = st.selectbox("Timeframe", ['1m','5m','15m','1h','4h','1d'], index=['1m','5m','15m','1h','4h','1d'].index(p_def["timeframe"]))
+            limit = st.slider("Lookback", 200, 1000, p_def["limit"])
         else:
             timeframe = st.selectbox("Timeframe", ['1m','5m','15m','1h','4h','1d'], index=['1m','5m','15m','1h','4h','1d'].index(cfg["timeframe"]))
             limit = st.slider("Lookback", 200, 1000, cfg["limit"])
-            st.divider()
-            col1, col2 = st.columns(2)
-            with col1:
-                len_main = st.number_input("Apex Trend Length", 10, 200, cfg["len_main"])
-                eff_super = st.number_input("Vector: Super Thresh", 0.1, 1.0, float(cfg["eff_super"]))
-            with col2:
-                st_mult = st.number_input("Dark: Trend Factor", 1.0, 10.0, float(cfg["st_mult"]))
-                zeta_n = st.number_input("Quantum: Harmonics", 5, 100, int(cfg["zeta_n"]))
+        
+        st.divider()
+        st.markdown("**Apex Vector Engine**")
+        c1, c2 = st.columns(2)
+        with c1:
+            eff_super = st.number_input("Super Thresh", 0.1, 1.0, float(p_def["eff_super"] if preset != "Custom" else cfg["eff_super"]))
+            eff_resist = st.number_input("Resist Thresh", 0.0, 0.5, float(cfg["eff_resist"]))
+            sm_type = st.selectbox("Smoothing", ["EMA","SMA","RMA","WMA","VWMA"], index=["EMA","SMA","RMA","WMA","VWMA"].index(cfg["sm_type"]))
+        with c2:
+            len_vec = st.number_input("Vector Len", 2, 50, int(cfg["len_vec"]))
+            len_sm = st.number_input("Smooth Len", 1, 20, int(cfg["len_sm"]))
+            div_look = st.number_input("Div Lookback", 1, 20, int(cfg["div_look"]))
+        
+        strictness = st.slider("Strictness", 0.5, 2.0, float(cfg["strictness"]))
+        
+        st.divider()
+        with st.expander("Other Params"):
+            len_main = st.number_input("Master Trend Len", 10, 200, int(p_def["len_main"] if preset!="Custom" else cfg["len_main"]))
+            st_mult = st.number_input("Dark Trend Mult", 1.0, 10.0, float(cfg["st_mult"]))
+            zeta_n = st.number_input("Quantum N", 5, 100, int(cfg["zeta_n"]))
+            show_reg = st.checkbox("Show Reg Divs", cfg["show_reg"])
+            show_hid = st.checkbox("Show Hidden Divs", cfg["show_hid"])
 
         apply = st.form_submit_button("Apply Settings")
 
     if apply:
-        st.session_state.cfg = {
-            "symbol": symbol.strip(),
-            "preset": preset,
-            "timeframe": timeframe,
-            "limit": int(limit),
-            "len_main": int(len_main),
-            "eff_super": float(eff_super),
-            "st_mult": float(st_mult),
-            "zeta_n": int(zeta_n),
-        }
-        st.toast("Settings applied", icon="⚙️")
+        st.session_state.cfg.update({
+            "symbol": symbol.strip(), "preset": preset, "timeframe": timeframe, "limit": limit,
+            "len_main": len_main, "st_mult": st_mult, "zeta_n": zeta_n,
+            "eff_super": eff_super, "eff_resist": eff_resist, "len_vec": len_vec,
+            "sm_type": sm_type, "len_sm": len_sm, "strictness": strictness,
+            "div_look": div_look, "show_reg": show_reg, "show_hid": show_hid
+        })
+        st.toast("Settings updated", icon="⚡")
 
-# Prefer popover; fallback sidebar (clean UX either way)
 try:
     with st.popover("⚙️ Settings", use_container_width=True):
         settings_panel()
-except Exception:
+except:
     with st.sidebar:
         settings_panel()
 
 cfg = st.session_state.cfg
 
 # ==========================================
-# 6. TOP COMMAND BAR
+# 7. MAIN EXECUTION
 # ==========================================
-left, right = st.columns([1.2, 0.8], vertical_alignment="center")
-with left:
-    st.markdown(
-        f"""
-        <div class="titan-topbar">
-          <div class="titan-title">
-            <div class="h">⚡ Titan v5.0 — Apex Master Terminal</div>
-            <div class="s">{cfg["symbol"]} • {cfg["timeframe"]} • lookback {cfg["limit"]}</div>
-          </div>
-          <div style="display:flex; gap:10px; align-items:center;">
-            <span class="pill"><span class="dot"></span> Live</span>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with right:
-    colr1, colr2 = st.columns([1, 1])
-    with colr1:
-        if st.button("↻ Refresh"):
-            get_data.clear()  # clears cached fetches for immediate refresh
-            st.rerun()
-    with colr2:
-        st.download_button(
-            "⬇ Snapshot CSV",
-            data=b"",  # replaced later once df exists
-            file_name="titan_snapshot.csv",
-            disabled=True,
-            use_container_width=True,
-        )
-
-# ==========================================
-# 7. RUN PIPELINE (WITH GOOD UX STATES)
-# ==========================================
+# Compile Parameter Dict
 params = {
-    "vec_len": 14, "flux_sm": 5, "eff_super": cfg["eff_super"], "eff_resist": 0.3, "strictness": 1.0, "vol_norm": 55,
-    "chop_len": 14, "chop_thresh": 60, "st_len": 10, "st_mult": cfg["st_mult"],
+    "vol_norm": 55, "chop_len": 14, "chop_thresh": 60, "st_len": 10, 
     "mf_len": 14, "mf_smooth": 3, "hw_long": 25, "hw_short": 13,
-    "term_vol": 5.0, "fdi_len": 20, "ent_len": 20, "zeta_n": cfg["zeta_n"],
-    "ma_type": "HMA", "len_main": cfg["len_main"], "mult": 1.5, "liq_len": 10
+    "term_vol": 5.0, "fdi_len": 20, "ent_len": 20, "ma_type": "HMA", "mult": 1.5, "liq_len": 10,
+    "use_vol": True,
+    # User Controlled
+    "eff_super": cfg["eff_super"], "eff_resist": cfg["eff_resist"], 
+    "len_vec": cfg["len_vec"], "sm_type": cfg["sm_type"], "len_sm": cfg["len_sm"],
+    "strictness": cfg["strictness"], "div_look": cfg["div_look"],
+    "show_reg": cfg["show_reg"], "show_hid": cfg["show_hid"],
+    "st_mult": cfg["st_mult"], "zeta_n": cfg["zeta_n"], "len_main": cfg["len_main"]
 }
 
-with st.spinner("Connecting to Kraken + compiling signals…"):
+# Top Bar
+left, right = st.columns([1.2, 0.8], vertical_alignment="center")
+with left:
+    st.markdown(f"""
+        <div class="titan-topbar">
+          <div class="titan-title"><div class="h">⚡ Titan v5.0 — Apex Master Terminal</div><div class="s">{cfg["symbol"]} • {cfg["timeframe"]}</div></div>
+          <div><span class="pill"><span class="dot"></span> Live</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+with right:
+    c_r1, c_r2 = st.columns(2)
+    with c_r1:
+        if st.button("↻ Refresh"):
+            get_data.clear()
+            st.rerun()
+
+# Fetch & Calc
+with st.spinner("Processing Signals..."):
     try:
         df = get_data(cfg["symbol"], cfg["timeframe"], cfg["limit"])
     except Exception as e:
         df = pd.DataFrame()
-        st.error(f"Data fetch failed: {e}")
+        st.error(f"Error: {e}")
 
 if df.empty:
-    st.info("System Initializing… Try Refresh. If symbol/timeframe is invalid, update settings.")
+    st.warning("No data. Check symbol.")
     st.stop()
 
 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-df = calc_apex_vector(df, params)
+df = calc_apex_vector_v4(df, params)
 df = calc_dark_vector(df, params)
 df = calc_matrix(df, params)
 df = calc_rqzo(df, params)
 df = calc_apex_master(df, params)
 
 last = df.iloc[-1]
-last_update = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-# Activate snapshot download now that df exists
-st.download_button(
-    "⬇ Snapshot CSV",
-    data=df.to_csv(index=False).encode("utf-8"),
-    file_name=f"titan_{cfg['symbol'].replace('/','-')}_{cfg['timeframe']}.csv",
-    use_container_width=True,
-)
-
-st.caption(f"Last update: {last_update}")
+# Snapshot Button
+with right:
+    with c_r2:
+        st.download_button("⬇ CSV", df.to_csv(index=False).encode("utf-8"), "titan_data.csv", use_container_width=True)
 
 # ==========================================
-# 8. READABLE STATE LABELS
+# 8. VISUALIZATION
 # ==========================================
+# Determine Colors & Text for HUD
 apex_code = last["apex_state"]
 if apex_code == 2:
     s_txt, s_col, accent = "SUPER (BULL)", "c-bull", "accent-bull"
@@ -549,202 +642,125 @@ else:
 
 master_trend = "BULLISH" if last["apex_trend"] == 1 else "BEARISH"
 master_col = "c-bull" if last["apex_trend"] == 1 else "c-bear"
-mat_score = last["matrix_score"]
-mat_txt = "STRONG BUY" if mat_score > 1 else ("STRONG SELL" if mat_score < -1 else "NEUTRAL")
-mat_col = "c-bull" if mat_score > 1 else ("c-bear" if mat_score < -1 else "c-cyan")
 
-# ==========================================
-# 9. TABS
-# ==========================================
+# Tabs
 t1, t2, t3, t4, t5 = st.tabs(["⚡ Terminal", "🌊 Liquidity/SMC", "💠 Matrix", "⚛️ Quantum", "🤖 AI Analyst"])
 
-# --- TAB 1
 with t1:
+    # 1. Metric Cards (HUD)
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(f"""<div class="titan-card {accent}"><div class="k">Apex Vector</div><div class="v {s_col}">{s_txt}</div><div class="sub">Flux: {last['apex_flux']:.2f}</div></div>""", unsafe_allow_html=True)
-    c2.markdown(f"""<div class="titan-card {accent}"><div class="k">Apex Master Trend</div><div class="v {master_col}">{master_trend}</div><div class="sub">Baseline: {last['baseline']:.2f}</div></div>""", unsafe_allow_html=True)
-    c3.markdown(f"""<div class="titan-card"><div class="k">Matrix</div><div class="v {mat_col}">{mat_txt}</div><div class="sub">Score: {int(mat_score)}</div></div>""", unsafe_allow_html=True)
+    c1.markdown(f"""<div class="titan-card {accent}"><div class="k">Apex Vector State</div><div class="v {s_col}">{s_txt}</div><div class="sub">Flux: {last['flux']:.2f}</div></div>""", unsafe_allow_html=True)
+    c2.markdown(f"""<div class="titan-card {accent}"><div class="k">Apex Efficiency</div><div class="v">{last['efficiency']*100:.0f}%</div><div class="sub">Div Status: <span class="{('c-div-bull' if 'Bull' in last['div_status'] else ('c-div-bear' if 'Bear' in last['div_status'] else ''))}">{last['div_status']}</span></div></div>""", unsafe_allow_html=True)
+    c3.markdown(f"""<div class="titan-card"><div class="k">Master Trend</div><div class="v {master_col}">{master_trend}</div><div class="sub">Baseline: {last['baseline']:.2f}</div></div>""", unsafe_allow_html=True)
     c4.markdown(f"""<div class="titan-card"><div class="k">Quantum</div><div class="v">{last['rqzo']:.2f}</div><div class="sub">Entropy: {last['entropy']:.2f}</div></div>""", unsafe_allow_html=True)
 
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"
-    ))
+    # 2. Dual-Pane Chart (Price + Vector)
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
-    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["cloud_u"], line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["cloud_l"], fill="tonexty",
-        fillcolor="rgba(0, 230, 118, 0.12)" if last["apex_trend"] == 1 else "rgba(255, 23, 68, 0.12)",
-        line=dict(width=0), name="Trend Cloud"
-    ))
-    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["baseline"], line=dict(color="gray", width=1, dash="dot"), name="Baseline"))
+    # -- Pane 1: Price & Master Trend --
+    fig.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["cloud_u"], line=dict(width=0), showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["cloud_l"], fill="tonexty", 
+                             fillcolor="rgba(0, 230, 118, 0.1)" if last["apex_trend"]==1 else "rgba(255, 23, 68, 0.1)", 
+                             line=dict(width=0), name="Cloud"), row=1, col=1)
+    
+    # -- Pane 2: Apex Vector Flux --
+    # Vector Colors
+    colors = []
+    for s in df["apex_state"]:
+        if s == 2: colors.append("#00E676")   # Bull
+        elif s == -2: colors.append("#FF1744") # Bear
+        elif s == 0: colors.append("#546E7A")  # Resist
+        else: colors.append("#FFD600")         # Heat
+    
+    fig.add_trace(go.Bar(x=df["timestamp"], y=df["flux"], marker_color=colors, name="Flux Vector"), row=2, col=1)
+    
+    # Threshold Lines
+    th_s = cfg["eff_super"] * cfg["strictness"]
+    fig.add_hline(y=th_s, line_dash="dot", line_color="#00E676", row=2, col=1, opacity=0.5)
+    fig.add_hline(y=-th_s, line_dash="dot", line_color="#FF1744", row=2, col=1, opacity=0.5)
 
-    buys = df[df["sig_apex_buy"]]
-    sells = df[df["sig_apex_sell"]]
-    fig.add_trace(go.Scatter(
-        x=buys["timestamp"], y=buys["low"] * 0.999, mode="markers+text",
-        text="BUY", textposition="bottom center",
-        marker=dict(symbol="triangle-up", size=12, color="#00E676"),
-        name="Apex Buy"
-    ))
-    fig.add_trace(go.Scatter(
-        x=sells["timestamp"], y=sells["high"] * 1.001, mode="markers+text",
-        text="SELL", textposition="top center",
-        marker=dict(symbol="triangle-down", size=12, color="#FF1744"),
-        name="Apex Sell"
-    ))
+    # Divergence Markers
+    bull_reg = df[df["div_bull_reg"]]
+    bear_reg = df[df["div_bear_reg"]]
+    fig.add_trace(go.Scatter(x=bull_reg["timestamp"], y=bull_reg["flux"], mode="markers", marker=dict(symbol="circle", size=8, color="#00B0FF"), name="Bull Div"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=bear_reg["timestamp"], y=bear_reg["flux"], mode="markers", marker=dict(symbol="circle", size=8, color="#FF4081"), name="Bear Div"), row=2, col=1)
 
-    fig.update_layout(
-        height=620,
-        template="plotly_dark",
-        margin=dict(l=0, r=0, t=10, b=0),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        xaxis=dict(rangeslider=dict(visible=False)),
-    )
+    fig.update_layout(height=700, template="plotly_dark", margin=dict(l=0,r=0,t=10,b=0), 
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", 
+                      hovermode="x unified", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # X-Factor: Signal Timeline
+    # 3. Signal Event Log
     st.markdown("#### 🧾 Signal Timeline")
     events = []
-    for _, r in df.tail(220).iterrows():
-        if r.get("sig_apex_buy", False):
-            events.append((r["timestamp"], "Apex BUY", f"Flux {r['apex_flux']:.2f} • rqzo {r['rqzo']:.2f}"))
-        if r.get("sig_apex_sell", False):
-            events.append((r["timestamp"], "Apex SELL", f"Flux {r['apex_flux']:.2f} • rqzo {r['rqzo']:.2f}"))
-        if r.get("sig_buy", False):
-            events.append((r["timestamp"], "Dark BUY", f"Chop {r['chop_idx']:.1f}"))
-        if r.get("sig_sell", False):
-            events.append((r["timestamp"], "Dark SELL", f"Chop {r['chop_idx']:.1f}"))
-    events = sorted(events, key=lambda x: x[0], reverse=True)[:14]
-
+    for _, r in df.tail(300).iterrows():
+        if r["div_bull_reg"]: events.append((r["timestamp"], "Apex Bull Div", f"Flux {r['flux']:.2f}"))
+        if r["div_bear_reg"]: events.append((r["timestamp"], "Apex Bear Div", f"Flux {r['flux']:.2f}"))
+        if r["sig_apex_buy"]: events.append((r["timestamp"], "Master BUY", f"Baseline {r['baseline']:.2f}"))
+        if r["sig_apex_sell"]: events.append((r["timestamp"], "Master SELL", f"Baseline {r['baseline']:.2f}"))
+    
     if events:
-        ev_df = pd.DataFrame(events, columns=["Time", "Event", "Context"])
-        st.dataframe(ev_df, use_container_width=True, height=280)
-    else:
-        st.caption("No recent signals in the last window.")
+        ev_df = pd.DataFrame(events, columns=["Time", "Event", "Context"]).sort_values("Time", ascending=False).head(10)
+        st.dataframe(ev_df, use_container_width=True, hide_index=True)
 
-# --- TAB 2
 with t2:
+    # Liquidity / SMC View
     fig_smc = go.Figure()
-    fig_smc.add_trace(go.Candlestick(
-        x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"
-    ))
-
-    bull_fvg = df[df["fvg_bull"]]
-    bear_fvg = df[df["fvg_bear"]]
-    fig_smc.add_trace(go.Scatter(
-        x=bull_fvg["timestamp"], y=bull_fvg["low"], mode="markers",
-        marker=dict(symbol="square", color="rgba(0,230,118,0.35)", size=8),
-        name="Bull FVG"
-    ))
-    fig_smc.add_trace(go.Scatter(
-        x=bear_fvg["timestamp"], y=bear_fvg["high"], mode="markers",
-        marker=dict(symbol="square", color="rgba(255,23,68,0.35)", size=8),
-        name="Bear FVG"
-    ))
-
-    p_highs = df[df["ph"]]
-    p_lows = df[df["pl"]]
-    fig_smc.add_trace(go.Scatter(x=p_highs["timestamp"], y=p_highs["high"], mode="markers",
-                                 marker=dict(symbol="circle-open", color="#FF1744", size=7), name="Supply Liq"))
-    fig_smc.add_trace(go.Scatter(x=p_lows["timestamp"], y=p_lows["low"], mode="markers",
-                                 marker=dict(symbol="circle-open", color="#00E676", size=7), name="Demand Liq"))
-
-    fig_smc.update_layout(
-        height=620,
-        template="plotly_dark",
-        title="SMC: FVGs & Pivot Liquidity",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        hovermode="x unified",
-        xaxis=dict(rangeslider=dict(visible=False)),
-        margin=dict(l=0, r=0, t=50, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
+    fig_smc.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"]))
+    # FVGs
+    bf = df[df["fvg_bull"]]
+    brf = df[df["fvg_bear"]]
+    fig_smc.add_trace(go.Scatter(x=bf["timestamp"], y=bf["low"], mode="markers", marker=dict(symbol="square", color="rgba(0,230,118,0.5)", size=6), name="Bull FVG"))
+    fig_smc.add_trace(go.Scatter(x=brf["timestamp"], y=brf["high"], mode="markers", marker=dict(symbol="square", color="rgba(255,23,68,0.5)", size=6), name="Bear FVG"))
+    
+    fig_smc.update_layout(height=600, template="plotly_dark", margin=dict(t=30,b=0,l=0,r=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig_smc, use_container_width=True)
 
-# --- TAB 3
 with t3:
-    fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06)
+    # Matrix View
+    fig2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
     fig2.add_trace(go.Scatter(x=df["timestamp"], y=df["money_flow"], fill="tozeroy", name="Money Flow"), row=1, col=1)
     fig2.add_hline(y=0, line_dash="dot", row=1, col=1)
     fig2.add_trace(go.Scatter(x=df["timestamp"], y=df["hyper_wave"], name="Hyper Wave"), row=2, col=1)
-    fig2.update_layout(
-        height=620,
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        hovermode="x unified",
-        margin=dict(l=0, r=0, t=10, b=0),
-        xaxis=dict(rangeslider=dict(visible=False)),
-    )
+    fig2.update_layout(height=600, template="plotly_dark", margin=dict(t=10,b=0,l=0,r=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig2, use_container_width=True)
 
-# --- TAB 4
 with t4:
+    # Quantum View
     fig3 = go.Figure()
     fig3.add_trace(go.Scatter(x=df["timestamp"], y=df["rqzo_u"], line=dict(width=0), showlegend=False))
-    fig3.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["rqzo_l"], fill="tonexty",
-        fillcolor="rgba(179, 136, 255, 0.16)", line=dict(width=0), name="Vol Bands"
-    ))
-    fig3.add_trace(go.Scatter(x=df["timestamp"], y=df["rqzo"], name="RQZO"))
-
-    chaos = df[df["entropy"] > 0.8]
-    fig3.add_trace(go.Scatter(x=chaos["timestamp"], y=chaos["rqzo"], mode="markers", name="Chaos Zone"))
-
-    fig3.update_layout(
-        height=560,
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        hovermode="x unified",
-        margin=dict(l=0, r=0, t=10, b=0),
-        xaxis=dict(rangeslider=dict(visible=False)),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
+    fig3.add_trace(go.Scatter(x=df["timestamp"], y=df["rqzo_l"], fill="tonexty", fillcolor="rgba(179, 136, 255, 0.16)", line=dict(width=0), name="Vol Bands"))
+    fig3.add_trace(go.Scatter(x=df["timestamp"], y=df["rqzo"], name="RQZO", line=dict(color="#B388FF")))
+    fig3.update_layout(height=600, template="plotly_dark", margin=dict(t=10,b=0,l=0,r=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig3, use_container_width=True)
 
-# --- TAB 5
 with t5:
     st.markdown("#### 🤖 AI Analyst")
-    st.caption("Generates a compact trade read: **BIAS / SETUP / RISK / TACTIC**")
-
-    try:
-        ai_key = st.secrets.get("OPENAI_API_KEY", "")
-    except Exception:
-        ai_key = ""
-
-    with st.expander("🔐 API Key", expanded=False):
+    ai_key = st.secrets.get("OPENAI_API_KEY", "")
+    with st.expander("API Key"):
         user_key = st.text_input("OpenAI Key", value=ai_key, type="password")
-        st.caption("Tip: Put it in Streamlit secrets for cleaner UX.")
-
-    summ = f"""
-Sym: {cfg['symbol']}
-Apex Vector: {s_txt} (Flux {last['apex_flux']:.2f})
-Master Trend: {master_trend} (Baseline {last['baseline']:.2f})
-Matrix: {mat_txt} (Score {mat_score})
-RQZO: {last['rqzo']:.2f}
-Entropy: {last['entropy']:.2f}
-SMC: FVG Bull {bool(last['fvg_bull'])}, FVG Bear {bool(last['fvg_bear'])}
-"""
-
-    st.text_area("Context sent to model", value=summ.strip(), height=160)
-
-    if st.button("Generate Quant Report"):
+    
+    prompt_txt = f"""
+    Symbol: {cfg['symbol']}
+    Apex State: {s_txt} (Flux {last['flux']:.2f})
+    Divergence: {last['div_status']}
+    Master Trend: {master_trend}
+    RQZO: {last['rqzo']:.2f} / Entropy: {last['entropy']:.2f}
+    """
+    st.text_area("Data Context", prompt_txt, height=140)
+    
+    if st.button("Generate Strategy"):
         if not user_key:
-            st.error("No API key provided.")
+            st.error("Missing Key")
         else:
-            with st.spinner("Synthesizing…"):
-                client = OpenAI(api_key=user_key)
-                resp = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{
-                        "role": "user",
-                        "content": f"Analyze this quant data for a crypto trade:\n{summ}\nOutput: BIAS, SETUP, RISK, TACTIC. <50 words."
-                    }],
-                )
-            st.markdown(f"<div class='ai-box'>{resp.choices[0].message.content}</div>", unsafe_allow_html=True)
+            with st.spinner("Analyzing Physics..."):
+                try:
+                    client = OpenAI(api_key=user_key)
+                    resp = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[{"role":"user", "content":f"Act as a Quant Trader. Analyze:\n{prompt_txt}\nProvide concise: BIAS, SETUP, RISK, TACTIC."}]
+                    )
+                    st.markdown(f"<div class='ai-box'>{resp.choices[0].message.content}</div>", unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(str(e))
