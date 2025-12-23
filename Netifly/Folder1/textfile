@@ -1,0 +1,1780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Obsidian Quick Capture Pro (Profiles • Templates • Encrypted)</title>
+  <meta name="theme-color" content="#0b0c10" />
+
+  <style>
+    :root{
+      --bg:#0b0c10;
+      --panel:#12141a;
+      --panel2:#0f1117;
+      --border:#242a33;
+      --text:#e7eaf0;
+      --muted:#9aa3b2;
+      --accent:#7c4dff;
+      --accent2:#00d4ff;
+      --good:#00ffbb;
+      --bad:#ff3355;
+      --warn:#ffcc00;
+
+      --r:14px;
+      --pad:14px;
+      --shadow: 0 10px 25px rgba(0,0,0,.45);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); }
+    a{ color:var(--accent2); text-decoration:none; }
+    .wrap{ max-width: 1100px; margin: 0 auto; padding: 18px 14px 40px; }
+    .topbar{
+      display:flex; align-items:center; justify-content:space-between;
+      gap:12px; margin-bottom: 14px;
+    }
+    .brand{ display:flex; align-items:center; gap:10px; }
+    .logo{
+      width:40px; height:40px; border-radius:12px;
+      background: radial-gradient(circle at 30% 30%, rgba(124,77,255,.95), rgba(0,212,255,.25));
+      box-shadow: var(--shadow);
+      border:1px solid rgba(124,77,255,.4);
+    }
+    .title{ display:flex; flex-direction:column; line-height:1.1; }
+    .title b{ font-size: 15px; letter-spacing:.2px; }
+    .title span{ font-size: 12px; color:var(--muted); }
+    .actions{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+
+    button{
+      border:1px solid var(--border);
+      background: linear-gradient(180deg, rgba(18,20,26,.9), rgba(15,17,23,.9));
+      color:var(--text);
+      padding:10px 12px;
+      border-radius: 12px;
+      cursor:pointer;
+      transition: transform .06s ease, border-color .2s ease, background .2s ease;
+      font-weight:600;
+      box-shadow: 0 6px 14px rgba(0,0,0,.25);
+      user-select:none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button:active{ transform: translateY(1px) scale(0.99); }
+    button.primary{
+      background: linear-gradient(180deg, rgba(124,77,255,.95), rgba(124,77,255,.65));
+      border-color: rgba(124,77,255,.55);
+    }
+    button.ghost{ background: transparent; box-shadow:none; }
+    button.bad{ border-color: rgba(255,51,85,.5); }
+    button.good{ border-color: rgba(0,255,187,.4); }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1.4fr .6fr;
+      gap: 12px;
+    }
+    @media (max-width: 900px){
+      .grid{ grid-template-columns: 1fr; }
+    }
+
+    .card{
+      background: linear-gradient(180deg, rgba(18,20,26,.92), rgba(15,17,23,.92));
+      border:1px solid var(--border);
+      border-radius: var(--r);
+      padding: var(--pad);
+      box-shadow: var(--shadow);
+    }
+    .card h3{
+      margin: 0 0 10px;
+      font-size: 13px;
+      letter-spacing:.18px;
+      color: #cfd6e6;
+      text-transform: uppercase;
+      display:flex; align-items:center; justify-content:space-between;
+      gap:8px;
+    }
+    .pill{
+      font-family:var(--mono);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border:1px solid rgba(124,77,255,.35);
+      color: rgba(231,234,240,.9);
+      background: rgba(124,77,255,.12);
+      white-space:nowrap;
+    }
+
+    label{
+      font-size:12px;
+      color: var(--muted);
+      display:block;
+      margin: 10px 0 6px;
+    }
+    input, textarea, select{
+      width:100%;
+      border-radius: 12px;
+      border:1px solid var(--border);
+      background: rgba(8,10,14,.55);
+      color: var(--text);
+      padding: 11px 12px;
+      outline:none;
+      font-size: 15px;
+    }
+    textarea{
+      min-height: 220px;
+      resize: vertical;
+      font-family: var(--sans);
+      line-height: 1.35;
+    }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; }
+    .row > *{ flex:1 1 220px; }
+    .hint{ font-size: 12px; color: var(--muted); margin-top: 6px; line-height:1.35; }
+    .small{ font-size: 11px; color: var(--muted); }
+    .k{ font-family: var(--mono); font-size: 11px; color: rgba(231,234,240,.9); }
+    .sep{ height:1px; background: var(--border); margin: 12px 0; }
+
+    .status{
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,.18);
+      font-size: 13px;
+      color: rgba(231,234,240,.92);
+      line-height:1.35;
+    }
+    .status.good{ border-color: rgba(0,255,187,.35); }
+    .status.bad{ border-color: rgba(255,51,85,.35); }
+    .status.warn{ border-color: rgba(255,204,0,.35); }
+
+    .history{
+      display:flex; flex-direction:column; gap:8px;
+      max-height: 420px;
+      overflow:auto;
+      padding-right: 4px;
+    }
+    .hitem{
+      border:1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(0,0,0,.16);
+      cursor:pointer;
+    }
+    .hitem:hover{ border-color: rgba(124,77,255,.35); }
+    .hhead{ display:flex; justify-content:space-between; gap:10px; }
+    .hhead b{ font-size: 13px; }
+    .hmeta{ font-size: 11px; color: var(--muted); font-family: var(--mono); }
+    .hsnip{ font-size: 12px; color: rgba(231,234,240,.85); margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+    .chips{ display:flex; gap:8px; flex-wrap:wrap; }
+    .chip{
+      padding:8px 10px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background: rgba(0,0,0,.15);
+      cursor:pointer;
+      font-size: 13px;
+      user-select:none;
+    }
+    .chip.active{
+      border-color: rgba(0,212,255,.55);
+      background: rgba(0,212,255,.10);
+    }
+
+    .modalBackdrop{
+      position:fixed; inset:0;
+      background: rgba(0,0,0,.55);
+      display:none; align-items:center; justify-content:center;
+      padding: 18px;
+      z-index: 999;
+    }
+    .modal{
+      max-width: 860px;
+      width: 100%;
+      background: linear-gradient(180deg, rgba(18,20,26,.98), rgba(15,17,23,.98));
+      border:1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      max-height: 88vh;
+      overflow:auto;
+    }
+    .modal h4{ margin: 0 0 10px; font-size: 14px; }
+    .footer{
+      margin-top: 14px;
+      display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .monoarea{ font-family: var(--mono); min-height: 220px; }
+    .btnRow{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo"></div>
+        <div class="title">
+          <b>Obsidian Quick Capture Pro</b>
+          <span>Profiles • Template Editor • Encrypted storage • obsidian://</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="ghost" id="btnUnlock">Unlock</button>
+        <button class="ghost" id="btnProfiles">Profiles</button>
+        <button class="ghost" id="btnTemplates">Templates</button>
+        <button class="ghost bad" id="btnReset">Reset</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- MAIN CAPTURE -->
+      <div class="card">
+        <h3>
+          Capture
+          <span class="pill" id="pillProfile">PROFILE: —</span>
+        </h3>
+
+        <div class="row">
+          <div>
+            <label for="profileSelect">Profile (one-tap)</label>
+            <select id="profileSelect"></select>
+            <div class="hint">Switching profile updates vault/folders/templates defaults instantly.</div>
+          </div>
+          <div>
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="new">New note</option>
+              <option value="daily">Daily note (open today)</option>
+            </select>
+            <div class="hint">Daily note uses your profile’s Daily settings. Browser cannot append to an existing file without plugins.</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="vault">Vault</label>
+            <input id="vault" placeholder="Exact vault name (required)" />
+          </div>
+          <div>
+            <label for="defaultFolder">Default folder</label>
+            <input id="defaultFolder" placeholder="e.g., Inbox" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="folderOverride">Folder override (this capture only)</label>
+            <input id="folderOverride" placeholder="e.g., Projects/Alpha" />
+            <div class="hint">Press <span class="k">Esc</span> to clear this field.</div>
+          </div>
+          <div>
+            <label for="template">Template</label>
+            <select id="template"></select>
+            <div class="hint">Templates are global (shared) by default. You can also clone per profile via the editor.</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="dateFormat">Title auto generation</label>
+            <select id="dateFormat">
+              <option value="timestamp">Timestamp if blank (YYYY-MM-DD HH-mm-ss)</option>
+              <option value="date">Date if blank (YYYY-MM-DD)</option>
+              <option value="datetime">Datetime if blank (YYYY-MM-DD HH:mm)</option>
+              <option value="none">Require title</option>
+            </select>
+          </div>
+          <div>
+            <label>Quick Type</label>
+            <div class="chips" id="quickTypes"></div>
+          </div>
+        </div>
+
+        <div class="sep"></div>
+
+        <div class="row">
+          <div>
+            <label for="title">Title</label>
+            <input id="title" placeholder="Optional (depends on auto setting)" />
+          </div>
+          <div>
+            <label for="tags">Tags (space/comma separated)</label>
+            <input id="tags" placeholder="#idea research meeting" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="project">Project</label>
+            <input id="project" placeholder="Optional" />
+          </div>
+          <div>
+            <label for="people">People</label>
+            <input id="people" placeholder="Optional: Alice, Bob" />
+          </div>
+        </div>
+
+        <label for="content">Content</label>
+        <textarea id="content" placeholder="Start typing…"></textarea>
+
+        <div class="row">
+          <div>
+            <label for="links">Links</label>
+            <input id="links" placeholder="Optional: URLs separated by spaces/commas" />
+          </div>
+          <div>
+            <label for="attachments">Attachments reminder</label>
+            <input id="attachments" placeholder="Optional: photo.jpg receipt.png" />
+          </div>
+        </div>
+
+        <div class="sep"></div>
+
+        <div class="row">
+          <button class="primary good" id="btnSend" title="Ctrl/⌘ + Enter">Send to Obsidian</button>
+          <button class="ghost" id="btnPreview">Preview</button>
+          <button class="ghost" id="btnClear">Clear fields</button>
+        </div>
+
+        <div class="status warn" id="status">
+          Locked: Click <span class="k">Unlock</span> to enable encrypted storage (recommended). Without unlocking, nothing is saved.
+        </div>
+
+        <div class="footer">
+          <div>Shortcuts: <span class="k">Ctrl/⌘ + Enter</span> send • <span class="k">Esc</span> clear override folder</div>
+          <div class="right"><span id="lockState" class="small"></span></div>
+        </div>
+      </div>
+
+      <!-- SIDE: HISTORY -->
+      <div class="card">
+        <h3>
+          History
+          <span class="pill" id="pillCount">0</span>
+        </h3>
+
+        <div class="btnRow">
+          <button class="ghost" id="btnExport">Export (encrypted blob)</button>
+          <button class="ghost" id="btnImport">Import (encrypted blob)</button>
+        </div>
+
+        <div class="sep"></div>
+        <div class="history" id="history"></div>
+        <div class="sep"></div>
+        <div class="hint">
+          History is encrypted at rest. Tapping an item loads it back into the form.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- UNLOCK MODAL -->
+  <div class="modalBackdrop" id="unlockBackdrop">
+    <div class="modal">
+      <h4>Unlock / Set Password (Encryption at rest)</h4>
+      <div class="hint">
+        This encrypts profiles, templates, settings, and history using AES-GCM. If you lose the password, data cannot be recovered.
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="pw">Password</label>
+          <input id="pw" type="password" placeholder="Enter password" />
+        </div>
+        <div>
+          <label for="pw2">Confirm (only for first-time set)</label>
+          <input id="pw2" type="password" placeholder="Re-enter to set new password" />
+        </div>
+      </div>
+
+      <div class="btnRow">
+        <button class="primary" id="btnUnlockNow">Unlock</button>
+        <button class="ghost" id="btnLock">Lock</button>
+        <button class="ghost bad" id="btnWipeEncrypted">Wipe encrypted data</button>
+        <button class="ghost" id="btnCloseUnlock">Close</button>
+      </div>
+
+      <div class="status warn" id="unlockStatus">
+        If this is your first time, enter password + confirm, then Unlock.
+      </div>
+    </div>
+  </div>
+
+  <!-- PROFILES MODAL -->
+  <div class="modalBackdrop" id="profilesBackdrop">
+    <div class="modal">
+      <h4>Profiles (Work / Personal / etc.)</h4>
+      <div class="hint">Profiles are encrypted at rest. Switch instantly from the main dropdown.</div>
+
+      <div class="row">
+        <div>
+          <label for="pList">Select profile</label>
+          <select id="pList"></select>
+        </div>
+        <div>
+          <label for="pName">Profile name</label>
+          <input id="pName" placeholder="e.g., Work" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="pVault">Vault</label>
+          <input id="pVault" placeholder="Exact vault name" />
+        </div>
+        <div>
+          <label for="pDefaultFolder">Default folder</label>
+          <input id="pDefaultFolder" placeholder="e.g., Inbox" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="pDailyFolder">Daily folder</label>
+          <input id="pDailyFolder" placeholder="e.g., Daily" />
+        </div>
+        <div>
+          <label for="pDailyPattern">Daily pattern</label>
+          <select id="pDailyPattern">
+            <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+            <option value="YYYY/MM/DD">YYYY/MM/DD</option>
+            <option value="YYYY-[W]WW">YYYY-W## (ISO week)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="pFrontmatter">Include YAML frontmatter</label>
+          <select id="pFrontmatter">
+            <option value="on" selected>On</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+        <div>
+          <label for="pHistoryLimit">History limit</label>
+          <select id="pHistoryLimit">
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="pTypeKey">Frontmatter “type” key</label>
+          <input id="pTypeKey" placeholder="type" />
+        </div>
+        <div>
+          <label for="pCreatedKey">Frontmatter “created” key</label>
+          <input id="pCreatedKey" placeholder="created" />
+        </div>
+      </div>
+
+      <div class="btnRow">
+        <button class="primary" id="btnProfileSave">Save profile</button>
+        <button class="ghost" id="btnProfileNew">New profile</button>
+        <button class="ghost" id="btnProfileDuplicate">Duplicate</button>
+        <button class="ghost bad" id="btnProfileDelete">Delete</button>
+        <button class="ghost" id="btnProfilesClose">Close</button>
+      </div>
+
+      <div class="status warn" id="profilesStatus">
+        Tip: Create “Work” and “Personal” then use the dropdown on the main screen.
+      </div>
+    </div>
+  </div>
+
+  <!-- TEMPLATES MODAL -->
+  <div class="modalBackdrop" id="templatesBackdrop">
+    <div class="modal">
+      <h4>Template Editor (Create • Edit • Delete)</h4>
+      <div class="hint">
+        Tokens available: <span class="k">{{content}}</span>, <span class="k">{{tags}}</span>, <span class="k">{{project}}</span>, <span class="k">{{people}}</span>, <span class="k">{{people_list}}</span>, <span class="k">{{links}}</span>, <span class="k">{{created}}</span>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="tList">Select template</label>
+          <select id="tList"></select>
+        </div>
+        <div>
+          <label for="tId">Template ID (unique)</label>
+          <input id="tId" placeholder="e.g., meeting" />
+          <div class="hint">IDs are used internally (must be unique). Use lowercase/underscores.</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="tName">Name</label>
+          <input id="tName" placeholder="e.g., Meeting" />
+        </div>
+        <div>
+          <label for="tFolder">Default folder (optional)</label>
+          <input id="tFolder" placeholder="e.g., Inbox/Meetings" />
+        </div>
+      </div>
+
+      <label for="tBody">Body (Markdown)</label>
+      <textarea id="tBody" class="monoarea" placeholder="Template markdown..."></textarea>
+
+      <div class="btnRow">
+        <button class="primary" id="btnTemplateSave">Save</button>
+        <button class="ghost" id="btnTemplateNew">New</button>
+        <button class="ghost" id="btnTemplateDuplicate">Duplicate</button>
+        <button class="ghost bad" id="btnTemplateDelete">Delete</button>
+        <button class="ghost" id="btnTemplatesClose">Close</button>
+      </div>
+
+      <div class="status warn" id="templatesStatus">
+        Tip: Duplicate a template, then adjust folder + body.
+      </div>
+    </div>
+  </div>
+
+  <!-- PREVIEW MODAL -->
+  <div class="modalBackdrop" id="previewBackdrop">
+    <div class="modal">
+      <h4>Preview (generated Markdown)</h4>
+      <label for="previewText" class="small">Exactly what will be sent to Obsidian.</label>
+      <textarea id="previewText" class="monoarea"></textarea>
+      <div class="btnRow">
+        <button class="primary good" id="btnSendFromPreview">Send now</button>
+        <button class="ghost" id="btnClosePreview">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="fileInput" accept="application/json" style="display:none;" />
+
+  <script>
+    /*****************************************************************
+     * Features implemented:
+     * - Profiles (vault/folders/frontmatter keys/history limit)
+     * - Template editor UI (CRUD)
+     * - Encryption at rest (AES-GCM) for all stored data
+     * - Export/Import encrypted blob
+     *****************************************************************/
+
+    // =========================
+    // Storage schema
+    // =========================
+    const STORE_KEY = "oqcp_encrypted_store_v1"; // encrypted blob
+    const STORE_META = "oqcp_encrypted_meta_v1"; // contains salt + kdf params (not secret)
+
+    const DEFAULT_TEMPLATES = [
+      { id:"plain", name:"Plain Note", folder:"", body:"{{content}}" },
+      { id:"idea", name:"Idea", folder:"Inbox/Ideas", body:"## Idea\n{{content}}\n\n## Next actions\n- [ ] Define scope\n- [ ] First step\n" },
+      { id:"task", name:"Task", folder:"Inbox/Tasks", body:"## Task\n{{content}}\n\n- [ ] Next step\n" },
+      { id:"meeting", name:"Meeting", folder:"Inbox/Meetings", body:"## Attendees\n{{people_list}}\n\n## Agenda\n- \n\n## Notes\n{{content}}\n\n## Actions\n- [ ] \n" },
+      { id:"journal", name:"Journal", folder:"Daily", body:"## Journal\n{{content}}\n\n### Mood\n- \n\n### Wins\n- \n\n### Notes\n- \n" }
+    ];
+
+    const DEFAULT_PROFILE = (name) => ({
+      id: crypto.randomUUID(),
+      name: name,
+      vault: "",
+      defaultFolder: "Inbox",
+      dailyFolder: "Daily",
+      dailyPattern: "YYYY-MM-DD",
+      includeFrontmatter: "on",
+      typeKey: "type",
+      createdKey: "created",
+      historyLimit: 50,
+      lastTemplateId: "plain",
+      lastDateFormat: "timestamp",
+      lastType: "idea"
+    });
+
+    const QUICK_TYPES = [
+      { id:"idea", label:"Idea", tag:"#idea" },
+      { id:"task", label:"Task", tag:"#task" },
+      { id:"journal", label:"Journal", tag:"#journal" },
+      { id:"meeting", label:"Meeting", tag:"#meeting" },
+      { id:"link", label:"Link", tag:"#link" },
+      { id:"bug", label:"Bug", tag:"#bug" }
+    ];
+
+    const DEFAULT_STORE = () => ({
+      version: 1,
+      activeProfileId: null,
+      profiles: [ DEFAULT_PROFILE("Default") ],
+      templates: DEFAULT_TEMPLATES.slice(),
+      history: [] // {ts, profileId, ...fields}
+    });
+
+    // =========================
+    // DOM helper
+    // =========================
+    const $ = (id) => document.getElementById(id);
+    const el = {
+      // main
+      btnUnlock: $("btnUnlock"),
+      btnProfiles: $("btnProfiles"),
+      btnTemplates: $("btnTemplates"),
+      btnReset: $("btnReset"),
+      btnSend: $("btnSend"),
+      btnPreview: $("btnPreview"),
+      btnClear: $("btnClear"),
+      btnExport: $("btnExport"),
+      btnImport: $("btnImport"),
+
+      profileSelect: $("profileSelect"),
+      pillProfile: $("pillProfile"),
+      mode: $("mode"),
+      vault: $("vault"),
+      defaultFolder: $("defaultFolder"),
+      folderOverride: $("folderOverride"),
+      template: $("template"),
+      dateFormat: $("dateFormat"),
+      quickTypes: $("quickTypes"),
+      title: $("title"),
+      tags: $("tags"),
+      project: $("project"),
+      people: $("people"),
+      content: $("content"),
+      links: $("links"),
+      attachments: $("attachments"),
+      status: $("status"),
+      lockState: $("lockState"),
+
+      history: $("history"),
+      pillCount: $("pillCount"),
+
+      // unlock modal
+      unlockBackdrop: $("unlockBackdrop"),
+      pw: $("pw"),
+      pw2: $("pw2"),
+      btnUnlockNow: $("btnUnlockNow"),
+      btnLock: $("btnLock"),
+      btnWipeEncrypted: $("btnWipeEncrypted"),
+      btnCloseUnlock: $("btnCloseUnlock"),
+      unlockStatus: $("unlockStatus"),
+
+      // profiles modal
+      profilesBackdrop: $("profilesBackdrop"),
+      pList: $("pList"),
+      pName: $("pName"),
+      pVault: $("pVault"),
+      pDefaultFolder: $("pDefaultFolder"),
+      pDailyFolder: $("pDailyFolder"),
+      pDailyPattern: $("pDailyPattern"),
+      pFrontmatter: $("pFrontmatter"),
+      pHistoryLimit: $("pHistoryLimit"),
+      pTypeKey: $("pTypeKey"),
+      pCreatedKey: $("pCreatedKey"),
+      btnProfileSave: $("btnProfileSave"),
+      btnProfileNew: $("btnProfileNew"),
+      btnProfileDuplicate: $("btnProfileDuplicate"),
+      btnProfileDelete: $("btnProfileDelete"),
+      btnProfilesClose: $("btnProfilesClose"),
+      profilesStatus: $("profilesStatus"),
+
+      // templates modal
+      templatesBackdrop: $("templatesBackdrop"),
+      tList: $("tList"),
+      tId: $("tId"),
+      tName: $("tName"),
+      tFolder: $("tFolder"),
+      tBody: $("tBody"),
+      btnTemplateSave: $("btnTemplateSave"),
+      btnTemplateNew: $("btnTemplateNew"),
+      btnTemplateDuplicate: $("btnTemplateDuplicate"),
+      btnTemplateDelete: $("btnTemplateDelete"),
+      btnTemplatesClose: $("btnTemplatesClose"),
+      templatesStatus: $("templatesStatus"),
+
+      // preview modal
+      previewBackdrop: $("previewBackdrop"),
+      previewText: $("previewText"),
+      btnSendFromPreview: $("btnSendFromPreview"),
+      btnClosePreview: $("btnClosePreview"),
+
+      fileInput: $("fileInput")
+    };
+
+    // =========================
+    // Runtime state
+    // =========================
+    const state = {
+      unlocked: false,
+      store: null,   // decrypted store object
+      key: null      // CryptoKey derived from password
+    };
+
+    // =========================
+    // Utility (deterministic)
+    // =========================
+    function pad2(n){ return String(n).padStart(2,"0"); }
+    function nowISO(){
+      const d = new Date();
+      return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    }
+    function todayYMD(){
+      const d = new Date();
+      return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+    }
+    function nowTimestampSafe(){
+      const d = new Date();
+      return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())} ${pad2(d.getHours())}-${pad2(d.getMinutes())}-${pad2(d.getSeconds())}`;
+    }
+    function nowDatetime(){
+      const d = new Date();
+      return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+    function sanitizeFilePart(s){
+      return String(s||"")
+        .replace(/[\\/:*?"<>|]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+    function normalizeFolder(folder){
+      return String(folder||"")
+        .replace(/\\/g, "/")
+        .replace(/\/+/g, "/")
+        .replace(/^\/|\/$/g, "")
+        .trim();
+    }
+    function splitTokens(s){
+      if (!s) return [];
+      return String(s).trim().split(/[\s,]+/).filter(Boolean);
+    }
+    function normalizeTags(s){
+      const raw = splitTokens(s);
+      const out = [];
+      const seen = new Set();
+      for (let t of raw){
+        t = t.trim();
+        if (!t) continue;
+        if (!t.startsWith("#")) t = "#" + t;
+        t = t.toLowerCase().replace(/[^#a-z0-9/_-]/g, "");
+        if (t === "#") continue;
+        if (!seen.has(t)){ seen.add(t); out.push(t); }
+      }
+      return out;
+    }
+    function peopleList(peopleStr){
+      const p = splitTokens(String(peopleStr||"").replace(/,/g," "));
+      const out = [];
+      const seen = new Set();
+      for (const x of p){
+        const k = x.toLowerCase();
+        if (!seen.has(k)){ seen.add(k); out.push(x); }
+      }
+      return out;
+    }
+    function linksList(linksStr){
+      return splitTokens(linksStr);
+    }
+    function attachmentList(attStr){
+      return splitTokens(String(attStr||"").replace(/,/g," "));
+    }
+    function escapeYAML(s){
+      return String(s).replaceAll("\\","\\\\").replaceAll('"','\\"');
+    }
+    function listToYamlArray(items){
+      const safe = items.map(x => JSON.stringify(String(x)));
+      return `[${safe.join(", ")}]`;
+    }
+    function setStatus(msg, kind="warn"){
+      el.status.className = `status ${kind}`;
+      el.status.innerHTML = msg;
+    }
+    function setUnlockStatus(msg, kind="warn"){
+      el.unlockStatus.className = `status ${kind}`;
+      el.unlockStatus.innerHTML = msg;
+    }
+    function confirmOrReturn(message){
+      return window.confirm(message);
+    }
+
+    // =========================
+    // Encryption (AES-GCM + PBKDF2)
+    // =========================
+    const KDF = {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      iterations: 250000
+    };
+
+    function b64enc(buf){
+      const bytes = new Uint8Array(buf);
+      let s = "";
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s);
+    }
+    function b64dec(b64){
+      const s = atob(b64);
+      const bytes = new Uint8Array(s.length);
+      for (let i=0;i<s.length;i++) bytes[i] = s.charCodeAt(i);
+      return bytes.buffer;
+    }
+
+    async function deriveKeyFromPassword(password, saltBuf){
+      const enc = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw", enc.encode(password),
+        { name: "PBKDF2" }, false,
+        ["deriveKey"]
+      );
+
+      return crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt: saltBuf, iterations: KDF.iterations, hash: KDF.hash },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt","decrypt"]
+      );
+    }
+
+    async function encryptJSON(key, obj){
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const enc = new TextEncoder();
+      const plaintext = enc.encode(JSON.stringify(obj));
+      const ct = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, key, plaintext);
+      return { iv: b64enc(iv.buffer), ct: b64enc(ct) };
+    }
+
+    async function decryptJSON(key, envelope){
+      const iv = new Uint8Array(b64dec(envelope.iv));
+      const ct = b64dec(envelope.ct);
+      const pt = await crypto.subtle.decrypt({ name:"AES-GCM", iv }, key, ct);
+      const dec = new TextDecoder();
+      return JSON.parse(dec.decode(pt));
+    }
+
+    function getMeta(){
+      const raw = localStorage.getItem(STORE_META);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+
+    function setMeta(meta){
+      localStorage.setItem(STORE_META, JSON.stringify(meta));
+    }
+
+    async function initEncryptedStoreIfMissing(password){
+      // If no encrypted store exists, this is first-time setup.
+      const meta = getMeta();
+      const hasStore = !!localStorage.getItem(STORE_KEY);
+
+      if (meta && hasStore) return { created:false };
+
+      // require confirm password for first-time set
+      const pw2 = el.pw2.value;
+      if (password !== pw2){
+        return { created:false, error:"First-time setup requires matching password + confirm." };
+      }
+
+      // create meta with salt
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const metaNew = {
+        v: 1,
+        kdf: { ...KDF },
+        salt: b64enc(salt.buffer)
+      };
+      setMeta(metaNew);
+
+      // derive key + create default store
+      const key = await deriveKeyFromPassword(password, salt);
+      const store = DEFAULT_STORE();
+
+      // pick active profile
+      store.activeProfileId = store.profiles[0].id;
+
+      const env = await encryptJSON(key, store);
+      localStorage.setItem(STORE_KEY, JSON.stringify(env));
+      return { created:true };
+    }
+
+    async function unlock(password){
+      // If store not created, create it.
+      const initRes = await initEncryptedStoreIfMissing(password);
+      if (initRes.error) return { ok:false, error:initRes.error };
+
+      const meta = getMeta();
+      if (!meta) return { ok:false, error:"Missing encryption metadata. Use Wipe + set password again." };
+
+      const saltBuf = b64dec(meta.salt);
+      const key = await deriveKeyFromPassword(password, saltBuf);
+
+      const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return { ok:false, error:"Encrypted store missing. Use Wipe + set password again." };
+
+      let env;
+      try { env = JSON.parse(raw); } catch { return { ok:false, error:"Encrypted store corrupted." }; }
+
+      try {
+        const store = await decryptJSON(key, env);
+        state.unlocked = true;
+        state.key = key;
+        state.store = store;
+        return { ok:true };
+      } catch {
+        return { ok:false, error:"Wrong password or data corrupted." };
+      }
+    }
+
+    async function persistStore(){
+      if (!state.unlocked || !state.key || !state.store) return;
+      const env = await encryptJSON(state.key, state.store);
+      localStorage.setItem(STORE_KEY, JSON.stringify(env));
+    }
+
+    function lock(){
+      state.unlocked = false;
+      state.key = null;
+      state.store = null;
+      renderLocked();
+    }
+
+    function wipeEncrypted(){
+      localStorage.removeItem(STORE_META);
+      localStorage.removeItem(STORE_KEY);
+      lock();
+    }
+
+    // =========================
+    // Store helpers (require unlocked)
+    // =========================
+    function requireUnlocked(){
+      if (!state.unlocked){
+        setStatus("Locked: click <span class='k'>Unlock</span> first.", "bad");
+        return false;
+      }
+      return true;
+    }
+
+    function activeProfile(){
+      const id = state.store.activeProfileId;
+      return state.store.profiles.find(p => p.id === id) || state.store.profiles[0];
+    }
+
+    function setActiveProfile(id){
+      state.store.activeProfileId = id;
+    }
+
+    // =========================
+    // Rendering
+    // =========================
+    function renderLocked(){
+      el.lockState.textContent = state.unlocked ? "Encrypted storage: UNLOCKED" : "Encrypted storage: LOCKED";
+      el.pillProfile.textContent = "PROFILE: —";
+      el.profileSelect.innerHTML = `<option value="">(locked)</option>`;
+      el.template.innerHTML = `<option value="">(locked)</option>`;
+      el.history.innerHTML = `<div class="hint">Unlock to view history.</div>`;
+      el.pillCount.textContent = "0";
+      setStatus("Locked: Click <span class='k'>Unlock</span> to enable encrypted storage. Without unlocking, nothing is saved.", "warn");
+    }
+
+    function renderProfileSelect(){
+      const p = activeProfile();
+      el.pillProfile.textContent = `PROFILE: ${p.name || "—"}`;
+
+      el.profileSelect.innerHTML = "";
+      state.store.profiles.forEach(pr => {
+        const opt = document.createElement("option");
+        opt.value = pr.id;
+        opt.textContent = pr.name;
+        el.profileSelect.appendChild(opt);
+      });
+      el.profileSelect.value = p.id;
+    }
+
+    function applyProfileToForm(){
+      const p = activeProfile();
+
+      el.vault.value = p.vault || "";
+      el.defaultFolder.value = p.defaultFolder || "";
+      el.dateFormat.value = p.lastDateFormat || "timestamp";
+      el.mode.value = "new"; // mode is per capture, not stored; keep deterministic reset
+
+      // type chips
+      renderQuickTypes(p.lastType || "idea");
+
+      // templates dropdown selection
+      renderTemplates();
+      el.template.value = p.lastTemplateId && state.store.templates.some(t => t.id === p.lastTemplateId)
+        ? p.lastTemplateId
+        : (state.store.templates[0]?.id || "plain");
+    }
+
+    function renderTemplates(){
+      el.template.innerHTML = "";
+      state.store.templates.forEach(t => {
+        const opt = document.createElement("option");
+        opt.value = t.id;
+        opt.textContent = t.name;
+        el.template.appendChild(opt);
+      });
+    }
+
+    function renderQuickTypes(activeId){
+      el.quickTypes.innerHTML = "";
+      QUICK_TYPES.forEach(q => {
+        const div = document.createElement("div");
+        div.className = "chip" + (q.id === activeId ? " active" : "");
+        div.textContent = q.label;
+        div.onclick = () => {
+          // set active type in profile
+          const p = activeProfile();
+          p.lastType = q.id;
+
+          // add tag
+          const tags = normalizeTags(el.tags.value);
+          if (!tags.includes(q.tag.toLowerCase())) tags.push(q.tag.toLowerCase());
+          el.tags.value = tags.join(" ");
+
+          renderQuickTypes(q.id);
+          persistStore();
+          setStatus(`Type set to <span class="k">${q.label}</span>. Tag added.`, "good");
+        };
+        el.quickTypes.appendChild(div);
+      });
+    }
+
+    function renderHistory(){
+      const p = activeProfile();
+      const all = state.store.history || [];
+      const h = all.filter(x => x.profileId === p.id);
+
+      el.pillCount.textContent = String(h.length);
+      el.history.innerHTML = "";
+
+      if (h.length === 0){
+        el.history.innerHTML = `<div class="hint">No history in this profile.</div>`;
+        return;
+      }
+
+      // newest first already
+      h.slice(0, p.historyLimit).forEach((item) => {
+        const div = document.createElement("div");
+        div.className = "hitem";
+        const title = item.title || "(no title)";
+        const folder = item.folder || "";
+        const ts = item.ts || "";
+        const snip = (item.content || "").replace(/\s+/g," ").trim();
+
+        div.innerHTML = `
+          <div class="hhead">
+            <b>${escapeHTML(title)}</b>
+            <span class="hmeta">${escapeHTML((item.mode||"new").toUpperCase())}</span>
+          </div>
+          <div class="hmeta">${escapeHTML(ts)} • ${escapeHTML(folder)}</div>
+          <div class="hsnip">${escapeHTML(snip)}</div>
+        `;
+        div.onclick = () => loadHistoryItem(item);
+        el.history.appendChild(div);
+      });
+    }
+
+    function escapeHTML(s){
+      return String(s || "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    function loadHistoryItem(item){
+      el.mode.value = item.mode || "new";
+      el.vault.value = item.vault || "";
+      el.defaultFolder.value = item.defaultFolder || "";
+      el.folderOverride.value = item.folderOverride || "";
+      el.template.value = item.templateId || "plain";
+      el.dateFormat.value = item.dateFormat || "timestamp";
+
+      el.title.value = item.title || "";
+      el.tags.value = item.tags || "";
+      el.project.value = item.project || "";
+      el.people.value = item.people || "";
+      el.content.value = item.content || "";
+      el.links.value = item.links || "";
+      el.attachments.value = item.attachments || "";
+
+      // reflect active type to profile
+      const p = activeProfile();
+      p.lastType = item.type || p.lastType || "idea";
+      renderQuickTypes(p.lastType);
+      persistStore();
+
+      setStatus("Loaded history item.", "good");
+    }
+
+    // =========================
+    // Markdown generation + URI
+    // =========================
+    function buildDailyPath(profile){
+      const folder = normalizeFolder(profile.dailyFolder || "Daily");
+      const pattern = profile.dailyPattern || "YYYY-MM-DD";
+      const d = new Date();
+      const Y = d.getFullYear();
+      const M = pad2(d.getMonth()+1);
+      const D = pad2(d.getDate());
+
+      if (pattern === "YYYY-MM-DD") return `${folder}/${Y}-${M}-${D}`;
+      if (pattern === "YYYY/MM/DD") return `${folder}/${Y}/${M}/${D}`;
+      if (pattern === "YYYY-[W]WW"){
+        const date = new Date(Date.UTC(Y, d.getMonth(), d.getDate()));
+        const dayNum = date.getUTCDay() || 7;
+        date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+        const yearStart = new Date(Date.UTC(date.getUTCFullYear(),0,1));
+        const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+        const isoYear = date.getUTCFullYear();
+        return `${folder}/${isoYear}-W${pad2(weekNo)}`;
+      }
+      return `${folder}/${Y}-${M}-${D}`;
+    }
+
+    function buildTitleFromFormat(fmt){
+      if (fmt === "timestamp") return nowTimestampSafe();
+      if (fmt === "date") return todayYMD();
+      if (fmt === "datetime") return nowDatetime();
+      return "";
+    }
+
+    function mergeFolder(profileDefault, templateFolder, overrideFolder){
+      const o = normalizeFolder(overrideFolder);
+      if (o) return o;
+      const t = normalizeFolder(templateFolder);
+      if (t) return t;
+      const d = normalizeFolder(profileDefault);
+      if (d) return d;
+      return "";
+    }
+
+    function buildFilePath(folder, title){
+      const safeTitle = sanitizeFilePart(title);
+      const safeFolder = normalizeFolder(folder);
+      if (!safeTitle) return safeFolder ? `${safeFolder}/` : "";
+      return safeFolder ? `${safeFolder}/${safeTitle}` : safeTitle;
+    }
+
+    function generateMarkdown(profile){
+      const mode = el.mode.value;
+      const templateId = el.template.value;
+      const template = state.store.templates.find(t => t.id === templateId) || state.store.templates[0];
+
+      const folder = (mode === "daily")
+        ? ""
+        : mergeFolder(profile.defaultFolder, template.folder, el.folderOverride.value);
+
+      const rawTitle = el.title.value;
+      let title = sanitizeFilePart(rawTitle);
+
+      const dateFormat = el.dateFormat.value;
+      if (!title){
+        if (dateFormat === "none"){
+          return { ok:false, error:"Title required (Title auto generation set to 'Require title')." };
+        }
+        title = buildTitleFromFormat(dateFormat);
+      }
+
+      const tags = normalizeTags(el.tags.value);
+      const project = (el.project.value||"").trim();
+      const people = (el.people.value||"").trim();
+      const peopleArr = peopleList(people);
+      const linksArr = linksList(el.links.value);
+      const attachArr = attachmentList(el.attachments.value);
+      const content = el.content.value || "";
+
+      let frontmatter = "";
+      if (profile.includeFrontmatter === "on"){
+        const typeKey = (profile.typeKey || "type").trim() || "type";
+        const createdKey = (profile.createdKey || "created").trim() || "created";
+        const fm = [];
+        fm.push("---");
+        fm.push(`${createdKey}: "${nowISO()}"`);
+        fm.push(`${typeKey}: "${profile.lastType || "idea"}"`);
+        if (tags.length) fm.push(`tags: ${listToYamlArray(tags.map(x => x.replace(/^#/,"")))}`);
+        if (project) fm.push(`project: "${escapeYAML(project)}"`);
+        if (peopleArr.length) fm.push(`people: ${listToYamlArray(peopleArr)}`);
+        fm.push("---");
+        frontmatter = fm.join("\n") + "\n\n";
+      }
+
+      const peopleListText = peopleArr.length ? peopleArr.map(p => `- ${p}`).join("\n") : "- ";
+
+      const replaced = (template.body || "{{content}}")
+        .replaceAll("{{content}}", content.trim())
+        .replaceAll("{{tags}}", tags.join(" "))
+        .replaceAll("{{project}}", project)
+        .replaceAll("{{people}}", people)
+        .replaceAll("{{people_list}}", peopleListText)
+        .replaceAll("{{links}}", linksArr.join("\n"))
+        .replaceAll("{{created}}", nowISO())
+        .trim();
+
+      let linksBlock = "";
+      if (linksArr.length){
+        linksBlock = "## Links\n" + linksArr.map(u => `- ${u}`).join("\n") + "\n\n";
+      }
+
+      let attachBlock = "";
+      if (attachArr.length){
+        attachBlock = "## Attachments\n" + attachArr.map(a => `- ![[${a}]]`).join("\n") +
+          "\n\n> Reminder: add the actual files inside Obsidian.\n\n";
+      }
+
+      const markdown = (frontmatter + (replaced ? replaced + "\n\n" : "") + linksBlock + attachBlock).trim() + "\n";
+
+      let filePath = "";
+      if (mode === "daily"){
+        filePath = buildDailyPath(profile);
+      } else {
+        filePath = buildFilePath(folder, title);
+        if (!filePath || filePath.endsWith("/")) return { ok:false, error:"File path could not be constructed." };
+      }
+
+      const uri =
+        `obsidian://new` +
+        `?vault=${encodeURIComponent(profile.vault || el.vault.value.trim())}` +
+        `&file=${encodeURIComponent(filePath)}` +
+        `&content=${encodeURIComponent(markdown)}`;
+
+      return {
+        ok:true,
+        uri,
+        filePath,
+        folder,
+        templateId: template.id,
+        mode,
+        title,
+        markdown
+      };
+    }
+
+    // =========================
+    // Actions
+    // =========================
+    async function pushHistory(rec){
+      const p = activeProfile();
+      state.store.history = state.store.history || [];
+      // newest first:
+      state.store.history.unshift(rec);
+
+      // keep bounded per profile (hard trim)
+      const limit = Number(p.historyLimit || 50);
+      const filtered = state.store.history.filter(x => x.profileId === p.id);
+      if (filtered.length > limit){
+        // remove overflow from end, but only for this profile
+        const keepIds = new Set(filtered.slice(0, limit).map(x => x.ts + "|" + (x.title||"") + "|" + (x.profileId||"")));
+        state.store.history = state.store.history.filter(x => x.profileId !== p.id || keepIds.has(x.ts + "|" + (x.title||"") + "|" + (x.profileId||"")));
+      }
+
+      await persistStore();
+      renderHistory();
+    }
+
+    function clearFields(){
+      el.title.value = "";
+      el.tags.value = "";
+      el.project.value = "";
+      el.people.value = "";
+      el.content.value = "";
+      el.links.value = "";
+      el.attachments.value = "";
+      el.folderOverride.value = "";
+      setStatus("Cleared capture fields.", "warn");
+    }
+
+    async function send(){
+      if (!requireUnlocked()) return;
+
+      const p = activeProfile();
+
+      // persist quick profile fields (vault/folders/template/dateformat)
+      p.vault = el.vault.value.trim();
+      p.defaultFolder = el.defaultFolder.value.trim();
+      p.lastTemplateId = el.template.value;
+      p.lastDateFormat = el.dateFormat.value;
+
+      const res = generateMarkdown(p);
+      if (!res.ok){
+        setStatus(res.error, "bad");
+        return;
+      }
+
+      if (!p.vault){
+        setStatus("Vault is required in the active profile.", "bad");
+        return;
+      }
+
+      await pushHistory({
+        ts: nowISO(),
+        profileId: p.id,
+        mode: res.mode,
+        vault: p.vault,
+        defaultFolder: p.defaultFolder,
+        folderOverride: el.folderOverride.value.trim(),
+        folder: (res.mode === "daily") ? res.filePath : res.folder,
+        templateId: res.templateId,
+        dateFormat: el.dateFormat.value,
+        type: p.lastType || "idea",
+        title: sanitizeFilePart(el.title.value),
+        tags: normalizeTags(el.tags.value).join(" "),
+        project: el.project.value.trim(),
+        people: el.people.value.trim(),
+        content: el.content.value,
+        links: el.links.value.trim(),
+        attachments: el.attachments.value.trim()
+      });
+
+      setStatus(`Sending to Obsidian…<br><span class="k">${escapeHTML(res.filePath)}</span>`, "good");
+      window.location.href = res.uri;
+    }
+
+    function preview(){
+      if (!requireUnlocked()) return;
+      const p = activeProfile();
+      const res = generateMarkdown(p);
+      if (!res.ok){
+        setStatus(res.error, "bad");
+        return;
+      }
+      el.previewText.value = `# File\n${res.filePath}\n\n# Markdown\n${res.markdown}`;
+      el.previewBackdrop.style.display = "flex";
+    }
+
+    function closePreview(){
+      el.previewBackdrop.style.display = "none";
+    }
+
+    // =========================
+    // Export/Import encrypted blob
+    // =========================
+    function downloadJSON(filename, obj){
+      const blob = new Blob([JSON.stringify(obj, null, 2)], { type:"application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportEncrypted(){
+      // Export the raw encrypted envelope + meta (still encrypted)
+      const meta = localStorage.getItem(STORE_META);
+      const env = localStorage.getItem(STORE_KEY);
+      if (!meta || !env){
+        setStatus("Nothing to export (no encrypted store).", "warn");
+        return;
+      }
+      downloadJSON("oqcp-encrypted-export.json", { meta: JSON.parse(meta), env: JSON.parse(env) });
+      setStatus("Exported encrypted blob.", "good");
+    }
+
+    function importEncrypted(){
+      el.fileInput.value = "";
+      el.fileInput.click();
+    }
+
+    function handleImportFile(file){
+      const reader = new FileReader();
+      reader.onload = async () => {
+        let data;
+        try { data = JSON.parse(reader.result); } catch {
+          setStatus("Import failed: invalid JSON.", "bad");
+          return;
+        }
+        if (!data || !data.meta || !data.env){
+          setStatus("Import failed: missing meta/env.", "bad");
+          return;
+        }
+        localStorage.setItem(STORE_META, JSON.stringify(data.meta));
+        localStorage.setItem(STORE_KEY, JSON.stringify(data.env));
+        lock();
+        setStatus("Imported encrypted blob. Now Unlock with the same password.", "warn");
+      };
+      reader.readAsText(file);
+    }
+
+    // =========================
+    // Templates CRUD
+    // =========================
+    function openTemplates(){
+      if (!requireUnlocked()) return;
+      renderTemplateList();
+      const first = state.store.templates[0];
+      if (first) loadTemplateToEditor(first.id);
+      el.templatesBackdrop.style.display = "flex";
+    }
+    function closeTemplates(){ el.templatesBackdrop.style.display = "none"; }
+
+    function renderTemplateList(){
+      el.tList.innerHTML = "";
+      state.store.templates.forEach(t => {
+        const opt = document.createElement("option");
+        opt.value = t.id;
+        opt.textContent = `${t.name} (${t.id})`;
+        el.tList.appendChild(opt);
+      });
+    }
+
+    function loadTemplateToEditor(id){
+      const t = state.store.templates.find(x => x.id === id);
+      if (!t) return;
+      el.tList.value = t.id;
+      el.tId.value = t.id;
+      el.tName.value = t.name;
+      el.tFolder.value = t.folder || "";
+      el.tBody.value = t.body || "";
+      el.templatesStatus.className = "status warn";
+      el.templatesStatus.textContent = "Editing template.";
+    }
+
+    async function saveTemplateFromEditor(){
+      const id = (el.tId.value || "").trim();
+      const name = (el.tName.value || "").trim();
+      if (!id || !name){
+        el.templatesStatus.className = "status bad";
+        el.templatesStatus.textContent = "Template ID and Name are required.";
+        return;
+      }
+      // enforce unique ID or update existing
+      const folder = el.tFolder.value.trim();
+      const body = el.tBody.value || "";
+
+      const existing = state.store.templates.findIndex(t => t.id === id);
+      const obj = { id, name, folder, body };
+
+      if (existing >= 0){
+        state.store.templates[existing] = obj;
+      } else {
+        state.store.templates.push(obj);
+      }
+
+      await persistStore();
+      renderTemplateList();
+      renderTemplates();
+      el.template.value = id;
+
+      el.templatesStatus.className = "status good";
+      el.templatesStatus.textContent = "Saved.";
+    }
+
+    function newTemplate(){
+      el.tId.value = "";
+      el.tName.value = "";
+      el.tFolder.value = "";
+      el.tBody.value = "{{content}}";
+      el.templatesStatus.className = "status warn";
+      el.templatesStatus.textContent = "New template draft (not saved).";
+    }
+
+    async function duplicateTemplate(){
+      const srcId = el.tList.value;
+      const src = state.store.templates.find(t => t.id === srcId);
+      if (!src) return;
+
+      const newId = `${src.id}_copy`;
+      el.tId.value = newId;
+      el.tName.value = `${src.name} (Copy)`;
+      el.tFolder.value = src.folder || "";
+      el.tBody.value = src.body || "";
+
+      el.templatesStatus.className = "status warn";
+      el.templatesStatus.textContent = "Duplicate created in editor. Change ID if needed, then Save.";
+    }
+
+    async function deleteTemplate(){
+      const id = el.tList.value;
+      if (!id) return;
+      if (!confirmOrReturn(`Delete template '${id}'?`)) return;
+
+      const next = state.store.templates.filter(t => t.id !== id);
+      if (next.length === 0){
+        el.templatesStatus.className = "status bad";
+        el.templatesStatus.textContent = "Cannot delete the last remaining template.";
+        return;
+      }
+      state.store.templates = next;
+      await persistStore();
+      renderTemplateList();
+      renderTemplates();
+      loadTemplateToEditor(state.store.templates[0].id);
+      el.templatesStatus.className = "status good";
+      el.templatesStatus.textContent = "Deleted.";
+    }
+
+    // =========================
+    // Profiles CRUD
+    // =========================
+    function openProfiles(){
+      if (!requireUnlocked()) return;
+      renderProfilesList();
+      loadProfileToEditor(activeProfile().id);
+      el.profilesBackdrop.style.display = "flex";
+    }
+    function closeProfiles(){ el.profilesBackdrop.style.display = "none"; }
+
+    function renderProfilesList(){
+      el.pList.innerHTML = "";
+      state.store.profiles.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = `${p.name} (${p.id.slice(0,8)})`;
+        el.pList.appendChild(opt);
+      });
+      el.pList.value = activeProfile().id;
+    }
+
+    function loadProfileToEditor(id){
+      const p = state.store.profiles.find(x => x.id === id);
+      if (!p) return;
+      el.pList.value = p.id;
+      el.pName.value = p.name || "";
+      el.pVault.value = p.vault || "";
+      el.pDefaultFolder.value = p.defaultFolder || "";
+      el.pDailyFolder.value = p.dailyFolder || "";
+      el.pDailyPattern.value = p.dailyPattern || "YYYY-MM-DD";
+      el.pFrontmatter.value = p.includeFrontmatter || "on";
+      el.pHistoryLimit.value = String(p.historyLimit || 50);
+      el.pTypeKey.value = p.typeKey || "type";
+      el.pCreatedKey.value = p.createdKey || "created";
+      el.profilesStatus.className = "status warn";
+      el.profilesStatus.textContent = "Editing profile.";
+    }
+
+    async function saveProfileFromEditor(){
+      const id = el.pList.value;
+      const p = state.store.profiles.find(x => x.id === id);
+      if (!p) return;
+
+      const name = el.pName.value.trim();
+      if (!name){
+        el.profilesStatus.className = "status bad";
+        el.profilesStatus.textContent = "Profile name is required.";
+        return;
+      }
+
+      p.name = name;
+      p.vault = el.pVault.value.trim();
+      p.defaultFolder = el.pDefaultFolder.value.trim();
+      p.dailyFolder = el.pDailyFolder.value.trim();
+      p.dailyPattern = el.pDailyPattern.value;
+      p.includeFrontmatter = el.pFrontmatter.value;
+      p.historyLimit = Number(el.pHistoryLimit.value);
+      p.typeKey = el.pTypeKey.value.trim() || "type";
+      p.createdKey = el.pCreatedKey.value.trim() || "created";
+
+      await persistStore();
+      renderProfileSelect();
+      applyProfileToForm();
+      renderHistory();
+      el.profilesStatus.className = "status good";
+      el.profilesStatus.textContent = "Saved.";
+    }
+
+    async function newProfile(){
+      const p = DEFAULT_PROFILE("New Profile");
+      state.store.profiles.push(p);
+      setActiveProfile(p.id);
+      await persistStore();
+      renderProfileSelect();
+      applyProfileToForm();
+      renderProfilesList();
+      loadProfileToEditor(p.id);
+      el.profilesStatus.className = "status good";
+      el.profilesStatus.textContent = "Created new profile.";
+    }
+
+    async function duplicateProfile(){
+      const src = state.store.profiles.find(x => x.id === el.pList.value);
+      if (!src) return;
+      const copy = JSON.parse(JSON.stringify(src));
+      copy.id = crypto.randomUUID();
+      copy.name = `${src.name} (Copy)`;
+      state.store.profiles.push(copy);
+      setActiveProfile(copy.id);
+      await persistStore();
+      renderProfileSelect();
+      applyProfileToForm();
+      renderProfilesList();
+      loadProfileToEditor(copy.id);
+      el.profilesStatus.className = "status good";
+      el.profilesStatus.textContent = "Duplicated profile.";
+    }
+
+    async function deleteProfile(){
+      const id = el.pList.value;
+      if (!id) return;
+      if (state.store.profiles.length <= 1){
+        el.profilesStatus.className = "status bad";
+        el.profilesStatus.textContent = "Cannot delete the last remaining profile.";
+        return;
+      }
+      if (!confirmOrReturn("Delete this profile? History for this profile will remain in encrypted store but become inaccessible unless re-created with same id (not possible).")) return;
+
+      state.store.profiles = state.store.profiles.filter(p => p.id !== id);
+
+      // if deleted active, pick first
+      if (state.store.activeProfileId === id){
+        state.store.activeProfileId = state.store.profiles[0].id;
+      }
+
+      await persistStore();
+      renderProfileSelect();
+      applyProfileToForm();
+      renderProfilesList();
+      loadProfileToEditor(activeProfile().id);
+      renderHistory();
+      el.profilesStatus.className = "status good";
+      el.profilesStatus.textContent = "Deleted profile.";
+    }
+
+    // =========================
+    // Unlock UI
+    // =========================
+    function openUnlock(){
+      el.pw.value = "";
+      el.pw2.value = "";
+      el.unlockBackdrop.style.display = "flex";
+      setUnlockStatus("Enter password. If first-time, confirm it too.", "warn");
+    }
+    function closeUnlock(){ el.unlockBackdrop.style.display = "none"; }
+
+    async function doUnlock(){
+      const pw = el.pw.value;
+      if (!pw){
+        setUnlockStatus("Password required.", "bad");
+        return;
+      }
+      const res = await unlock(pw);
+      if (!res.ok){
+        setUnlockStatus(res.error, "bad");
+        return;
+      }
+      setUnlockStatus("Unlocked.", "good");
+      closeUnlock();
+
+      // ensure activeProfileId exists
+      if (!state.store.activeProfileId){
+        state.store.activeProfileId = state.store.profiles[0].id;
+        await persistStore();
+      }
+
+      renderProfileSelect();
+      applyProfileToForm();
+      renderHistory();
+
+      el.lockState.textContent = "Encrypted storage: UNLOCKED";
+      setStatus("Unlocked. Your data is encrypted at rest.", "good");
+    }
+
+    // =========================
+    // Wire events
+    // =========================
+    function wire(){
+      el.btnUnlock.onclick = openUnlock;
+      el.btnUnlockNow.onclick = doUnlock;
+      el.btnCloseUnlock.onclick = closeUnlock;
+      el.btnLock.onclick = () => { lock(); closeUnlock(); };
+      el.btnWipeEncrypted.onclick = () => {
+        if (confirmOrReturn("Wipe encrypted store and metadata? This permanently deletes encrypted data.")){
+          wipeEncrypted();
+          closeUnlock();
+          setStatus("Encrypted data wiped.", "warn");
+        }
+      };
+
+      el.btnProfiles.onclick = openProfiles;
+      el.btnProfilesClose.onclick = closeProfiles;
+      el.pList.onchange = () => loadProfileToEditor(el.pList.value);
+      el.btnProfileSave.onclick = saveProfileFromEditor;
+      el.btnProfileNew.onclick = newProfile;
+      el.btnProfileDuplicate.onclick = duplicateProfile;
+      el.btnProfileDelete.onclick = deleteProfile;
+
+      el.btnTemplates.onclick = openTemplates;
+      el.btnTemplatesClose.onclick = closeTemplates;
+      el.tList.onchange = () => loadTemplateToEditor(el.tList.value);
+      el.btnTemplateSave.onclick = saveTemplateFromEditor;
+      el.btnTemplateNew.onclick = newTemplate;
+      el.btnTemplateDuplicate.onclick = duplicateTemplate;
+      el.btnTemplateDelete.onclick = deleteTemplate;
+
+      el.btnSend.onclick = send;
+      el.btnPreview.onclick = preview;
+      el.btnSendFromPreview.onclick = () => { closePreview(); send(); };
+      el.btnClosePreview.onclick = closePreview;
+      el.previewBackdrop.addEventListener("click", (e) => { if (e.target === el.previewBackdrop) closePreview(); });
+
+      el.btnClear.onclick = clearFields;
+
+      el.btnExport.onclick = exportEncrypted;
+      el.btnImport.onclick = () => { el.fileInput.value = ""; el.fileInput.click(); };
+      el.fileInput.onchange = (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (f) handleImportFile(f);
+      };
+
+      el.btnReset.onclick = () => {
+        if (confirmOrReturn("Reset UI fields only? (Does not wipe encrypted store)")){
+          clearFields();
+        }
+      };
+
+      el.profileSelect.onchange = async () => {
+        if (!requireUnlocked()) return;
+        setActiveProfile(el.profileSelect.value);
+        await persistStore();
+        renderProfileSelect();
+        applyProfileToForm();
+        renderHistory();
+        setStatus("Profile switched.", "good");
+      };
+
+      // persist profile quick fields whenever they change (vault/default folder/template/dateformat)
+      const persistProfileBasics = async () => {
+        if (!state.unlocked) return;
+        const p = activeProfile();
+        p.vault = el.vault.value.trim();
+        p.defaultFolder = el.defaultFolder.value.trim();
+        p.lastTemplateId = el.template.value;
+        p.lastDateFormat = el.dateFormat.value;
+        await persistStore();
+      };
+      [el.vault, el.defaultFolder, el.template, el.dateFormat].forEach(x => {
+        x.addEventListener("change", persistProfileBasics);
+        x.addEventListener("input", persistProfileBasics);
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter"){
+          e.preventDefault();
+          send();
+        }
+        if (e.key === "Escape"){
+          el.folderOverride.value = "";
+        }
+      });
+
+      el.unlockBackdrop.addEventListener("click", (e) => { if (e.target === el.unlockBackdrop) closeUnlock(); });
+      el.profilesBackdrop.addEventListener("click", (e) => { if (e.target === el.profilesBackdrop) closeProfiles(); });
+      el.templatesBackdrop.addEventListener("click", (e) => { if (e.target === el.templatesBackdrop) closeTemplates(); });
+    }
+
+    // =========================
+    // Init
+    // =========================
+    function init(){
+      wire();
+      renderLocked();
+      el.lockState.textContent = "Encrypted storage: LOCKED";
+    }
+
+    init();
+  </script>
+</body>
+</html>
