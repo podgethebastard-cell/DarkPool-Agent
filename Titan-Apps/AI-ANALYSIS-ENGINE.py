@@ -25,7 +25,7 @@ except ImportError:
 # PAGE CONFIG
 # =============================================================================
 st.set_page_config(
-    page_title="TITAN TERMINAL",
+    page_title="AI-ANALYSIS-ENGINE-TERMINAL",
     layout="wide",
     page_icon="💠",
     initial_sidebar_state="expanded"
