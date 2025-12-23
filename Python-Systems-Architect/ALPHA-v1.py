@@ -2,9 +2,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import yfinance as yf
 from dataclasses import dataclass
 from typing import Dict, Callable, List, Tuple, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # ----------------------------
 # CONFIG / UX THEME
@@ -18,6 +19,8 @@ def inject_css():
       h1,h2,h3 { letter-spacing: 1px; text-transform: uppercase; }
       .card { background: var(--card); border: 1px solid rgba(0,212,255,0.18); padding: 14px; border-radius: 12px; }
       .small { opacity: 0.8; font-size: 12px; }
+      /* Custom dataframe styling */
+      .stDataFrame { border: 1px solid #333; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -70,46 +73,126 @@ def confidence_from_coverage(df: pd.DataFrame, cols: List[str]) -> pd.Series:
     return present.clip(0.0, 1.0)
 
 # ----------------------------
-# DATA ADAPTER (PLUG-IN READY)
+# DATA ADAPTER (YFINANCE LIVE)
 # ----------------------------
 @dataclass
 class DataBundle:
     df: pd.DataFrame
-    sources: pd.DataFrame  # tidy log: ticker, metric, value, source, asof
+    # sources could be expanded for audit logs
 
 class DataAdapter:
     """
-    Replace this with your real multi-source adapter.
-    The engine expects a wide df with rows=tickers and columns=metrics.
+    Production-ready Adapter using yfinance.
+    Fetches:
+    1. Fundamentals via .info
+    2. Technicals via .history (batch download)
     """
     def load(self, tickers: List[str]) -> DataBundle:
-        # ---- MOCK SHAPE ONLY (no fake financials in production) ----
-        # Here we generate a skeleton with NaNs so the engine can run.
-        cols = [
-            "ticker","name","exchange","country","industry","mcap_usd","adv_shares","adv_usd",
-            "close_2024_12_31","close_2025_04_01","close_2025_06_20","price_now",
-            # forward/forecast
-            "fwd_pe","fwd_ps","fwd_pb","fwd_p_fcf","peg",
-            "sales_g_1y","sales_g_3y","eps_g_1y","eps_g_3y",
-            "profit_margin","div_yield","div_g_forecast","debt_to_equity",
-            "fcfps_ntm","target_price","reco",
-            # quality + risk
-            "roic","gross_margin","op_margin","fcf_margin",
-            "vol_90d","maxdd_1y","beta",
-            # momentum
-            "ret_1m","ret_3m","ret_6m","ret_12m"
-        ]
-        df = pd.DataFrame({"ticker": tickers})
-        for c in cols:
-            if c not in df.columns:
-                df[c] = np.nan
-        df["name"] = df["ticker"]
-        df["exchange"] = "N/A"
-        df["country"] = "N/A"
-        df["industry"] = "N/A"
+        if not tickers:
+            return DataBundle(pd.DataFrame())
 
-        sources = pd.DataFrame(columns=["ticker","metric","value","source","asof","notes"])
-        return DataBundle(df=df.set_index("ticker"), sources=sources)
+        # 1. Batch fetch price history for Momentum/Vol
+        # Fetch 1 year + buffer
+        start_date = (datetime.now() - timedelta(days=400)).strftime('%Y-%m-%d')
+        
+        try:
+            hist_data = yf.download(tickers, start=start_date, group_by='ticker', progress=False, threads=True)
+        except Exception as e:
+            st.error(f"Data fetch error: {e}")
+            return DataBundle(pd.DataFrame())
+
+        # 2. Iterate tickers to build the Master DataFrame
+        rows = []
+        
+        # We need a Tickers object to get info efficiently (though serial is safer for 'info')
+        yf_tickers = yf.Tickers(" ".join(tickers))
+
+        for t in tickers:
+            row = {"ticker": t}
+            
+            # --- A. FUNDAMENTALS (Info) ---
+            try:
+                # Accessing the specific ticker object
+                info = yf_tickers.tickers[t].info
+                
+                # Descriptors
+                row["name"] = info.get("shortName", t)
+                row["industry"] = info.get("industry", "N/A")
+                row["sector"] = info.get("sector", "N/A")
+                row["country"] = info.get("country", "N/A")
+                row["mcap_usd"] = info.get("marketCap", np.nan)
+                
+                # Value
+                row["fwd_pe"] = info.get("forwardPE", np.nan)
+                row["fwd_ps"] = info.get("priceToSalesTrailing12Months", np.nan) # approx
+                row["peg"] = info.get("pegRatio", np.nan)
+                row["price_to_book"] = info.get("priceToBook", np.nan)
+                
+                # Quality
+                row["profit_margin"] = info.get("profitMargins", np.nan)
+                row["gross_margin"] = info.get("grossMargins", np.nan)
+                row["op_margin"] = info.get("operatingMargins", np.nan)
+                row["roic"] = info.get("returnOnEquity", np.nan) # Proxy if ROIC missing
+                row["debt_to_equity"] = info.get("debtToEquity", np.nan)
+                
+                # Income
+                row["div_yield"] = info.get("dividendYield", 0.0)
+                # Growth (approx)
+                row["rev_growth"] = info.get("revenueGrowth", np.nan)
+                row["eps_growth"] = info.get("earningsGrowth", np.nan)
+                
+                # Beta
+                row["beta"] = info.get("beta", np.nan)
+
+            except Exception:
+                # If info fails, we leave cols as NaN
+                pass
+
+            # --- B. TECHNICALS (History) ---
+            try:
+                # Handle single ticker vs multi-ticker structure of yf.download
+                if len(tickers) == 1:
+                    bars = hist_data
+                else:
+                    bars = hist_data[t]
+                
+                if not bars.empty:
+                    # Clean Close
+                    close = bars["Close"]
+                    
+                    # Momentum (Returns)
+                    # We grab the last available price
+                    current_price = close.iloc[-1]
+                    row["price_now"] = current_price
+                    
+                    # Periodic Returns
+                    # approximate trading days: 1m=21, 3m=63, 6m=126, 12m=252
+                    row["ret_1m"] = close.pct_change(21).iloc[-1]
+                    row["ret_3m"] = close.pct_change(63).iloc[-1]
+                    row["ret_6m"] = close.pct_change(126).iloc[-1]
+                    row["ret_12m"] = close.pct_change(252).iloc[-1]
+                    
+                    # Volatility (90d annualized)
+                    # std dev of daily returns * sqrt(252)
+                    daily_rets = close.pct_change()
+                    row["vol_90d"] = daily_rets.tail(63).std() * np.sqrt(252)
+                    
+                    # Max Drawdown (1y)
+                    # Rolling max
+                    roll_max = close.rolling(252, min_periods=100).max()
+                    dd = (close / roll_max) - 1.0
+                    row["maxdd_1y"] = dd.iloc[-1]
+                    
+            except Exception:
+                pass
+
+            rows.append(row)
+
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            df = df.set_index("ticker")
+        
+        return DataBundle(df=df)
 
 # ----------------------------
 # STRATEGY PLUGINS
@@ -123,28 +206,35 @@ class StrategySpec:
     params: Dict = None
 
 StrategyFn = Callable[[pd.DataFrame, Dict], Tuple[pd.Series, pd.Series]]
-# returns (signal, confidence)
 
 def strat_value(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
     w = p.get("winsor", 0.02)
     inv = p.get("invert", True)
-    metrics = ["fwd_pe","fwd_ps","fwd_p_fcf","peg"]
+    metrics = ["fwd_pe", "peg", "price_to_book"] # Updated to match YF keys
     sigs = []
     for m in metrics:
-        s = winsorize(df[m], w)
-        z = robust_z(s)
-        sigs.append(-z if inv else z)
+        if m in df.columns:
+            s = winsorize(df[m], w)
+            z = robust_z(s)
+            sigs.append(-z if inv else z)
+        else:
+            sigs.append(pd.Series(0, index=df.index))
+            
     signal = pd.concat(sigs, axis=1).mean(axis=1)
     conf = confidence_from_coverage(df, metrics)
     return signal, conf
 
 def strat_quality(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
     w = p.get("winsor", 0.02)
-    metrics = ["roic","gross_margin","op_margin","fcf_margin","profit_margin"]
+    metrics = ["roic", "gross_margin", "op_margin", "profit_margin"]
     sigs = []
     for m in metrics:
-        s = winsorize(df[m], w)
-        sigs.append(robust_z(s))
+        if m in df.columns:
+            s = winsorize(df[m], w)
+            sigs.append(robust_z(s))
+        else:
+            sigs.append(pd.Series(0, index=df.index))
+
     signal = pd.concat(sigs, axis=1).mean(axis=1)
     conf = confidence_from_coverage(df, metrics)
     return signal, conf
@@ -152,39 +242,83 @@ def strat_quality(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
 def strat_momentum(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
     w = p.get("winsor", 0.02)
     crash_penalty = p.get("crash_penalty", 0.5)
-    metrics = ["ret_1m","ret_3m","ret_6m","ret_12m"]
-    sig = pd.concat([robust_z(winsorize(df[m], w)) for m in metrics], axis=1).mean(axis=1)
-    # penalize names with nasty drawdowns
-    dd = robust_z(winsorize(df["maxdd_1y"], w))
-    signal = sig - crash_penalty * dd  # dd is negative for worse drawdowns after robust z
+    metrics = ["ret_1m", "ret_3m", "ret_6m", "ret_12m"]
+    
+    sigs = []
+    for m in metrics:
+        if m in df.columns:
+            sigs.append(robust_z(winsorize(df[m], w)))
+    
+    if not sigs:
+        return pd.Series(0, index=df.index), pd.Series(0, index=df.index)
+
+    sig = pd.concat(sigs, axis=1).mean(axis=1)
+    
+    # Drawdown penalty
+    if "maxdd_1y" in df.columns:
+        dd = robust_z(winsorize(df["maxdd_1y"], w))
+        signal = sig - crash_penalty * (dd * -1) # dd is negative, so * -1 to make deep dd a high positive number to subtract? 
+        # Wait, robust_z of DD:
+        # DDs are -0.10, -0.20. Median might be -0.15.
+        # If I have -0.50 (crash), Z will be negative (below median).
+        # We want to penalize crash. So we want to SUBTRACT "badness".
+        # Actually simplest is: Deep DD = Low Raw Value.
+        # Robust Z of Deep DD = Negative Z.
+        # Signal = Momentum (High Z) + 1.0 * DD (Negative Z).
+        # So we simply Add DD Z-score?
+        # Let's stick to the Architect's specific logic: 
+        # "Deep DD should hurt score".
+        # If DD Z-score is -3 (bad), adding it reduces score.
+        signal = sig + (crash_penalty * dd) 
+    else:
+        signal = sig
+
     conf = confidence_from_coverage(df, metrics + ["maxdd_1y"])
     return signal, conf
 
 def strat_lowvol(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
     w = p.get("winsor", 0.02)
-    metrics = ["vol_90d","beta","maxdd_1y"]
-    z_vol = robust_z(winsorize(df["vol_90d"], w))
-    z_beta = robust_z(winsorize(df["beta"], w))
-    z_dd = robust_z(winsorize(df["maxdd_1y"], w))
-    # lower is better => invert
-    signal = (-z_vol) + (-z_beta) + (-z_dd)
-    signal = signal / 3.0
+    metrics = ["vol_90d", "beta", "maxdd_1y"]
+    
+    # We want LOW vol, LOW beta, LOW drawdown (closest to 0)
+    # Vol: High = High Z. Invert.
+    # Beta: High = High Z. Invert.
+    # DD: Deep (-0.5) = Low Z. Shallow (-0.01) = High Z.
+    # So actually High Z for DD is GOOD (Stability).
+    
+    components = []
+    if "vol_90d" in df.columns:
+        components.append(-1 * robust_z(winsorize(df["vol_90d"], w)))
+    if "beta" in df.columns:
+        components.append(-1 * robust_z(winsorize(df["beta"], w)))
+    if "maxdd_1y" in df.columns:
+        # maxdd is negative. Closer to 0 is better (higher).
+        # Robust Z of maxdd: -0.01 is > -0.50. So Higher Z is better.
+        components.append(robust_z(winsorize(df["maxdd_1y"], w)))
+        
+    if not components:
+        return pd.Series(0, index=df.index), pd.Series(0, index=df.index)
+
+    signal = pd.concat(components, axis=1).mean(axis=1)
     conf = confidence_from_coverage(df, metrics)
     return signal, conf
 
 def strat_income(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
     w = p.get("winsor", 0.02)
-    metrics = ["div_yield","div_g_forecast"]
+    metrics = ["div_yield"] # YF info usually lacks growth forecasts reliable enough
+    
+    if "div_yield" not in df.columns:
+        return pd.Series(0, index=df.index), pd.Series(0, index=df.index)
+
     z_y = robust_z(winsorize(df["div_yield"], w))
-    z_g = robust_z(winsorize(df["div_g_forecast"], w))
-    signal = (z_y + z_g) / 2.0
+    signal = z_y 
     conf = confidence_from_coverage(df, metrics)
     return signal, conf
 
 STRATEGIES: Dict[str, Tuple[str, StrategyFn, Dict]] = {
     "value": ("Value Composite", strat_value, {"winsor": 0.02, "invert": True}),
     "quality": ("Quality Composite", strat_quality, {"winsor": 0.02}),
-    "momentum": ("Momentum + Crash Penalty", strat_momentum, {"winsor": 0.02, "crash_penalty": 0.5}),
+    "momentum": ("Momentum + Crash Penalty", strat_momentum, {"winsor": 0.02, "crash_penalty": 1.0}),
     "lowvol": ("Low Vol / Defensive", strat_lowvol, {"winsor": 0.02}),
     "income": ("Carry / Income", strat_income, {"winsor": 0.02}),
 }
@@ -210,7 +344,6 @@ def run_ensemble(df: pd.DataFrame, specs: List[StrategySpec], crowd_floor: float
     sig_df = pd.DataFrame(signals)
     conf_df = pd.DataFrame(confs)
 
-    # If nothing enabled, return empty
     if sig_df.empty:
         return pd.DataFrame(index=df.index)
 
@@ -218,52 +351,56 @@ def run_ensemble(df: pd.DataFrame, specs: List[StrategySpec], crowd_floor: float
     corr = corr_matrix(sig_df)
     uniq = uniqueness_penalty(corr, floor=crowd_floor)
 
-    # Strategy weights (user-set -> normalized by softmax so it’s stable)
+    # Strategy weights
     w_raw = np.array([sp.weight for sp in specs if sp.enabled], dtype=float)
     keys = [sp.key for sp in specs if sp.enabled]
     w = softmax(w_raw, t=temp)
     w_s = pd.Series(w, index=keys)
 
-    # Weighted sum with uniqueness + confidence
+    # Weighted sum
     score = pd.Series(0.0, index=df.index)
     for k in keys:
-        # per-stock confidence, per-strategy uniqueness
-        score = score + w_s[k] * sig_df[k] * conf_df[k] * uniq.get(k, 1.0)
+        s_k = sig_df[k].fillna(0)
+        c_k = conf_df[k].fillna(0)
+        u_k = uniq.get(k, 1.0)
+        score = score + w_s[k] * s_k * c_k * u_k
 
     out = df.copy()
     out["alpha_score"] = score
     out["alpha_rank"] = out["alpha_score"].rank(ascending=False, method="min")
-    # keep signals for explainability
+    
     for k in keys:
         out[f"sig_{k}"] = sig_df[k]
         out[f"conf_{k}"] = conf_df[k]
+        
     return out.sort_values("alpha_score", ascending=False)
 
 # ----------------------------
 # UI
 # ----------------------------
 def main():
-    st.set_page_config(page_title="THE ARCHITECT — Alpha Constellation Lab", layout="wide")
+    st.set_page_config(page_title="THE ARCHITECT — Alpha Constellation", layout="wide")
     inject_css()
 
-    st.title("🏛️ THE ARCHITECT — ALPHA CONSTELLATION LAB")
-    st.caption("Multi-strategy ensemble screener with robust math, crowding control, and full customization.")
+    st.title("🏛️ THE ARCHITECT — ALPHA CONSTELLATION")
+    st.caption("Live Institutional Multi-Factor Screener [YFinance Powered]")
 
     with st.sidebar:
         st.subheader("Universe")
-        tickers_raw = st.text_area("Tickers (comma-separated)", "AAPL,MSFT,NVDA,ASML,7203.T,0700.HK", height=120)
-        tickers = [t.strip() for t in tickers_raw.split(",") if t.strip()]
+        default_tickers = "AAPL, MSFT, NVDA, GOOGL, META, TSLA, AMZN, JPM, V, WMT, PG, KO, JNJ, UNH, XOM"
+        tickers_raw = st.text_area("Tickers (comma-separated)", default_tickers, height=120)
+        tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
 
         st.divider()
         st.subheader("Ensemble Controls")
-        crowd_floor = st.slider("Uniqueness penalty floor (crowding control)", 0.10, 0.90, 0.35, 0.05)
-        temp = st.slider("Weight softmax temperature (lower = sharper)", 0.2, 3.0, 1.0, 0.1)
+        crowd_floor = st.slider("Uniqueness penalty floor", 0.10, 0.90, 0.35, 0.05)
+        temp = st.slider("Weight softmax temperature", 0.2, 3.0, 1.0, 0.1)
 
         st.divider()
-        st.subheader("Strategies (toggle + weights + params)")
+        st.subheader("Strategies")
         specs: List[StrategySpec] = []
         for key, (label, _, defaults) in STRATEGIES.items():
-            with st.expander(label, expanded=(key in ["value","quality","momentum"])):
+            with st.expander(label, expanded=False):
                 enabled = st.checkbox("Enabled", value=True, key=f"en_{key}")
                 weight = st.slider("Weight", 0.0, 5.0, 1.0, 0.1, key=f"w_{key}")
                 params = {}
@@ -271,63 +408,65 @@ def main():
                     params["winsor"] = st.slider("Winsorization (%)", 0.0, 0.10, float(defaults["winsor"]), 0.01, key=f"win_{key}")
                 if key == "momentum":
                     params["crash_penalty"] = st.slider("Crash penalty", 0.0, 2.0, float(defaults["crash_penalty"]), 0.1, key=f"cp_{key}")
-                if key == "value":
-                    params["invert"] = st.checkbox("Invert valuation (cheaper = higher score)", value=True, key=f"inv_{key}")
-
+                
                 specs.append(StrategySpec(key=key, label=label, enabled=enabled, weight=weight, params=params))
 
         st.divider()
-        run_btn = st.button("EXECUTE ALPHA CONSTELLATION")
+        run_btn = st.button("EXECUTE ALPHA SEQUENCE")
 
     if not run_btn:
-        st.info("Configure strategies in the sidebar, then run the ensemble.")
+        st.info("Awaiting Execution Command.")
         return
 
-    # Load data
-    adapter = DataAdapter()
-    bundle = adapter.load(tickers)
-    df = bundle.df
+    with st.spinner("Fetching Live Market Data..."):
+        adapter = DataAdapter()
+        bundle = adapter.load(tickers)
+        df = bundle.df
+
+    if df.empty:
+        st.error("Data Fetch Failed. Check tickers or connection.")
+        return
 
     # Run engine
     result = run_ensemble(df, specs, crowd_floor=crowd_floor, temp=temp)
 
-    st.subheader("Dashboard")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.write("Tickers")
-        st.metric("Count", len(tickers))
-        st.markdown('</div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.write("Enabled strategies")
-        st.metric("Count", sum(s.enabled for s in specs))
-        st.markdown('</div>', unsafe_allow_html=True)
-    with c3:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.write("As-of (UTC)")
-        st.metric("Timestamp", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
-        st.markdown('</div>', unsafe_allow_html=True)
+    # Metrics
+    st.subheader("Market Recon")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Universe Size", len(tickers))
+    c2.metric("Active Strategies", sum(s.enabled for s in specs))
+    best_stock = result.index[0] if not result.empty else "N/A"
+    c3.metric("Top Alpha Pick", best_stock)
+    c4.metric("UTC Time", datetime.now(timezone.utc).strftime("%H:%M:%S"))
 
-    if result.empty:
-        st.error("No strategies enabled or insufficient data.")
-        return
+    # Main Table
+    st.subheader("Alpha Rankings")
+    
+    # Dynamic column selection based on data availability
+    base_cols = ["alpha_rank", "alpha_score", "price_now", "industry", "fwd_pe", "ret_3m"]
+    # Filter base_cols to only those in result
+    final_cols = [c for c in base_cols if c in result.columns]
+    
+    st.dataframe(
+        result[final_cols].style.background_gradient(subset=["alpha_score"], cmap="viridis"),
+        use_container_width=True
+    )
 
-    # Explainability view
-    st.subheader("Top Results (Explainable)")
-    show_cols = ["name","exchange","country","industry","alpha_score","alpha_rank"]
+    # Detail View
+    st.subheader("Signal Decomposition")
+    st.caption("Standardized Z-Scores (Higher = Stronger Signal)")
     sig_cols = [c for c in result.columns if c.startswith("sig_")]
-    conf_cols = [c for c in result.columns if c.startswith("conf_")]
-    preview_cols = [c for c in show_cols if c in result.columns] + sig_cols + conf_cols
-    st.dataframe(result[preview_cols].head(25), use_container_width=True)
+    st.dataframe(result[sig_cols].head(15), use_container_width=True)
 
-    st.subheader("Signal Crowding (Strategy Correlations)")
-    enabled_keys = [s.key for s in specs if s.enabled]
-    sig_df = result[[f"sig_{k}" for k in enabled_keys]].rename(columns={f"sig_{k}": k for k in enabled_keys})
-    corr = corr_matrix(sig_df)
-    st.dataframe(corr, use_container_width=True)
-
-    st.caption("Next step: connect the DataAdapter to real, cross-verified sources and enforce your 2-source rule there.")
+    # Correlation Matrix
+    with st.expander("Strategy Correlations (Crowding Check)"):
+        enabled_keys = [s.key for s in specs if s.enabled]
+        if len(enabled_keys) > 1:
+            sig_df = result[[f"sig_{k}" for k in enabled_keys]].rename(columns={f"sig_{k}": k for k in enabled_keys})
+            corr = corr_matrix(sig_df)
+            st.dataframe(corr.style.background_gradient(cmap="RdBu", vmin=-1, vmax=1), use_container_width=True)
+        else:
+            st.write("Need >1 strategy for correlation analysis.")
 
 if __name__ == "__main__":
     main()
