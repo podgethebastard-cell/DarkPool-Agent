@@ -1,10 +1,6 @@
 
 
-Here is the fully rebranded version of the dashboard, renamed to **QUINTESSENCE**.
 
-I have updated all UI elements, the scoring system (now the **Quintessence Index**), and the general aesthetic to reflect the concept of the "Fifth Element" or "Essence."
-
-```python
 import streamlit as st
 import ccxt
 import pandas as pd
@@ -687,4 +683,3 @@ with t6:
 if st.session_state.auto:
     time_lib.sleep(2) 
     st.rerun()
-```
