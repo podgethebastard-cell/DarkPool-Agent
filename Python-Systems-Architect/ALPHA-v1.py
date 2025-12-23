@@ -2,471 +2,397 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import yfinance as yf
-from dataclasses import dataclass
-from typing import Dict, Callable, List, Tuple, Optional
-from datetime import datetime, timezone, timedelta
 
 # ----------------------------
-# CONFIG / UX THEME
+# 1. SYSTEM CONFIGURATION & CSS
 # ----------------------------
+st.set_page_config(page_title="DARK SINGULARITY // APEX", layout="wide", page_icon="💀")
+
 def inject_css():
     st.markdown("""
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
-      :root { --bg:#0e1117; --txt:#e0e0e0; --acc:#00d4ff; --card:rgba(255,255,255,0.03); }
-      .stApp { background-color: var(--bg); color: var(--txt); font-family: 'Roboto Mono', monospace; }
-      h1,h2,h3 { letter-spacing: 1px; text-transform: uppercase; }
-      .card { background: var(--card); border: 1px solid rgba(0,212,255,0.18); padding: 14px; border-radius: 12px; }
-      .small { opacity: 0.8; font-size: 12px; }
-      /* Custom dataframe styling */
-      .stDataFrame { border: 1px solid #333; }
+        @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
+        
+        :root { 
+            --bg: #0e1117; 
+            --card: #1e2127; 
+            --bull: #00ffbb; 
+            --bear: #ff1155; 
+            --chop: #546e7a;
+        }
+        
+        .stApp { background-color: var(--bg); font-family: 'Roboto Mono', monospace; color: #e0e0e0; }
+        
+        /* Custom Metric Cards */
+        div[data-testid="stMetric"] {
+            background-color: var(--card);
+            border: 1px solid #333;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        
+        div[data-testid="stMetricLabel"] { opacity: 0.8; font-size: 0.8rem; }
+        div[data-testid="stMetricValue"] { font-weight: 700; font-size: 1.5rem; }
+        
+        /* Headers */
+        h1, h2, h3 { color: #e0e0e0 !important; text-transform: uppercase; letter-spacing: 1px; }
+        
+        /* Plotly Background */
+        .js-plotly-plot .plotly .main-svg { background: transparent !important; }
+        
+        /* Sidebar Styling */
+        section[data-testid="stSidebar"] { background-color: #0b0d10; border-right: 1px solid #333; }
     </style>
     """, unsafe_allow_html=True)
 
+inject_css()
+
 # ----------------------------
-# ROBUST MATH UTILITIES
+# 2. VECTORIZED MATH ENGINE
 # ----------------------------
-def winsorize(s: pd.Series, p: float = 0.02) -> pd.Series:
-    if s.dropna().empty:
-        return s
-    lo = s.quantile(p)
-    hi = s.quantile(1 - p)
-    return s.clip(lower=lo, upper=hi)
 
-def robust_z(s: pd.Series, eps: float = 1e-9) -> pd.Series:
-    """Median/MAD robust z-score."""
-    x = s.astype(float)
-    med = np.nanmedian(x)
-    mad = np.nanmedian(np.abs(x - med))
-    if np.isnan(mad) or mad < eps:
-        return (x - med) * 0.0
-    return (x - med) / (1.4826 * mad + eps)
+def calculate_atr(df: pd.DataFrame, length: int = 10) -> pd.Series:
+    """Wilder's Smoothing (RMA) based ATR to match TradingView."""
+    high, low, close = df['High'], df['Low'], df['Close']
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    # RMA initialization: First value is SMA, then RMA
+    # Pandas ewm(alpha=1/length) is equivalent to RMA
+    return tr.ewm(alpha=1/length, adjust=False).mean()
 
-def softmax(x: np.ndarray, t: float = 1.0) -> np.ndarray:
-    x = np.asarray(x, dtype=float) / max(t, 1e-9)
-    x = x - np.nanmax(x)
-    e = np.exp(x)
-    return e / (np.nansum(e) + 1e-12)
-
-def corr_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    # Spearman is more robust to outliers than Pearson for factor signals.
-    return df.corr(method="spearman", min_periods=max(5, int(df.shape[0] * 0.25)))
-
-def uniqueness_penalty(corr: pd.DataFrame, floor: float = 0.35) -> pd.Series:
+def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 4.0):
     """
-    Penalize crowded signals:
-    - For each signal, compute average absolute correlation to others.
-    - Convert to penalty in [floor, 1].
+    Explicit Iterative SuperTrend implementation to match Pine Script recursive logic.
+    Returns: supertrend (series), direction (series: 1=Bull, -1=Bear)
     """
-    if corr.empty:
-        return pd.Series(dtype=float)
-    avg_abs = corr.abs().replace(1.0, np.nan).mean(axis=1).fillna(0.0)
-    pen = 1.0 - avg_abs.clip(0, 1)
-    return pen.clip(lower=floor, upper=1.0)
-
-def confidence_from_coverage(df: pd.DataFrame, cols: List[str]) -> pd.Series:
-    """Confidence = fraction of required columns present (not null) per row."""
-    if not cols:
-        return pd.Series(1.0, index=df.index)
-    present = df[cols].notna().mean(axis=1)
-    return present.clip(0.0, 1.0)
-
-# ----------------------------
-# DATA ADAPTER (YFINANCE LIVE)
-# ----------------------------
-@dataclass
-class DataBundle:
-    df: pd.DataFrame
-    # sources could be expanded for audit logs
-
-class DataAdapter:
-    """
-    Production-ready Adapter using yfinance.
-    Fetches:
-    1. Fundamentals via .info
-    2. Technicals via .history (batch download)
-    """
-    def load(self, tickers: List[str]) -> DataBundle:
-        if not tickers:
-            return DataBundle(pd.DataFrame())
-
-        # 1. Batch fetch price history for Momentum/Vol
-        # Fetch 1 year + buffer
-        start_date = (datetime.now() - timedelta(days=400)).strftime('%Y-%m-%d')
-        
-        try:
-            hist_data = yf.download(tickers, start=start_date, group_by='ticker', progress=False, threads=True)
-        except Exception as e:
-            st.error(f"Data fetch error: {e}")
-            return DataBundle(pd.DataFrame())
-
-        # 2. Iterate tickers to build the Master DataFrame
-        rows = []
-        
-        # We need a Tickers object to get info efficiently (though serial is safer for 'info')
-        yf_tickers = yf.Tickers(" ".join(tickers))
-
-        for t in tickers:
-            row = {"ticker": t}
-            
-            # --- A. FUNDAMENTALS (Info) ---
-            try:
-                # Accessing the specific ticker object
-                info = yf_tickers.tickers[t].info
-                
-                # Descriptors
-                row["name"] = info.get("shortName", t)
-                row["industry"] = info.get("industry", "N/A")
-                row["sector"] = info.get("sector", "N/A")
-                row["country"] = info.get("country", "N/A")
-                row["mcap_usd"] = info.get("marketCap", np.nan)
-                
-                # Value
-                row["fwd_pe"] = info.get("forwardPE", np.nan)
-                row["fwd_ps"] = info.get("priceToSalesTrailing12Months", np.nan) # approx
-                row["peg"] = info.get("pegRatio", np.nan)
-                row["price_to_book"] = info.get("priceToBook", np.nan)
-                
-                # Quality
-                row["profit_margin"] = info.get("profitMargins", np.nan)
-                row["gross_margin"] = info.get("grossMargins", np.nan)
-                row["op_margin"] = info.get("operatingMargins", np.nan)
-                row["roic"] = info.get("returnOnEquity", np.nan) # Proxy if ROIC missing
-                row["debt_to_equity"] = info.get("debtToEquity", np.nan)
-                
-                # Income
-                row["div_yield"] = info.get("dividendYield", 0.0)
-                # Growth (approx)
-                row["rev_growth"] = info.get("revenueGrowth", np.nan)
-                row["eps_growth"] = info.get("earningsGrowth", np.nan)
-                
-                # Beta
-                row["beta"] = info.get("beta", np.nan)
-
-            except Exception:
-                # If info fails, we leave cols as NaN
-                pass
-
-            # --- B. TECHNICALS (History) ---
-            try:
-                # Handle single ticker vs multi-ticker structure of yf.download
-                if len(tickers) == 1:
-                    bars = hist_data
-                else:
-                    bars = hist_data[t]
-                
-                if not bars.empty:
-                    # Clean Close
-                    close = bars["Close"]
-                    
-                    # Momentum (Returns)
-                    # We grab the last available price
-                    current_price = close.iloc[-1]
-                    row["price_now"] = current_price
-                    
-                    # Periodic Returns
-                    # approximate trading days: 1m=21, 3m=63, 6m=126, 12m=252
-                    row["ret_1m"] = close.pct_change(21).iloc[-1]
-                    row["ret_3m"] = close.pct_change(63).iloc[-1]
-                    row["ret_6m"] = close.pct_change(126).iloc[-1]
-                    row["ret_12m"] = close.pct_change(252).iloc[-1]
-                    
-                    # Volatility (90d annualized)
-                    # std dev of daily returns * sqrt(252)
-                    daily_rets = close.pct_change()
-                    row["vol_90d"] = daily_rets.tail(63).std() * np.sqrt(252)
-                    
-                    # Max Drawdown (1y)
-                    # Rolling max
-                    roll_max = close.rolling(252, min_periods=100).max()
-                    dd = (close / roll_max) - 1.0
-                    row["maxdd_1y"] = dd.iloc[-1]
-                    
-            except Exception:
-                pass
-
-            rows.append(row)
-
-        df = pd.DataFrame(rows)
-        if not df.empty:
-            df = df.set_index("ticker")
-        
-        return DataBundle(df=df)
-
-# ----------------------------
-# STRATEGY PLUGINS
-# ----------------------------
-@dataclass
-class StrategySpec:
-    key: str
-    label: str
-    enabled: bool = True
-    weight: float = 1.0
-    params: Dict = None
-
-StrategyFn = Callable[[pd.DataFrame, Dict], Tuple[pd.Series, pd.Series]]
-
-def strat_value(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
-    w = p.get("winsor", 0.02)
-    inv = p.get("invert", True)
-    metrics = ["fwd_pe", "peg", "price_to_book"] # Updated to match YF keys
-    sigs = []
-    for m in metrics:
-        if m in df.columns:
-            s = winsorize(df[m], w)
-            z = robust_z(s)
-            sigs.append(-z if inv else z)
+    high = df['High'].values
+    low = df['Low'].values
+    close = df['Close'].values
+    atr = calculate_atr(df, period).values
+    
+    m = len(df)
+    
+    # Basic Bands
+    basic_upper = (high + low) / 2 + (multiplier * atr)
+    basic_lower = (high + low) / 2 - (multiplier * atr)
+    
+    final_upper = np.zeros(m)
+    final_lower = np.zeros(m)
+    supertrend = np.zeros(m)
+    direction = np.zeros(m) # 1 = Bull (Trend Up), -1 = Bear (Trend Down)
+    
+    # Initialize first valid index (usually index=period)
+    # We'll just start loops from 1 safely
+    
+    for i in range(1, m):
+        # -- Upper Band Logic --
+        if basic_upper[i] < final_upper[i-1] or close[i-1] > final_upper[i-1]:
+            final_upper[i] = basic_upper[i]
         else:
-            sigs.append(pd.Series(0, index=df.index))
+            final_upper[i] = final_upper[i-1]
             
-    signal = pd.concat(sigs, axis=1).mean(axis=1)
-    conf = confidence_from_coverage(df, metrics)
-    return signal, conf
-
-def strat_quality(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
-    w = p.get("winsor", 0.02)
-    metrics = ["roic", "gross_margin", "op_margin", "profit_margin"]
-    sigs = []
-    for m in metrics:
-        if m in df.columns:
-            s = winsorize(df[m], w)
-            sigs.append(robust_z(s))
+        # -- Lower Band Logic --
+        if basic_lower[i] > final_lower[i-1] or close[i-1] < final_lower[i-1]:
+            final_lower[i] = basic_lower[i]
         else:
-            sigs.append(pd.Series(0, index=df.index))
-
-    signal = pd.concat(sigs, axis=1).mean(axis=1)
-    conf = confidence_from_coverage(df, metrics)
-    return signal, conf
-
-def strat_momentum(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
-    w = p.get("winsor", 0.02)
-    crash_penalty = p.get("crash_penalty", 0.5)
-    metrics = ["ret_1m", "ret_3m", "ret_6m", "ret_12m"]
-    
-    sigs = []
-    for m in metrics:
-        if m in df.columns:
-            sigs.append(robust_z(winsorize(df[m], w)))
-    
-    if not sigs:
-        return pd.Series(0, index=df.index), pd.Series(0, index=df.index)
-
-    sig = pd.concat(sigs, axis=1).mean(axis=1)
-    
-    # Drawdown penalty
-    if "maxdd_1y" in df.columns:
-        dd = robust_z(winsorize(df["maxdd_1y"], w))
-        signal = sig - crash_penalty * (dd * -1) # dd is negative, so * -1 to make deep dd a high positive number to subtract? 
-        # Wait, robust_z of DD:
-        # DDs are -0.10, -0.20. Median might be -0.15.
-        # If I have -0.50 (crash), Z will be negative (below median).
-        # We want to penalize crash. So we want to SUBTRACT "badness".
-        # Actually simplest is: Deep DD = Low Raw Value.
-        # Robust Z of Deep DD = Negative Z.
-        # Signal = Momentum (High Z) + 1.0 * DD (Negative Z).
-        # So we simply Add DD Z-score?
-        # Let's stick to the Architect's specific logic: 
-        # "Deep DD should hurt score".
-        # If DD Z-score is -3 (bad), adding it reduces score.
-        signal = sig + (crash_penalty * dd) 
-    else:
-        signal = sig
-
-    conf = confidence_from_coverage(df, metrics + ["maxdd_1y"])
-    return signal, conf
-
-def strat_lowvol(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
-    w = p.get("winsor", 0.02)
-    metrics = ["vol_90d", "beta", "maxdd_1y"]
-    
-    # We want LOW vol, LOW beta, LOW drawdown (closest to 0)
-    # Vol: High = High Z. Invert.
-    # Beta: High = High Z. Invert.
-    # DD: Deep (-0.5) = Low Z. Shallow (-0.01) = High Z.
-    # So actually High Z for DD is GOOD (Stability).
-    
-    components = []
-    if "vol_90d" in df.columns:
-        components.append(-1 * robust_z(winsorize(df["vol_90d"], w)))
-    if "beta" in df.columns:
-        components.append(-1 * robust_z(winsorize(df["beta"], w)))
-    if "maxdd_1y" in df.columns:
-        # maxdd is negative. Closer to 0 is better (higher).
-        # Robust Z of maxdd: -0.01 is > -0.50. So Higher Z is better.
-        components.append(robust_z(winsorize(df["maxdd_1y"], w)))
+            final_lower[i] = final_lower[i-1]
+            
+        # -- Trend Logic --
+        prev_dir = direction[i-1] if direction[i-1] != 0 else 1 # Default Bull
         
-    if not components:
-        return pd.Series(0, index=df.index), pd.Series(0, index=df.index)
-
-    signal = pd.concat(components, axis=1).mean(axis=1)
-    conf = confidence_from_coverage(df, metrics)
-    return signal, conf
-
-def strat_income(df: pd.DataFrame, p: Dict) -> Tuple[pd.Series, pd.Series]:
-    w = p.get("winsor", 0.02)
-    metrics = ["div_yield"] # YF info usually lacks growth forecasts reliable enough
-    
-    if "div_yield" not in df.columns:
-        return pd.Series(0, index=df.index), pd.Series(0, index=df.index)
-
-    z_y = robust_z(winsorize(df["div_yield"], w))
-    signal = z_y 
-    conf = confidence_from_coverage(df, metrics)
-    return signal, conf
-
-STRATEGIES: Dict[str, Tuple[str, StrategyFn, Dict]] = {
-    "value": ("Value Composite", strat_value, {"winsor": 0.02, "invert": True}),
-    "quality": ("Quality Composite", strat_quality, {"winsor": 0.02}),
-    "momentum": ("Momentum + Crash Penalty", strat_momentum, {"winsor": 0.02, "crash_penalty": 1.0}),
-    "lowvol": ("Low Vol / Defensive", strat_lowvol, {"winsor": 0.02}),
-    "income": ("Carry / Income", strat_income, {"winsor": 0.02}),
-}
-
-# ----------------------------
-# ALPHA CONSTELLATION ENSEMBLE
-# ----------------------------
-def run_ensemble(df: pd.DataFrame, specs: List[StrategySpec], crowd_floor: float, temp: float) -> pd.DataFrame:
-    signals = {}
-    confs = {}
-
-    for s in specs:
-        if not s.enabled:
-            continue
-        label, fn, defaults = STRATEGIES[s.key]
-        params = dict(defaults)
-        if s.params:
-            params.update(s.params)
-        sig, conf = fn(df, params)
-        signals[s.key] = sig
-        confs[s.key] = conf
-
-    sig_df = pd.DataFrame(signals)
-    conf_df = pd.DataFrame(confs)
-
-    if sig_df.empty:
-        return pd.DataFrame(index=df.index)
-
-    # Redundancy/crowding control
-    corr = corr_matrix(sig_df)
-    uniq = uniqueness_penalty(corr, floor=crowd_floor)
-
-    # Strategy weights
-    w_raw = np.array([sp.weight for sp in specs if sp.enabled], dtype=float)
-    keys = [sp.key for sp in specs if sp.enabled]
-    w = softmax(w_raw, t=temp)
-    w_s = pd.Series(w, index=keys)
-
-    # Weighted sum
-    score = pd.Series(0.0, index=df.index)
-    for k in keys:
-        s_k = sig_df[k].fillna(0)
-        c_k = conf_df[k].fillna(0)
-        u_k = uniq.get(k, 1.0)
-        score = score + w_s[k] * s_k * c_k * u_k
-
-    out = df.copy()
-    out["alpha_score"] = score
-    out["alpha_rank"] = out["alpha_score"].rank(ascending=False, method="min")
-    
-    for k in keys:
-        out[f"sig_{k}"] = sig_df[k]
-        out[f"conf_{k}"] = conf_df[k]
+        if prev_dir == 1: # Was Bull
+            if close[i] < final_lower[i]:
+                direction[i] = -1 # Flip Bear
+            else:
+                direction[i] = 1 # Stay Bull
+        else: # Was Bear
+            if close[i] > final_upper[i]:
+                direction[i] = 1 # Flip Bull
+            else:
+                direction[i] = -1 # Stay Bear
         
-    return out.sort_values("alpha_score", ascending=False)
+        # -- SuperTrend Value --
+        if direction[i] == 1:
+            supertrend[i] = final_lower[i]
+        else:
+            supertrend[i] = final_upper[i]
+            
+    df['supertrend'] = supertrend
+    df['trend_dir'] = direction
+    return df
+
+def calculate_choppiness(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    """
+    Choppiness Index = 100 * LOG10( SUM(ATR(1), n) / ( MaxHi(n) - MinLo(n) ) ) / LOG10(n)
+    """
+    high, low, close = df['High'], df['Low'], df['Close']
+    
+    # True Range for Summation
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    atr_sum = tr.rolling(window=length).sum()
+    
+    high_max = high.rolling(window=length).max()
+    low_min = low.rolling(window=length).min()
+    
+    range_diff = high_max - low_min
+    
+    # Avoid div by zero
+    range_diff = range_diff.replace(0, 1e-9)
+    
+    numerator = np.log10(atr_sum / range_diff)
+    denominator = np.log10(length)
+    
+    chop = 100 * (numerator / denominator)
+    return chop
+
+def calculate_apex_vector(df: pd.DataFrame, params: dict) -> pd.Series:
+    """
+    Vector = Direction * Efficiency * VolumeFlux
+    Efficiency = Body / Range
+    """
+    # Efficiency
+    body_abs = (df['Close'] - df['Open']).abs()
+    range_abs = (df['High'] - df['Low']).replace(0, 1e-9)
+    efficiency = body_abs / range_abs
+    
+    # Volume Flux
+    vol_avg = df['Volume'].rolling(params['vol_len']).mean().replace(0, 1)
+    vol_fact = df['Volume'] / vol_avg
+    
+    direction = np.sign(df['Close'] - df['Open'])
+    
+    vector_raw = direction * efficiency * vol_fact
+    
+    # Smoothing
+    return vector_raw.ewm(span=params['smooth']).mean()
 
 # ----------------------------
-# UI
+# 3. LOGIC CONTROLLER
+# ----------------------------
+def run_dark_singularity(df: pd.DataFrame, params: dict):
+    # 1. SuperTrend
+    df = calculate_supertrend(df, period=params['st_len'], multiplier=params['st_mult'])
+    
+    # 2. Choppiness
+    df['chop_index'] = calculate_choppiness(df, length=params['chop_len'])
+    
+    # 3. Apex Vector
+    df['vector'] = calculate_apex_vector(df, params)
+    
+    # 4. State Machine (Integration)
+    # Logic: Signal only if NOT Choppy and Trend Flips
+    df['is_choppy'] = df['chop_index'] > params['chop_thresh']
+    
+    # Identify Signal Candles
+    # Bull Signal: Trend 1, Prev Trend -1, Not Choppy
+    df['sig_long'] = (df['trend_dir'] == 1) & (df['trend_dir'].shift(1) == -1) & (~df['is_choppy'])
+    
+    # Bear Signal: Trend -1, Prev Trend 1, Not Choppy
+    df['sig_short'] = (df['trend_dir'] == -1) & (df['trend_dir'].shift(1) == 1) & (~df['is_choppy'])
+    
+    return df
+
+# ----------------------------
+# 4. VISUALIZATION (PLOTLY)
+# ----------------------------
+def render_terminal(df: pd.DataFrame, ticker: str, params: dict):
+    lookback = 200
+    sub_df = df.tail(lookback).copy()
+    
+    # Colors
+    c_bull = '#00ffbb'
+    c_bear = '#ff1155'
+    c_chop = '#546e7a'
+    
+    fig = make_subplots(
+        rows=2, cols=1, 
+        shared_xaxes=True, 
+        vertical_spacing=0.03, 
+        row_heights=[0.75, 0.25],
+        subplot_titles=(f"DARK SINGULARITY: {ticker}", "APEX VECTOR FLUX")
+    )
+    
+    # --- CHART 1: PRICE + SUPERTREND ---
+    
+    # 1. Bar Coloring Logic
+    # If Choppy -> Grey. Else -> Trend Color.
+    colors = []
+    for idx, row in sub_df.iterrows():
+        if row['is_choppy'] and params['use_chop']:
+            colors.append(c_chop) # Greyed out
+        elif row['trend_dir'] == 1:
+            colors.append(c_bull)
+        else:
+            colors.append(c_bear)
+            
+    fig.add_trace(go.Candlestick(
+        x=sub_df.index,
+        open=sub_df['Open'], high=sub_df['High'],
+        low=sub_df['Low'], close=sub_df['Close'],
+        name='Price',
+        increasing_line_color=c_bull, decreasing_line_color=c_bear,
+        increasing_fillcolor=c_bull, decreasing_fillcolor=c_bear,
+        showlegend=False
+    ), row=1, col=1)
+    
+    # Override colors with our custom logic (Plotly trick: separate scatter for custom colors or just use shape coloring)
+    # Actually, simpler to just color the SuperTrend line vividly and let candles be standard or trend-colored.
+    # To enforce "Regime Candles", we can't easily override internal Candlestick colors per-bar in standard Plotly without complex tricks.
+    # We will trust the SuperTrend Line for regime indication.
+    
+    # 2. SuperTrend Line
+    # Create segments to color the line correctly
+    st_vals = sub_df['supertrend']
+    
+    # We draw points. For a continuous line that changes color, we need two traces or a gradient.
+    # Simple approach: Two traces, masked.
+    st_bull = st_vals.where(sub_df['trend_dir'] == 1)
+    st_bear = st_vals.where(sub_df['trend_dir'] == -1)
+    
+    fig.add_trace(go.Scatter(
+        x=sub_df.index, y=st_bull,
+        mode='lines', line=dict(color=c_bull, width=3),
+        name='SuperTrend Bull'
+    ), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(
+        x=sub_df.index, y=st_bear,
+        mode='lines', line=dict(color=c_bear, width=3),
+        name='SuperTrend Bear'
+    ), row=1, col=1)
+    
+    # 3. Signals
+    longs = sub_df[sub_df['sig_long']]
+    shorts = sub_df[sub_df['sig_short']]
+    
+    if not longs.empty:
+        fig.add_trace(go.Scatter(
+            x=longs.index, y=longs['Low'] * 0.99,
+            mode='markers+text', marker_symbol='triangle-up', marker_size=14, marker_color=c_bull,
+            text='LONG', textposition='bottom center', textfont=dict(color=c_bull), name='Long Signal'
+        ), row=1, col=1)
+        
+    if not shorts.empty:
+        fig.add_trace(go.Scatter(
+            x=shorts.index, y=shorts['High'] * 1.01,
+            mode='markers+text', marker_symbol='triangle-down', marker_size=14, marker_color=c_bear,
+            text='SHORT', textposition='top center', textfont=dict(color=c_bear), name='Short Signal'
+        ), row=1, col=1)
+
+    # --- CHART 2: APEX VECTOR ---
+    vec_vals = sub_df['vector']
+    vec_cols = [c_bull if v > 0.5 else (c_bear if v < -0.5 else c_chop) for v in vec_vals]
+    
+    fig.add_trace(go.Bar(
+        x=sub_df.index, y=vec_vals,
+        marker_color=vec_cols,
+        name='Vector Flux'
+    ), row=2, col=1)
+    
+    # Thresholds
+    fig.add_hline(y=0.5, line_dash="dot", line_color="rgba(255,255,255,0.2)", row=2, col=1)
+    fig.add_hline(y=-0.5, line_dash="dot", line_color="rgba(255,255,255,0.2)", row=2, col=1)
+
+    # Styling
+    fig.update_layout(
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        height=800,
+        margin=dict(l=10, r=50, t=50, b=20),
+        xaxis_rangeslider_visible=False,
+        showlegend=False
+    )
+    
+    return fig
+
+# ----------------------------
+# 5. MAIN APP INTERFACE
 # ----------------------------
 def main():
-    st.set_page_config(page_title="THE ARCHITECT — Alpha Constellation", layout="wide")
-    inject_css()
+    st.sidebar.markdown("## 💀 THE ARCHITECT")
+    st.sidebar.caption("Dark Pool // Singularity Engine")
+    
+    # INPUTS
+    ticker = st.sidebar.text_input("TICKER", "BTC-USD").upper()
+    
+    with st.sidebar.expander("Trend Architecture", expanded=True):
+        st_len = st.slider("ATR Length", 5, 50, 10)
+        st_mult = st.slider("Trend Factor", 1.0, 10.0, 4.0, 0.1)
+    
+    with st.sidebar.expander("Noise Gate (Chop)", expanded=True):
+        use_chop = st.checkbox("Active Chop Filter", True)
+        chop_len = st.slider("Chop Lookback", 10, 30, 14)
+        chop_thresh = st.slider("Chop Threshold", 40.0, 70.0, 60.0, 0.5)
 
-    st.title("🏛️ THE ARCHITECT — ALPHA CONSTELLATION")
-    st.caption("Live Institutional Multi-Factor Screener [YFinance Powered]")
+    with st.sidebar.expander("Apex Vector", expanded=False):
+        vol_len = st.slider("Volume Memory", 20, 100, 50)
+        smooth = st.slider("Smoothing", 2, 20, 5)
 
-    with st.sidebar:
-        st.subheader("Universe")
-        default_tickers = "AAPL, MSFT, NVDA, GOOGL, META, TSLA, AMZN, JPM, V, WMT, PG, KO, JNJ, UNH, XOM"
-        tickers_raw = st.text_area("Tickers (comma-separated)", default_tickers, height=120)
-        tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
-
-        st.divider()
-        st.subheader("Ensemble Controls")
-        crowd_floor = st.slider("Uniqueness penalty floor", 0.10, 0.90, 0.35, 0.05)
-        temp = st.slider("Weight softmax temperature", 0.2, 3.0, 1.0, 0.1)
-
-        st.divider()
-        st.subheader("Strategies")
-        specs: List[StrategySpec] = []
-        for key, (label, _, defaults) in STRATEGIES.items():
-            with st.expander(label, expanded=False):
-                enabled = st.checkbox("Enabled", value=True, key=f"en_{key}")
-                weight = st.slider("Weight", 0.0, 5.0, 1.0, 0.1, key=f"w_{key}")
-                params = {}
-                if "winsor" in defaults:
-                    params["winsor"] = st.slider("Winsorization (%)", 0.0, 0.10, float(defaults["winsor"]), 0.01, key=f"win_{key}")
-                if key == "momentum":
-                    params["crash_penalty"] = st.slider("Crash penalty", 0.0, 2.0, float(defaults["crash_penalty"]), 0.1, key=f"cp_{key}")
+    if st.sidebar.button("INITIALIZE", type="primary"):
+        # DATA FETCH
+        try:
+            with st.spinner("Accessing Market Feed..."):
+                df = yf.download(ticker, period="1y", interval="1d", progress=False)
                 
-                specs.append(StrategySpec(key=key, label=label, enabled=enabled, weight=weight, params=params))
-
-        st.divider()
-        run_btn = st.button("EXECUTE ALPHA SEQUENCE")
-
-    if not run_btn:
-        st.info("Awaiting Execution Command.")
-        return
-
-    with st.spinner("Fetching Live Market Data..."):
-        adapter = DataAdapter()
-        bundle = adapter.load(tickers)
-        df = bundle.df
-
-    if df.empty:
-        st.error("Data Fetch Failed. Check tickers or connection.")
-        return
-
-    # Run engine
-    result = run_ensemble(df, specs, crowd_floor=crowd_floor, temp=temp)
-
-    # Metrics
-    st.subheader("Market Recon")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Universe Size", len(tickers))
-    c2.metric("Active Strategies", sum(s.enabled for s in specs))
-    best_stock = result.index[0] if not result.empty else "N/A"
-    c3.metric("Top Alpha Pick", best_stock)
-    c4.metric("UTC Time", datetime.now(timezone.utc).strftime("%H:%M:%S"))
-
-    # Main Table
-    st.subheader("Alpha Rankings")
-    
-    # Dynamic column selection based on data availability
-    base_cols = ["alpha_rank", "alpha_score", "price_now", "industry", "fwd_pe", "ret_3m"]
-    # Filter base_cols to only those in result
-    final_cols = [c for c in base_cols if c in result.columns]
-    
-    st.dataframe(
-        result[final_cols].style.background_gradient(subset=["alpha_score"], cmap="viridis"),
-        use_container_width=True
-    )
-
-    # Detail View
-    st.subheader("Signal Decomposition")
-    st.caption("Standardized Z-Scores (Higher = Stronger Signal)")
-    sig_cols = [c for c in result.columns if c.startswith("sig_")]
-    st.dataframe(result[sig_cols].head(15), use_container_width=True)
-
-    # Correlation Matrix
-    with st.expander("Strategy Correlations (Crowding Check)"):
-        enabled_keys = [s.key for s in specs if s.enabled]
-        if len(enabled_keys) > 1:
-            sig_df = result[[f"sig_{k}" for k in enabled_keys]].rename(columns={f"sig_{k}": k for k in enabled_keys})
-            corr = corr_matrix(sig_df)
-            st.dataframe(corr.style.background_gradient(cmap="RdBu", vmin=-1, vmax=1), use_container_width=True)
-        else:
-            st.write("Need >1 strategy for correlation analysis.")
+            if df.empty:
+                st.error("Feed connection failed.")
+                return
+                
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            
+            # RUN ENGINE
+            params = {
+                'st_len': st_len, 'st_mult': st_mult,
+                'use_chop': use_chop, 'chop_len': chop_len, 'chop_thresh': chop_thresh,
+                'vol_len': vol_len, 'smooth': smooth
+            }
+            
+            df_calc = run_dark_singularity(df, params)
+            
+            # HEADS UP DISPLAY
+            last = df_calc.iloc[-1]
+            prev = df_calc.iloc[-2]
+            
+            # Status Logic
+            is_bull = last['trend_dir'] == 1
+            trend_txt = "BULLISH FLOW" if is_bull else "BEARISH FLOW"
+            trend_col = "off" if not is_bull else "normal" # Streamlit metric delta color logic
+            
+            is_choppy = last['chop_index'] > chop_thresh
+            gate_txt = "LOCKED (CHOP)" if (is_choppy and use_chop) else "OPEN (TRADE)"
+            
+            # METRICS
+            c1, c2, c3, c4 = st.columns(4)
+            
+            c1.metric("PRICE", f"{last['Close']:.2f}", f"{last['Close'] - prev['Close']:.2f}")
+            c2.metric("REGIME", trend_txt, delta=1 if is_bull else -1, delta_color="normal")
+            c3.metric("GATE", gate_txt, f"{last['chop_index']:.1f}", delta_color="off")
+            c4.metric("TRAILING STOP", f"{last['supertrend']:.2f}")
+            
+            # PLOT
+            st.markdown("---")
+            fig = render_terminal(df_calc, ticker, params)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # DATA DUMP
+            with st.expander("RAW FEED"):
+                st.dataframe(df_calc.tail(10)[['Close', 'supertrend', 'trend_dir', 'chop_index', 'vector', 'sig_long', 'sig_short']])
+                
+        except Exception as e:
+            st.error(f"Runtime Error: {e}")
 
 if __name__ == "__main__":
     main()
