@@ -13,3 +13,4 @@ matplotlib
 tweepy
 pillow
 streamlit-cropper
+watchdog
