@@ -13,7 +13,7 @@ import time as time_lib
 # 1. PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Titan v8.0 Pro Terminal",
+    page_title="Titan v8.1 Pro Terminal",
     layout="wide",
     page_icon="💠",
     initial_sidebar_state="expanded",
@@ -26,93 +26,39 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
     
-    /* Global Reset */
-    .stApp {
-        background-color: #000000;
-        color: #e0e0e0;
-        font-family: 'Roboto Mono', monospace;
-    }
+    .stApp { background-color: #000000; color: #e0e0e0; font-family: 'Roboto Mono', monospace; }
+    section[data-testid="stSidebar"] { background-color: #050505; border-right: 1px solid #222; }
     
-    /* Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: #050505;
-        border-right: 1px solid #222;
-    }
-    
-    /* Metrics Cards */
     div[data-testid="metric-container"] {
         background-color: #0a0a0a;
         border: 1px solid #333;
         border-radius: 4px;
         padding: 10px;
     }
-    label[data-testid="stMetricLabel"] {
-        color: #888;
-        font-size: 0.8rem !important;
-    }
-    div[data-testid="stMetricValue"] {
-        color: #fff;
-        font-size: 1.4rem !important;
-        font-weight: 700;
-    }
+    label[data-testid="stMetricLabel"] { color: #888; font-size: 0.8rem !important; }
+    div[data-testid="stMetricValue"] { color: #fff; font-size: 1.4rem !important; font-weight: 700; }
     
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 20px;
-        border-bottom: 1px solid #222;
-    }
+    .stTabs [data-baseweb="tab-list"] { gap: 20px; border-bottom: 1px solid #222; }
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: transparent;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-        color: #666;
+        height: 50px; white-space: pre-wrap; background-color: transparent;
+        border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; color: #666;
     }
-    .stTabs [aria-selected="true"] {
-        background-color: #0a0a0a;
-        color: #00E676;
-        border: 1px solid #333;
-        border-bottom: none;
-    }
+    .stTabs [aria-selected="true"] { background-color: #0a0a0a; color: #00E676; border: 1px solid #333; border-bottom: none; }
     
-    /* Alerts & Logs */
     .console-log {
-        font-family: 'Roboto Mono', monospace;
-        font-size: 0.75rem;
-        background: #080808;
-        border: 1px solid #222;
-        padding: 10px;
-        border-radius: 4px;
-        height: 200px;
-        overflow-y: auto;
+        font-family: 'Roboto Mono', monospace; font-size: 0.75rem; background: #080808;
+        border: 1px solid #222; padding: 10px; border-radius: 4px; height: 200px; overflow-y: auto;
     }
-    .log-line {
-        border-bottom: 1px solid #151515;
-        padding: 4px 0;
-        display: flex;
-        gap: 10px;
-    }
+    .log-line { border-bottom: 1px solid #151515; padding: 4px 0; display: flex; gap: 10px; }
     
-    /* Inputs */
     .stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] > div {
-        background-color: #080808;
-        color: #ddd;
-        border: 1px solid #333;
+        background-color: #080808; color: #ddd; border: 1px solid #333;
     }
-    
-    /* Scrollbar */
-    ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-track { background: #000; }
-    ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: #555; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. MATH ENGINE
+# 3. MATH ENGINE (FIXED SCALING)
 # ==========================================
 def rma(series, length):
     return series.ewm(alpha=1/length, adjust=False).mean()
@@ -124,10 +70,8 @@ def calc_indicators(df, p):
     df = df.copy()
     
     # --- 1. APEX VECTOR ---
-    # Inputs: len_vec, vol_norm, len_sm, eff_super, eff_resist
     rng = df["high"] - df["low"]
     body = (df["close"] - df["open"]).abs()
-    # Avoid DBZ
     df["eff_raw"] = np.where(rng==0, 0, body/rng)
     df["efficiency"] = df["eff_raw"].ewm(span=p["apex_len"]).mean()
     
@@ -137,7 +81,6 @@ def calc_indicators(df, p):
     raw_vec = np.sign(df["close"]-df["open"]) * df["efficiency"] * vol_fact
     df["flux"] = raw_vec.ewm(span=p["apex_sm"]).mean()
     
-    # State Logic
     th_s = p["apex_th_s"]
     th_r = p["apex_th_r"]
     
@@ -146,27 +89,33 @@ def calc_indicators(df, p):
         (df["flux"] < -th_s),
         (df["flux"].abs() < th_r)
     ]
-    df["state"] = np.select(conditions, [2, -2, 0], default=1) # 2=Bull, -2=Bear, 0=Chop, 1=Heat
+    df["state"] = np.select(conditions, [2, -2, 0], default=1)
 
-    # --- 2. DARK TREND ---
-    # Inputs: trend_len, trend_mult
+    # --- 2. DARK TREND (FIXED INITIALIZATION) ---
     atr = rma(df["high"]-df["low"], p["trend_len"])
     hl2 = (df["high"]+df["low"])/2
     up = hl2 + (p["trend_mult"] * atr)
     dn = hl2 - (p["trend_mult"] * atr)
     
+    # Initialize with NaNs to prevent 0-scaling issue
     trend = np.zeros(len(df))
-    stop = np.zeros(len(df))
+    stop = np.full(len(df), np.nan)
     
-    # Iterative Trend Calculation
     c = df["close"].values
+    
+    # Initialize first valid index
+    stop[0] = dn.iloc[0]
+    trend[0] = 1
+    
     for i in range(1, len(df)):
-        # Upper/Lower Logic
-        curr_up = up.iloc[i] if (up.iloc[i] < stop[i-1] or c[i-1] > stop[i-1]) else stop[i-1]
-        curr_dn = dn.iloc[i] if (dn.iloc[i] > stop[i-1] or c[i-1] < stop[i-1]) else stop[i-1]
+        # Handle NaN in previous stop if data is young
+        prev_stop = stop[i-1] if not np.isnan(stop[i-1]) else dn.iloc[i]
         
-        # Trend Switch
+        curr_up = up.iloc[i] if (up.iloc[i] < prev_stop or c[i-1] > prev_stop) else prev_stop
+        curr_dn = dn.iloc[i] if (dn.iloc[i] > prev_stop or c[i-1] < prev_stop) else prev_stop
+        
         prev_t = trend[i-1]
+        
         if prev_t == -1 and c[i] > curr_up:
             trend[i] = 1
             stop[i] = dn.iloc[i]
@@ -176,19 +125,14 @@ def calc_indicators(df, p):
         else:
             trend[i] = prev_t
             if trend[i] == 1:
-                stop[i] = max(stop[i-1], dn.iloc[i])
+                stop[i] = max(prev_stop, dn.iloc[i])
             else:
-                stop[i] = min(stop[i-1], up.iloc[i])
-                
-        if i==1: # Init
-            trend[i] = 1 if c[i] > hl2.iloc[i] else -1
-            stop[i] = dn.iloc[i] if trend[i] == 1 else up.iloc[i]
+                stop[i] = min(prev_stop, up.iloc[i])
 
     df["trend"] = trend
     df["stop"] = stop
     
     # --- 3. MATRIX ---
-    # Inputs: mat_len
     chg = df["close"].diff()
     gain = chg.clip(lower=0)
     loss = -chg.clip(upper=0)
@@ -215,11 +159,10 @@ def get_exchange(name):
     if name == 'OKX': return ccxt.okx()
     return ccxt.kraken()
 
-@st.cache_data(ttl=5) # 5s cache for responsiveness
+@st.cache_data(ttl=5)
 def fetch_candles(exch, sym, tf, lim):
     try:
         ex = get_exchange(exch)
-        # Enable rate limit to prevent bans
         ex.enableRateLimit = True
         ohlcv = ex.fetch_ohlcv(sym, tf, limit=lim)
         df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -232,9 +175,8 @@ def fetch_candles(exch, sym, tf, lim):
 # 5. SIDEBAR: THE CONTROL CENTER
 # ==========================================
 def sidebar_settings():
-    st.sidebar.markdown("### 💠 TITAN v8.0")
+    st.sidebar.markdown("### 💠 TITAN v8.1")
     
-    # 1. Exchange Settings
     with st.sidebar.expander("🌍 Exchange Connection", expanded=True):
         exch = st.selectbox("Exchange", ["Kraken", "Binance", "Bybit", "Coinbase", "OKX"])
         sym = st.text_input("Symbol", "BTC/USD")
@@ -242,7 +184,6 @@ def sidebar_settings():
         limit = st.slider("Candles", 100, 1000, 500)
         auto_ref = st.checkbox("Auto-Refresh (60s)", False)
 
-    # 2. Apex Settings
     with st.sidebar.expander("⚡ Apex Config", expanded=False):
         apex_len = st.number_input("Efficiency Len", 5, 50, 14)
         apex_vol = st.number_input("Volume Norm", 10, 100, 55)
@@ -250,18 +191,15 @@ def sidebar_settings():
         apex_th_s = st.slider("Super Thresh", 0.1, 1.0, 0.60)
         apex_th_r = st.slider("Resist Thresh", 0.0, 0.5, 0.30)
 
-    # 3. Trend Settings
     with st.sidebar.expander("🌊 Trend Config", expanded=False):
         trend_len = st.number_input("ATR Length", 5, 100, 55)
         trend_mult = st.number_input("Factor", 1.0, 10.0, 4.0, step=0.1)
 
-    # 4. API & Alerts
     with st.sidebar.expander("🤖 API & Alerts", expanded=False):
         api_key = st.text_input("OpenAI Key", type="password")
         tg_tok = st.text_input("TG Token", type="password")
         tg_id = st.text_input("TG Chat ID")
 
-    # Reload Button
     if st.sidebar.button("RELOAD DATA", type="primary", use_container_width=True):
         fetch_candles.clear()
         st.rerun()
@@ -431,7 +369,7 @@ log_box = st.container()
 with log_box:
     st.markdown(f"""
     <div class="console-log">
-        <div class="log-line"><span style="color:#00E676">SYSTEM</span> Titan v8.0 Initialized...</div>
+        <div class="log-line"><span style="color:#00E676">SYSTEM</span> Titan v8.1 Initialized...</div>
         <div class="log-line"><span style="color:#00E676">DATA</span> Connected to {cfg['exch']} ({cfg['limit']} candles)</div>
         <div class="log-line"><span style="color:#888">INFO</span> Current Close: {last['close']}</div>
         {''.join([f'<div class="log-line"><span style="color:#FFD600">ALERT</span> {s}</div>' for s in signals])}
