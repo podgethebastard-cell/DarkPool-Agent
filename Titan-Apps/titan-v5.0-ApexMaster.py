@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timezone
 from openai import OpenAI
-import requests  # For real broadcasting
+import requests
 
 # ==========================================
 # 1. PAGE CONFIGURATION
@@ -83,8 +83,18 @@ def double_smooth(src, long_len, short_len):
     return src.ewm(span=long_len, adjust=False).mean().ewm(span=short_len, adjust=False).mean()
 
 def hma(series, length):
-    wma = lambda s, l: s.rolling(l).apply(lambda x: np.dot(x, np.arange(1, l+1)) / np.arange(1, l+1).sum(), raw=True)
-    return wma(2 * wma(series, length // 2) - wma(series, length), int(np.sqrt(length)))
+    # HMA requires integer lengths for window calculations
+    half_length = int(length / 2)
+    sqrt_length = int(np.sqrt(length))
+    
+    def wma(s, l):
+        weights = np.arange(1, l + 1)
+        return s.rolling(l).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+
+    wma_half = wma(series, half_length)
+    wma_full = wma(series, length)
+    diff = 2 * wma_half - wma_full
+    return wma(diff, sqrt_length)
 
 # --- APEX VECTOR v4.1 ---
 def calc_apex_vector(df, p):
@@ -92,13 +102,13 @@ def calc_apex_vector(df, p):
     # Efficiency
     rng = df["high"] - df["low"]
     body = (df["close"] - df["open"]).abs()
-    eff = (body / (rng + 1e-10)).ewm(span=p["len_vec"]).mean()
+    eff = (body / (rng + 1e-10)).ewm(span=int(p["len_vec"])).mean()
     df["efficiency"] = eff
 
     # Flux
-    vol_fact = df["volume"] / (df["volume"].rolling(p["vol_norm"]).mean() + 1e-10)
+    vol_fact = df["volume"] / (df["volume"].rolling(int(p["vol_norm"])).mean() + 1e-10)
     raw = np.sign(df["close"] - df["open"]) * eff * vol_fact
-    df["flux"] = raw.ewm(span=p["len_sm"]).mean()
+    df["flux"] = raw.ewm(span=int(p["len_sm"])).mean()
 
     # State
     th_s = p["eff_super"] * p["strictness"]
@@ -107,7 +117,6 @@ def calc_apex_vector(df, p):
     df["apex_state"] = np.select(cond, [2, -2, 0], default=1)
     
     # Divergence (Simplified Vectorized)
-    # Note: True Pine pivot logic is complex in Python; utilizing simplified peak detection
     src = df["flux"]
     df["pivot_low"] = (src.shift(1) < src.shift(2)) & (src.shift(1) < src)
     df["pivot_high"] = (src.shift(1) > src.shift(2)) & (src.shift(1) > src)
@@ -121,7 +130,7 @@ def calc_apex_vector(df, p):
 # --- DARK TREND ---
 def calc_dark_trend(df, p):
     df = df.copy()
-    atr = rma(df["high"] - df["low"], p["len_main"])
+    atr = rma(df["high"] - df["low"], int(p["len_main"]))
     
     # SuperTrend-like Logic
     hl2 = (df["high"] + df["low"]) / 2
@@ -194,13 +203,6 @@ def calc_quantum(df, p):
     norm = (src - src.rolling(100).min()) / (src.rolling(100).max() - src.rolling(100).min() + 1e-10)
     
     # Entropy (Market Disorder)
-    ret = src.pct_change().fillna(0)
-    def get_ent(x):
-        hist, _ = np.histogram(x, bins=5, density=True)
-        p_ = hist[hist > 0] * np.diff(_)[hist > 0] # Probabilities
-        return -np.sum(p_ * np.log(p_ + 1e-10))
-    
-    # Rolling apply is slow, using approximated proxy for entropy based on volatility variance
     df["entropy"] = df["close"].pct_change().rolling(20).std() * 100 # Rough proxy for disorder
     
     # RQZO Oscillator
@@ -208,7 +210,7 @@ def calc_quantum(df, p):
     return df
 
 # ==========================================
-# 4. DATA & SETTINGS
+# 4. DATA & SETTINGS (FIXED)
 # ==========================================
 @st.cache_resource
 def get_exchange():
@@ -219,16 +221,29 @@ def get_data(sym, tf, lim):
     return pd.DataFrame(get_exchange().fetch_ohlcv(sym, tf, limit=lim), columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 def init_settings():
+    # ADDED: Missing defaults (vol_norm, len_vec, etc) to prevent KeyError
     defaults = {
-        "symbol": "BTC/USD", "timeframe": "15m", "limit": 500,
-        "len_main": 55, "st_mult": 4.0, "eff_super": 0.6, "eff_resist": 0.3,
-        "webhook_url": "" # For broadcasting
+        "symbol": "BTC/USD", 
+        "timeframe": "15m", 
+        "limit": 500,
+        "len_main": 55, 
+        "st_mult": 4.0, 
+        "eff_super": 0.6, 
+        "eff_resist": 0.3,
+        "webhook_url": "",
+        # Missing keys fixed here:
+        "vol_norm": 55,
+        "len_vec": 14,
+        "len_sm": 5,
+        "strictness": 1.0
     }
     if "cfg" not in st.session_state:
         st.session_state.cfg = defaults
     else:
+        # Merge missing keys into existing session
         for k,v in defaults.items():
-            if k not in st.session_state.cfg: st.session_state.cfg[k] = v
+            if k not in st.session_state.cfg: 
+                st.session_state.cfg[k] = v
 
 init_settings()
 cfg = st.session_state.cfg
@@ -269,10 +284,14 @@ except Exception as e:
 
 # Calculate All Indicators
 params = cfg # Flattened dict access
-df = calc_apex_vector(df, params)
-df = calc_dark_trend(df, params)
-df = calc_matrix(df, params)
-df = calc_quantum(df, params)
+try:
+    df = calc_apex_vector(df, params)
+    df = calc_dark_trend(df, params)
+    df = calc_matrix(df, params)
+    df = calc_quantum(df, params)
+except Exception as e:
+    st.error(f"Calculation Error: {e}")
+    st.stop()
 
 last = df.iloc[-1]
 prev = df.iloc[-2]
@@ -295,12 +314,9 @@ if last["div_bear"]: signals.append("💎 APEX: BEARISH DIVERGENCE")
 # Trigger Broadcasts
 if signals:
     msg = f"**{cfg['symbol']} ({cfg['timeframe']})**\n" + "\n".join(signals)
-    # 1. UI Toast
     st.toast(msg, icon="🔔")
-    # 2. Webhook (If configured)
     if cfg["webhook_url"]:
         try:
-            # Uncomment to enable real POST
             # requests.post(cfg["webhook_url"], json={"content": msg}) 
             pass 
         except: pass
@@ -375,6 +391,148 @@ with t_main:
 
 # --- TAB 2: APEX VECTOR DETAILED ---
 with t_apex:
+    col_l, col_r = st.columns([3, 1])
+    with col_l:
+        # Dual Pane: Price + Flux
+        fig_av = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.05)
+        fig_av.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"]), row=1, col=1)
+        
+        # Color Flux Bars
+        colors = ["#00E676" if s == 2 else ("#FF1744" if s == -2 else ("#546E7A" if s == 0 else "#FFD600")) for s in df["apex_state"]]
+        fig_av.add_trace(go.Bar(x=df["timestamp"], y=df["flux"], marker_color=colors, name="Flux"), row=2, col=1)
+        
+        # Add Threshold Lines
+        th = cfg["eff_super"]
+        fig_av.add_hline(y=th, line_dash="dot", line_color="gray", row=2, col=1)
+        fig_av.add_hline(y=-th, line_dash="dot", line_color="gray", row=2, col=1)
+        
+        fig_av.update_layout(height=600, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig_av, use_container_width=True)
+        
+    with col_r:
+        st.markdown("#### 🔍 Vector Analysis")
+        
+        # Rule Based Text Generation
+        flux_val = last["flux"]
+        eff_val = last["efficiency"]
+        
+        state_str = "neutral"
+        if flux_val > cfg["eff_super"]: state_str = "super_bull"
+        elif flux_val < -cfg["eff_super"]: state_str = "super_bear"
+        elif abs(flux_val) < cfg["eff_resist"]: state_str = "resistive"
+        
+        analysis_text = ""
+        if state_str == "super_bull":
+            analysis_text = "Market is in **Superconductor State (Bullish)**. Efficiency is high, meaning price is moving with low resistance. Volume supports the move."
+        elif state_str == "super_bear":
+            analysis_text = "Market is in **Superconductor State (Bearish)**. Sellers are dominating with high efficiency. Expect continuation down."
+        elif state_str == "resistive":
+            analysis_text = "Market is **Resistive (Choppy)**. Flux is too low to sustain a trend. Avoid trading or use mean-reversion tactics."
+        else:
+            analysis_text = "Market is in **High Heat**. Volatility is present but direction is not fully efficient yet. Caution advised."
+            
+        st.markdown(f"""
+        <div class="analysis-box">
+            <b>Current Flux:</b> {flux_val:.3f}<br>
+            <b>Efficiency:</b> {eff_val:.2f}<br>
+            <hr style="border-color:#333">
+            {analysis_text}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if last["div_bull"]:
+            st.warning("⚠️ Bullish Divergence Detected!")
+
+# --- TAB 3: DARK TREND DETAILED ---
+with t_dark:
+    fig_dk = go.Figure()
+    fig_dk.add_trace(go.Candlestick(x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"))
+    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"], line=dict(color="#00E5FF", width=2), name="Trend Line"))
+    
+    # Cloud Effect
+    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"] + (df["stop_line"]*0.005), line=dict(width=0), showlegend=False))
+    fig_dk.add_trace(go.Scatter(x=df["timestamp"], y=df["stop_line"] - (df["stop_line"]*0.005), fill="tonexty", 
+                                fillcolor=("rgba(0, 230, 118, 0.15)" if last["trend"]==1 else "rgba(255, 23, 68, 0.15)"), 
+                                line=dict(width=0), name="Cloud"))
+    
+    fig_dk.update_layout(height=550, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig_dk, use_container_width=True)
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        chop = last["chop"]
+        chop_state = "TRENDING" if chop < 50 else "CHOPPY/RANGING"
+        chop_color = "c-bull" if chop < 50 else "c-bear"
+        
+        st.markdown(f"""
+        <div class="analysis-box">
+            <b>Chop Index:</b> {chop:.1f} <span class="{chop_color}">({chop_state})</span><br>
+            Values below 38 indicate strong trends. Values above 61 indicate intense consolidation.
+        </div>
+        """, unsafe_allow_html=True)
+
+# --- TAB 4: MATRIX DETAILED ---
+with t_mat:
+    fig_m = make_subplots(rows=2, cols=1, shared_xaxes=True)
+    fig_m.add_trace(go.Scatter(x=df["timestamp"], y=df["mfi"], fill="tozeroy", line=dict(color="#D500F9"), name="Money Flow"), row=1, col=1)
+    fig_m.add_trace(go.Bar(x=df["timestamp"], y=df["hyperwave"], marker_color="#00E5FF", name="HyperWave"), row=2, col=1)
+    fig_m.update_layout(height=550, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig_m, use_container_width=True)
+    
+    st.info("Matrix combines **Money Flow** (Volume+RSI) and **HyperWave** (Double Smoothed Momentum). When both align, the signal is strongest.")
+
+# --- TAB 5: QUANTUM ---
+with t_quant:
+    fig_q = go.Figure()
+    fig_q.add_trace(go.Scatter(x=df["timestamp"], y=df["rqzo"], line=dict(color="white"), name="RQZO"))
+    
+    # Highlight Chaos
+    chaos_zone = df[df["entropy"] > 2.0] # Arbitrary threshold for this simplified calc
+    fig_q.add_trace(go.Scatter(x=chaos_zone["timestamp"], y=chaos_zone["rqzo"], mode="markers", marker=dict(color="red", size=4), name="High Entropy"))
+    
+    fig_q.update_layout(height=500, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig_q, use_container_width=True)
+    
+    st.markdown("Red dots indicate **High Entropy (Chaos)** areas where price prediction is statistically unreliable.")
+
+# --- TAB 6: AI ANALYST ---
+with t_ai:
+    st.subheader("🤖 GPT-4o Quant Synthesis")
+    
+    prompt_txt = f"""
+    ASSET: {cfg['symbol']} ({cfg['timeframe']})
+    
+    1. APEX VECTOR:
+    - Flux: {last['flux']:.3f} (Threshold {cfg['eff_super']})
+    - Efficiency: {last['efficiency']:.2f}
+    - Divergence: {('BULL' if last['div_bull'] else ('BEAR' if last['div_bear'] else 'NONE'))}
+    
+    2. DARK TREND:
+    - Direction: {('UP' if last['trend']==1 else 'DOWN')}
+    - Chop Index: {last['chop']:.1f}
+    
+    3. MATRIX SCORE: {last['matrix_score']}
+    
+    TASK: Provide a 3-sentence executive summary on BIAS, ENTRY, and RISK.
+    """
+    
+    st.code(prompt_txt, language="text")
+    
+    ai_key = st.text_input("OpenAI API Key (Optional)", type="password")
+    if st.button("Generate Report"):
+        if not ai_key:
+            st.error("Please provide an API Key.")
+        else:
+            with st.spinner("Analyzing market physics..."):
+                try:
+                    client = OpenAI(api_key=ai_key)
+                    resp = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[{"role":"user", "content": prompt_txt}]
+                    )
+                    st.success(resp.choices[0].message.content)
+                except Exception as e:
+                    st.error(str(e))with t_apex:
     col_l, col_r = st.columns([3, 1])
     with col_l:
         # Dual Pane: Price + Flux
