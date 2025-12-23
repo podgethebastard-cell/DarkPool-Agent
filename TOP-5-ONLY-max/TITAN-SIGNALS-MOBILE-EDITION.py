@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 # PAGE CONFIG (Mobile Friendly)
 # =============================================================================
 st.set_page_config(
-    page_title="TITAN MOBILE",
+    page_title="TITAN SIGNALS-MOBILE",
     layout="wide", # Wide layout allows full width usage on mobile
     page_icon="📱",
     initial_sidebar_state="collapsed" # Collapsed by default for mobile screen space
