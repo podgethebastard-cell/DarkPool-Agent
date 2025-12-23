@@ -192,7 +192,7 @@ def double_smooth(src, long_len, short_len):
     return smooth2
 
 # ==========================================
-# 4. APEX VECTOR v4.1 LOGIC (Full Port)
+# 4. APEX VECTOR v4.1 LOGIC
 # ==========================================
 def calc_apex_vector_v4(df, p):
     df = df.copy()
@@ -232,8 +232,6 @@ def calc_apex_vector_v4(df, p):
     df["apex_state"] = np.select(conditions, choices, default=1)
 
     # --- 6. Divergence Engine (Fixed Loop) ---
-    # We need to simulate Pine's 'pivothigh/low' which identifies a pivot 
-    # at index `i` only after `right` bars have passed.
     look = p["div_look"]
     
     # Initialize output columns
@@ -242,7 +240,6 @@ def calc_apex_vector_v4(df, p):
     df["div_bear_reg"] = False
     df["div_bear_hid"] = False
     
-    # We iterate carefully to replicate Pine state memory
     flux = df["flux"].values
     highs = df["high"].values
     lows = df["low"].values
@@ -253,45 +250,41 @@ def calc_apex_vector_v4(df, p):
     prev_ph_flux = np.nan
     prev_ph_price = np.nan
     
-    # Arrays for vector assignment later
     div_bull_reg_arr = np.zeros(n, dtype=bool)
     div_bull_hid_arr = np.zeros(n, dtype=bool)
     div_bear_reg_arr = np.zeros(n, dtype=bool)
     div_bear_hid_arr = np.zeros(n, dtype=bool)
 
     # Simple rolling window check for pivots (center of window is max/min)
-    # Range: look to n - look
     for i in range(look, n - look):
         # 1. Pivot Low Detection
         window_fl = flux[i-look : i+look+1]
         if flux[i] == np.min(window_fl):
             # Pivot Low found at 'i'
             pl = flux[i]
-            price_at_pivot = lows[i] # In Pine: low[div_look] from the perspective of confirmation
+            price_at_pivot = lows[i] 
             
             if not np.isnan(prev_pl_flux):
-                # Regular Bull: Lower Price, Higher Flux
+                # Regular Bull
                 if p["show_reg"] and (price_at_pivot < prev_pl_price) and (pl > prev_pl_flux):
                     div_bull_reg_arr[i] = True
-                # Hidden Bull: Higher Price, Lower Flux
+                # Hidden Bull
                 if p["show_hid"] and (price_at_pivot > prev_pl_price) and (pl < prev_pl_flux):
                     div_bull_hid_arr[i] = True
             
-            # Update Memory
             prev_pl_flux = pl
             prev_pl_price = price_at_pivot
 
         # 2. Pivot High Detection
         if flux[i] == np.max(window_fl):
-            # Pivot High found at 'i'
             ph = flux[i]
             price_at_pivot = highs[i]
             
             if not np.isnan(prev_ph_flux):
-                # Regular Bear: Higher Price, Lower Flux
+                # Regular Bear
                 if p["show_reg"] and (price_at_pivot > prev_ph_price) and (ph < prev_ph_flux):
                     div_bear_reg_arr[i] = True
-                # Hidden Bear: Lower Price, Higher Flux
+                # Hidden Bear
                 if p["show_hid"] and (price_at_pivot < prev_ph_price) and (ph > prev_ph_flux):
                     div_bear_hid_arr[i] = True
             
@@ -558,10 +551,11 @@ def settings_panel():
         })
         st.toast("Settings updated", icon="⚡")
 
-try:
+# Safe Check for Popover (Avoids Streamlit Form Duplicate Key Error)
+if hasattr(st, "popover"):
     with st.popover("⚙️ Settings", use_container_width=True):
         settings_panel()
-except:
+else:
     with st.sidebar:
         settings_panel()
 
@@ -570,7 +564,6 @@ cfg = st.session_state.cfg
 # ==========================================
 # 7. MAIN EXECUTION
 # ==========================================
-# Compile Parameter Dict
 params = {
     "vol_norm": 55, "chop_len": 14, "chop_thresh": 60, "st_len": 10, 
     "mf_len": 14, "mf_smooth": 3, "hw_long": 25, "hw_short": 13,
@@ -665,7 +658,6 @@ with t1:
                              line=dict(width=0), name="Cloud"), row=1, col=1)
     
     # -- Pane 2: Apex Vector Flux --
-    # Vector Colors
     colors = []
     for s in df["apex_state"]:
         if s == 2: colors.append("#00E676")   # Bull
