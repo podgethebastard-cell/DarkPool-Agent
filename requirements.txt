@@ -11,3 +11,5 @@ openpyxl
 xlsxwriter
 matplotlib
 tweepy
+pillow
+streamlit-cropper
