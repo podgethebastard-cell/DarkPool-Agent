@@ -6,122 +6,199 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit.components.v1 as components
 import requests
-import time
 from openai import OpenAI
 
 # ==========================================
-# 1. SETUP PAGE CONFIGURATION
+# 1. PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Titan Mobile", 
+    page_title="Titan Mobile v2", 
     layout="centered", 
     page_icon="⚡", 
     initial_sidebar_state="collapsed"
 )
 
 # ==========================================
-# 2. CUSTOM CSS
+# 2. CUSTOM CSS (DPC ARCHITECTURE)
 # ==========================================
 st.markdown("""
     <style>
-    /* --- MOBILE BASE STYLES --- */
+    /* --- CORE THEME --- */
+    @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Roboto Mono', monospace; 
+        background-color: #050505;
+        color: #e0e0e0;
+    }
+    
+    /* HIDE STREAMLIT CHROME */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Roboto Mono', monospace; }
+    header {visibility: hidden;}
     
-    /* Increase button size for touch targets */
+    /* INPUTS */
+    .stTextInput > div > div > input, .stSelectbox > div > div > div {
+        background-color: #111;
+        color: #00ffbb;
+        border: 1px solid #333;
+    }
+
+    /* BUTTONS */
     div.stButton > button:first-child {
         width: 100%;
         height: 3.5em;
         font-weight: bold; 
-        border-radius: 12px;
+        border-radius: 8px;
         text-transform: uppercase;
         letter-spacing: 1px;
+        background: #111;
+        border: 1px solid #333;
+        color: #ccc;
+        transition: all 0.2s ease;
+    }
+    div.stButton > button:first-child:hover {
+        border-color: #00ffbb;
+        color: #00ffbb;
+        box-shadow: 0 0 10px rgba(0, 255, 187, 0.2);
+    }
+    div.stButton > button:active {
+        background: #00ffbb;
+        color: #000;
     }
 
-    /* --- TITAN SPECIFIC STYLES --- */
-    /* TITAN METRIC CARD CSS */
+    /* --- TITAN CARDS --- */
     .titan-card {
-        background: #0f0f0f;
-        border: 1px solid #222;
-        border-left: 4px solid #555;
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 10px;
-    }
-    .titan-card h4 { margin: 0; font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
-    .titan-card h2 { margin: 5px 0 0 0; font-size: 1.4rem; font-weight: 700; color: #fff; } 
-    .titan-card .sub { font-size: 0.7rem; color: #555; margin-top: 5px; }
-    
-    /* STATUS COLORS */
-    .border-bull { border-left-color: #00ffbb !important; }
-    .border-bear { border-left-color: #ff1155 !important; }
-    .text-bull { color: #00ffbb !important; }
-    .text-bear { color: #ff1155 !important; }
-    .text-white { color: #fff !important; }
-    
-    /* AI ANALYSIS BOX */
-    .ai-box {
         background: #0a0a0a;
+        border: 1px solid #222;
+        border-left: 3px solid #555;
+        padding: 12px 15px;
+        border-radius: 6px;
+        margin-bottom: 10px;
+        position: relative;
+        overflow: hidden;
+    }
+    .titan-card::after {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.02), transparent);
+        pointer-events: none;
+    }
+
+    .titan-card h4 { 
+        margin: 0; 
+        font-size: 0.65rem; 
+        color: #666; 
+        text-transform: uppercase; 
+        letter-spacing: 1.5px;
+        font-weight: 700;
+    }
+    .titan-card h2 { 
+        margin: 4px 0 0 0; 
+        font-size: 1.3rem; 
+        font-weight: 700; 
+        color: #fff; 
+        font-family: 'Roboto Mono', monospace;
+    } 
+    .titan-card .sub { 
+        font-size: 0.7rem; 
+        color: #444; 
+        margin-top: 4px; 
+    }
+    
+    /* STATUS MODIFIERS */
+    .border-bull { border-left-color: #00E676 !important; } /* Apex Neon Green */
+    .border-bear { border-left-color: #FF1744 !important; } /* Apex Neon Red */
+    .border-chop { border-left-color: #546E7A !important; } /* Apex Resistive */
+    
+    .text-bull { color: #00E676 !important; text-shadow: 0 0 10px rgba(0, 230, 118, 0.3); }
+    .text-bear { color: #FF1744 !important; text-shadow: 0 0 10px rgba(255, 23, 68, 0.3); }
+    .text-chop { color: #546E7A !important; }
+    .text-white { color: #fff !important; }
+
+    /* AI TERMINAL */
+    .ai-box {
+        background: #080808;
         border: 1px solid #333;
         padding: 15px;
-        border-radius: 8px;
+        border-radius: 4px;
         margin-top: 20px;
-        border-left: 3px solid #7d00ff;
-        font-size: 0.9rem;
+        border-left: 2px solid #7d00ff;
+        font-size: 0.85rem;
+        line-height: 1.4;
+        color: #ccc;
     }
     
-    /* TOASTS */
-    div[data-testid="stToast"] { background-color: #1a1a1a; border: 1px solid #333; color: white; }
+    /* TABS */
+    .stTabs [data-baseweb="tab-list"] { gap: 2px; }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #0e0e0e;
+        border-radius: 4px 4px 0px 0px;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        color: #666;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #1a1a1a;
+        color: #fff;
+        border-bottom: 2px solid #00ffbb;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. UTILITIES & CALCS
+# 3. UTILITIES & MATH ENGINE
 # ==========================================
+
+def fmt_price(val):
+    if val is None or np.isnan(val): return "0.00"
+    if val < 1.0: return f"{val:.6f}"
+    elif val < 10.0: return f"{val:.4f}"
+    else: return f"{val:,.2f}"
+
 def send_telegram_msg(token, chat, msg):
     if not token or not chat: return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat, "text": msg, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=5)
         return True
     except: return False
 
-# --- NEW: SMART PRICE FORMATTER ---
-def fmt_price(val):
-    """Formats price based on magnitude (High precision for low values)"""
-    if val < 1.0: return f"{val:.6f}"
-    elif val < 10.0: return f"{val:.4f}"
-    else: return f"{val:,.2f}"
-
-def get_ai_analysis(df_summary, symbol, tf, ai_key):
-    if not ai_key: return "⚠️ Missing API Key. Check Config Tab."
-    
+def get_ai_analysis(summary_text, ai_key):
+    if not ai_key: return "⚠️ Missing API Key in Config."
     try:
         client = OpenAI(api_key=ai_key)
         prompt = f"""
-        Act as a Titan Scalper AI. Analyze {symbol} ({tf}):
-        Data: {df_summary}
-        Output:
-        1. Setup Assessment
-        2. Confluence Check
-        3. Bias (BULL/BEAR/WAIT)
-        Keep it under 80 words. Bullet points.
+        Role: Apex Quantitative System.
+        Analyze this crypto setup based on Titan/Apex indicators:
+        {summary_text}
+        
+        Task: Provide a high-precision trading assessment.
+        Output Format:
+        • BIAS: [BULLISH / BEARISH / NEUTRAL]
+        • SETUP: [Brief description of Flux/Structure]
+        • RISK: [High/Med/Low]
+        • TACTIC: [Limit Entry / Market / Wait]
+        Keep total response under 60 words. No fluff.
         """
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "system", "content": "Sniper scalper."}, {"role": "user", "content": prompt}]
+            messages=[{"role": "system", "content": "You are a quantitative trading assistant."}, {"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
-    except Exception as e: return f"Error: {e}"
+    except Exception as e: return f"AI Error: {e}"
 
-# Math Helpers
+# --- CORE MATH FUNCTIONS ---
 def weighted_ma(series, length):
     weights = np.arange(1, length + 1)
     return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
 
-def calc_hma_full(series, length):
+def calc_hma(series, length):
     half_length = int(length / 2)
     sqrt_length = int(np.sqrt(length))
     wma_half = weighted_ma(series, half_length)
@@ -129,279 +206,404 @@ def calc_hma_full(series, length):
     diff = 2 * wma_half - wma_full
     return weighted_ma(diff, sqrt_length)
 
-def calculate_rsi(series, length):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=length).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=length).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+def rma(series, length):
+    """Running Moving Average (Pine Script default for ATR)"""
+    return series.ewm(alpha=1/length, adjust=False).mean()
 
-def calculate_mfi(high, low, close, volume, length):
-    tp = (high + low + close) / 3
-    rmf = tp * volume
-    pos = rmf.where(tp > tp.shift(1), 0).rolling(length).sum()
-    neg = rmf.where(tp < tp.shift(1), 0).rolling(length).sum()
-    return 100 - (100 / (1 + (pos / neg)))
+def calculate_atr(df, length):
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    return rma(true_range, length)
 
 # ==========================================
-# 4. DATA ENGINE
+# 4. TITAN + APEX DATA ENGINE
 # ==========================================
-@st.cache_data(ttl=10) 
-def get_data(symbol, timeframe, limit):
+@st.cache_data(ttl=15) 
+def fetch_market_data(symbol, timeframe, limit):
     try:
         exchange = ccxt.kraken()
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df
-    except: return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Data Fetch Error: {e}")
+        return pd.DataFrame()
 
-def run_titan_engine(df, amplitude, channel_dev, hma_len, mf_len, vol_len, hyper_long, hyper_short):
-    # Dark Vector Logic
-    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
-    df['atr_algo'] = (df['tr'].ewm(alpha=1/100, adjust=False).mean() / 2)
-    df['dev'] = df['atr_algo'] * channel_dev
-    df['hma'] = calc_hma_full(df['close'], hma_len)
+def run_apex_engine(df, hma_len, atr_mult, flux_len, flux_smooth):
+    if df.empty: return df
 
-    # Staircase Logic
-    df['ll'] = df['low'].rolling(amplitude).min()
-    df['hh'] = df['high'].rolling(amplitude).max()
+    # --- 1. APEX VECTOR (FLUX) LOGIC ---
+    # Concept: Efficiency = Body / Range. Flux = Dir * Eff * RelVol
+    df['range'] = df['high'] - df['low']
+    df['body'] = (df['close'] - df['open']).abs()
+    # Avoid div by zero
+    df['efficiency'] = np.where(df['range'] == 0, 0, df['body'] / df['range'])
     
-    trend = np.zeros(len(df)); stop = np.zeros(len(df))
-    curr_trend = 0; curr_stop = df['close'].iloc[0]
-    curr_max_l = 0.0; curr_min_h = 0.0
+    # Volume Factor
+    df['vol_avg'] = df['volume'].rolling(55).mean()
+    df['vol_fact'] = np.where(df['vol_avg'] == 0, 1.0, df['volume'] / df['vol_avg'])
+    
+    # Direction & Raw Vector
+    df['direction'] = np.sign(df['close'] - df['open'])
+    df['vector_raw'] = df['direction'] * df['efficiency'] * df['vol_fact']
+    
+    # Smoothed Flux
+    df['apex_flux'] = df['vector_raw'].ewm(span=flux_smooth).mean()
+    
+    # State Classification (Superconductor vs Resistive)
+    super_thresh = 0.60 
+    resist_thresh = 0.30
+    
+    conditions = [
+        (df['apex_flux'] > super_thresh), # Super Bull
+        (df['apex_flux'] < -super_thresh), # Super Bear
+        (df['apex_flux'].abs() < resist_thresh) # Resistive
+    ]
+    choices = [2, -2, 0] # 2=SuperBull, -2=SuperBear, 0=Resistive, 1/-1=Heat
+    df['flux_state_code'] = np.select(conditions, choices, default=np.where(df['apex_flux']>0, 1, -1))
 
-    # Fast loop
-    for i in range(amplitude, len(df)):
-        c = df['close'].iloc[i]; l = df['ll'].iloc[i]; h = df['hh'].iloc[i]
-        dev = df['dev'].iloc[i] if not np.isnan(df['dev'].iloc[i]) else 0
-        
-        curr_max_l = max(l, curr_max_l)
-        curr_min_h = min(h, curr_min_h) if curr_min_h != 0 else h
+    # --- 2. APEX TREND (HMA CLOUD) LOGIC ---
+    df['hma_base'] = calc_hma(df['close'], hma_len)
+    df['atr'] = calculate_atr(df, hma_len)
+    df['trend_upper'] = df['hma_base'] + (df['atr'] * atr_mult)
+    df['trend_lower'] = df['hma_base'] - (df['atr'] * atr_mult)
+    
+    # Trend Determination
+    # 1 = Bull, -1 = Bear
+    # Vectorized check: if close > upper -> 1, if close < lower -> -1, else hold previous
+    # Since Pandas vectorization with "hold previous" is hard, we use a loop or forward fill logic
+    # Fast approach: assign triggers then ffill
+    
+    df['trend_trigger'] = 0
+    df.loc[df['close'] > df['trend_upper'], 'trend_trigger'] = 1
+    df.loc[df['close'] < df['trend_lower'], 'trend_trigger'] = -1
+    
+    # Replace 0 with NaN for ffill, then fillna(0) for start
+    df['apex_trend'] = df['trend_trigger'].replace(0, np.nan).ffill().fillna(0).astype(int)
 
-        if curr_trend == 0: # Bull
-            if c < curr_max_l: curr_trend = 1; curr_min_h = h
-            else: 
-                curr_min_h = min(curr_min_h, h)
-                if l < curr_max_l: curr_max_l = l
-        else: # Bear
-            if c > curr_min_h: curr_trend = 0; curr_max_l = l
-            else: 
-                curr_max_l = max(curr_max_l, l)
-                if h > curr_min_h: curr_min_h = h
+    # --- 3. SMC: FVG DETECTION ---
+    # Bullish FVG: Low > High[2]
+    # Bearish FVG: High < Low[2]
+    df['fvg_bull'] = (df['low'] > df['high'].shift(2)) & ((df['low'] - df['high'].shift(2)) > (df['atr']*0.2))
+    df['fvg_bear'] = (df['high'] < df['low'].shift(2)) & ((df['low'].shift(2) - df['high']) > (df['atr']*0.2))
+
+    # --- 4. TRAILING STOP (STAIRCASE) ---
+    # Custom iteration for ratcheting stop based on Apex Trend
+    # If Trend Bull: Stop is Max(PrevStop, Close - ATR*Multiplier)
+    # If Trend Bear: Stop is Min(PrevStop, Close + ATR*Multiplier)
+    
+    stop_arr = np.zeros(len(df))
+    trend_arr = df['apex_trend'].values
+    close_arr = df['close'].values
+    atr_arr = df['atr'].values
+    stop_mult = 2.0
+    
+    curr_stop = close_arr[0]
+    
+    for i in range(1, len(df)):
+        t = trend_arr[i]
+        prev_t = trend_arr[i-1]
+        c = close_arr[i]
+        a = atr_arr[i]
         
-        if curr_trend == 0: # Bull Stop
-            s = l + dev
-            if s < curr_stop: s = curr_stop
-            curr_stop = s
-        else: # Bear Stop
-            s = h - dev
-            if s > curr_stop and curr_stop != 0: s = curr_stop
-            elif curr_stop == 0: s = h - dev
-            curr_stop = s
+        if t == 1:
+            # Bullish Logic
+            if prev_t != 1: # Trend Switch
+                curr_stop = c - (a * stop_mult)
+            else:
+                curr_stop = max(curr_stop, c - (a * stop_mult))
+        elif t == -1:
+            # Bearish Logic
+            if prev_t != -1: # Trend Switch
+                curr_stop = c + (a * stop_mult)
+            else:
+                curr_stop = min(curr_stop, c + (a * stop_mult))
+        else:
+            curr_stop = c # Neutral
             
-        trend[i] = curr_trend
-        stop[i] = curr_stop
+        stop_arr[i] = curr_stop
+        
+    df['apex_stop'] = stop_arr
 
-    df['trend'] = trend; df['trend_stop'] = stop
-    df['is_bull'] = df['trend'] == 0
-    df['bull_flip'] = (df['is_bull']) & (~df['is_bull'].shift(1).fillna(False).astype(bool))
-    df['bear_flip'] = (~df['is_bull']) & (df['is_bull'].shift(1).fillna(True).astype(bool))
-
-    # Money Flow Matrix
-    rsi_src = calculate_rsi(df['close'], mf_len) - 50
-    mf_vol = df['volume'] / df['volume'].rolling(mf_len).mean()
-    df['money_flow'] = (rsi_src * mf_vol).fillna(0).ewm(span=3).mean()
-    
-    # Hyper Wave
-    pc = df['close'].diff()
-    ss = pc.ewm(span=hyper_long).mean().ewm(span=hyper_short).mean()
-    ss_abs = abs(pc).ewm(span=hyper_long).mean().ewm(span=hyper_short).mean()
-    df['hyper_wave'] = np.where(ss_abs != 0, (100 * (ss / ss_abs)) / 2, 0)
-
-    # Metrics
-    df['rvol'] = df['volume'] / df['volume'].rolling(vol_len).mean()
     return df
 
 # ==========================================
-# 5. MOBILE UI STRUCTURE
+# 5. UI LAYOUT & MAIN APP
 # ==========================================
 
-if 'last_signal_time' not in st.session_state:
-    st.session_state.last_signal_time = None
+if 'last_run' not in st.session_state:
+    st.session_state.last_run = None
 
-# TABS FOR NAVIGATION
-tab1, tab2, tab3 = st.tabs(["⚡ Trade", "📊 Deep Dive", "⚙️ Config"])
+# --- TABS ---
+tab1, tab2, tab3 = st.tabs(["⚡ APEX TERMINAL", "🔬 DEEP DIVE", "⚙️ CONFIG"])
 
-# --- TAB 3: CONFIG (INPUTS FIRST FOR DATA) ---
+# --- CONFIG TAB ---
 with tab3:
-    st.header("Titan Configuration")
+    st.header("System Parameters")
     
-    with st.expander("📡 Market Feed", expanded=True):
-        symbol = st.text_input("Symbol (Kraken)", value="BTC/USD") 
-        timeframe = st.selectbox("Timeframe", options=['1m', '5m', '15m'], index=1)
-        limit = st.slider("Candles", 200, 1500, 500)
-
-    with st.expander("🧠 Logic Engine"):
-        amplitude = st.number_input("Sensitivity", min_value=1, value=5)
-        channel_dev = st.number_input("Stop Deviation", value=3.0)
-        hma_len = st.number_input("HMA Length", value=50)
-        mf_len = 14; vol_len = 20
+    with st.expander("📡 Data Feed", expanded=True):
+        col_s1, col_s2 = st.columns(2)
+        with col_s1: symbol = st.text_input("Symbol", value="BTC/USD")
+        with col_s2: timeframe = st.selectbox("Timeframe", ['1m', '5m', '15m', '1h', '4h'], index=2)
+        limit = st.slider("Lookback", 200, 1000, 500)
         
-    with st.expander("🔑 Keys & Alerts", expanded=True):
-        tg_on = st.checkbox("Telegram Active", value=True)
+    with st.expander("🧠 Apex Algo Settings"):
+        hma_len = st.number_input("Trend Length (HMA)", 10, 200, 55)
+        atr_mult = st.number_input("Cloud Multiplier", 1.0, 5.0, 1.5, 0.1)
+        flux_len = st.number_input("Flux Length", 5, 50, 14)
+        flux_smooth = st.number_input("Flux Smooth", 2, 20, 5)
+
+    with st.expander("🔑 API Keys", expanded=True):
+        tg_active = st.checkbox("Enable Telegram", value=False)
+        bot_token = st.text_input("Bot Token", type="password")
+        chat_id = st.text_input("Chat ID")
         
         try:
-            default_bot = st.secrets["TELEGRAM_TOKEN"]
-            default_chat = st.secrets["TELEGRAM_CHAT_ID"]
+            sec_ai = st.secrets["OPENAI_API_KEY"]
         except:
-            default_bot = ""; default_chat = ""
-        
-        bot_token = st.text_input("Bot Token", value=default_bot, type="password")
-        chat_id = st.text_input("Chat ID", value=default_chat)
+            sec_ai = ""
+        ai_key = st.text_input("OpenAI Key", value=sec_ai, type="password")
 
-        try:
-            default_ai = st.secrets["OPENAI_API_KEY"]
-            st.success("OpenAI Key Found in Secrets! ✅")
-        except:
-            default_ai = ""
-            
-        ai_key = st.text_input("OpenAI Key", value=default_ai, type="password", help="Press ENTER after pasting!")
+# --- FETCH & CALC ---
+df = fetch_market_data(symbol, timeframe, limit)
 
-# --- FETCH DATA ---
-df = get_data(symbol, timeframe, limit)
+if not df.empty:
+    df = run_apex_engine(df, hma_len, atr_mult, flux_len, flux_smooth)
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    # Helpers for display
+    is_bull = last['apex_trend'] == 1
+    
+    # Trend Strings
+    trend_str = "BULLISH" if is_bull else ("BEARISH" if last['apex_trend'] == -1 else "NEUTRAL")
+    trend_color = "border-bull" if is_bull else "border-bear"
+    trend_txt = "text-bull" if is_bull else "text-bear"
+    
+    # Flux Strings
+    flux_val = last['apex_flux']
+    if last['flux_state_code'] == 2:
+        flux_lbl = "SUPERCONDUCTOR"
+        flux_cls = "text-bull"
+    elif last['flux_state_code'] == -2:
+        flux_lbl = "SUPERCONDUCTOR"
+        flux_cls = "text-bear"
+    elif last['flux_state_code'] == 0:
+        flux_lbl = "RESISTIVE / CHOP"
+        flux_cls = "text-chop"
+    else:
+        flux_lbl = "HIGH HEAT"
+        flux_cls = "text-white"
 
-# --- TAB 1: TRADE (ACTION CENTER) ---
-with tab1:
-    if not df.empty:
-        df = run_titan_engine(df, amplitude, channel_dev, hma_len, mf_len, vol_len, 25, 13)
-        last = df.iloc[-1]
+    # FVG/SMC Check
+    smc_event = "NONE"
+    smc_color = "text-chop"
+    if last['fvg_bull']: 
+        smc_event = "BULLISH FVG"
+        smc_color = "text-bull"
+    elif last['fvg_bear']:
+        smc_event = "BEARISH FVG"
+        smc_color = "text-bear"
+    elif last['apex_trend'] != prev['apex_trend']:
+        smc_event = "TREND FLIP"
+        smc_color = trend_txt
         
-        # 1. HEADER STATUS
-        st.caption(f"LIVE | {symbol} | {timeframe}")
+    # --- TAB 1: TERMINAL ---
+    with tab1:
+        # 1. HEADER
+        st.caption(f"APEX PROTOCOL | {symbol} | {timeframe.upper()}")
         
-        # 2. METRICS GRID (2x2 for Mobile)
+        # 2. METRIC GRID
         c1, c2 = st.columns(2)
-        trend_lbl = "BULLISH" if last['is_bull'] else "BEARISH"
-        trend_cls = "border-bull" if last['is_bull'] else "border-bear"
-        trend_txt = "text-bull" if last['is_bull'] else "text-bear"
         
         with c1:
+            # PRICE CARD
             st.markdown(f"""
-            <div class="titan-card {trend_cls}">
-                <h4>Price</h4>
+            <div class="titan-card {trend_color}">
+                <h4>Market Price</h4>
                 <h2>${last['close']:,.2f}</h2>
-                <div class="sub">Trend: <span class="{trend_txt}"><b>{trend_lbl}</b></span></div>
+                <div class="sub">Trend: <span class="{trend_txt}"><b>{trend_str}</b></span></div>
             </div>
             """, unsafe_allow_html=True)
             
+            # SMC CARD
             st.markdown(f"""
             <div class="titan-card">
-                <h4>Money Flow</h4>
-                <h2 class="{'text-bull' if last['money_flow']>0 else 'text-bear'}">{last['money_flow']:.2f}</h2>
-                <div class="sub">Inst. Pressure</div>
+                <h4>SMC Structure</h4>
+                <h2 class="{smc_color}">{smc_event}</h2>
+                <div class="sub">Last Detected Event</div>
             </div>
             """, unsafe_allow_html=True)
             
         with c2:
+            # STOP CARD
+            dist = abs(last['close'] - last['apex_stop']) / last['close'] * 100
             st.markdown(f"""
-            <div class="titan-card {trend_cls}">
-                <h4>Titan Stop</h4>
-                <h2>${last['trend_stop']:,.2f}</h2>
-                <div class="sub">Risk Level</div>
+            <div class="titan-card {trend_color}">
+                <h4>Trailing Stop</h4>
+                <h2>${last['apex_stop']:,.2f}</h2>
+                <div class="sub">Risk Distance: {dist:.2f}%</div>
             </div>
             """, unsafe_allow_html=True)
-
+            
+            # FLUX CARD
             st.markdown(f"""
             <div class="titan-card">
-                <h4>RVOL</h4>
-                <h2 class="{'text-bull' if last['rvol']>1.5 else 'text-white'}">{last['rvol']:.2f}x</h2>
-                <div class="sub">Volume Anomaly</div>
+                <h4>Apex Flux</h4>
+                <h2 class="{flux_cls}">{flux_val:.2f}</h2>
+                <div class="sub">{flux_lbl}</div>
             </div>
             """, unsafe_allow_html=True)
 
         # 3. ACTION BUTTONS
         st.markdown("---")
-        if st.button("🔥 Broadcast Signal", type="primary"):
-            # --- SIGNAL CALCULATION ---
-            is_bull = last['is_bull']
-            direction = "LONG" if is_bull else "SHORT"
-            icon = "🟢" if is_bull else "🔴" 
+        b1, b2 = st.columns(2)
+        
+        with b1:
+            if st.button("🔥 GENERATE SIGNAL"):
+                # Logic for Signal
+                direction = "LONG" if is_bull else "SHORT"
+                icon = "🟢" if is_bull else "🔴"
+                entry = last['close']
+                stop = last['apex_stop']
+                risk = abs(entry - stop)
+                target = entry + (risk * 2) if is_bull else entry - (risk * 2)
+                
+                msg = f"""
+*APEX SIGNAL DETECTED* {icon}
+Sym: {symbol} [{timeframe}]
+Dir: *{direction}*
+Flux: {flux_lbl} ({flux_val:.2f})
+-------------------
+Entry: `{fmt_price(entry)}`
+Stop:  `{fmt_price(stop)}`
+Target: `{fmt_price(target)}` (2R)
+-------------------
+#Apex #Titan #Crypto
+"""
+                st.code(msg, language="markdown")
+                if tg_active:
+                    if send_telegram_msg(bot_token, chat_id, msg):
+                        st.success("Sent to Telegram")
+                    else:
+                        st.error("Telegram Failed")
+        
+        with b2:
+            if st.button("🧠 AI TACTIC"):
+                with st.spinner("Processing Apex Data..."):
+                    summary = f"""
+                    Symbol: {symbol}
+                    Price: {last['close']}
+                    Trend: {trend_str}
+                    Apex Flux: {flux_val:.2f} ({flux_lbl})
+                    Trailing Stop: {last['apex_stop']}
+                    Recent Structure: {smc_event}
+                    Vol Factor: {last['vol_fact']:.2f}
+                    """
+                    analysis = get_ai_analysis(summary, ai_key)
+                    st.markdown(f'<div class="ai-box">{analysis}</div>', unsafe_allow_html=True)
+
+    # --- TAB 2: DEEP DIVE ---
+    with tab2:
+        # TradingView Widget
+        tv_sym = f"KRAKEN:{symbol.replace('/','')}"
+        components.html(f"""
+        <div class="tradingview-widget-container">
+          <div id="tradingview_123"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+          <script type="text/javascript">
+          new TradingView.widget(
+          {{
+            "width": "100%",
+            "height": 400,
+            "symbol": "{tv_sym}",
+            "interval": "5",
+            "timezone": "Etc/UTC",
+            "theme": "dark",
+            "style": "1",
+            "locale": "en",
+            "toolbar_bg": "#f1f3f6",
+            "enable_publishing": false,
+            "hide_side_toolbar": false,
+            "container_id": "tradingview_123"
+          }}
+          );
+          </script>
+        </div>
+        """, height=410)
+        
+        st.subheader("Titan/Apex Technicals")
+        
+        # Plotly Chart
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                            vertical_spacing=0.03, row_heights=[0.7, 0.3])
+        
+        # CANDLES
+        fig.add_trace(go.Candlestick(
+            x=df['timestamp'], open=df['open'], high=df['high'], 
+            low=df['low'], close=df['close'], name='Price'
+        ), row=1, col=1)
+        
+        # HMA CLOUD
+        # We fill between Upper and Lower
+        # Trick: use Scatter with fill='tonexty'
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['trend_upper'], 
+            mode='lines', line=dict(width=0), showlegend=False
+        ), row=1, col=1)
+        
+        cloud_color = 'rgba(0, 230, 118, 0.1)' if is_bull else 'rgba(255, 23, 68, 0.1)'
+        
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['trend_lower'], 
+            mode='lines', line=dict(width=0), fill='tonexty', 
+            fillcolor=cloud_color, showlegend=False
+        ), row=1, col=1)
+        
+        # TRAILING STOP
+        stop_col = '#00E676' if is_bull else '#FF1744'
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['apex_stop'],
+            mode='lines', line=dict(color=stop_col, width=2),
+            name="Apex Stop"
+        ), row=1, col=1)
+        
+        # APEX FLUX HISTOGRAM
+        # Color logic for bars
+        colors = []
+        for c in df['flux_state_code']:
+            if c == 2: colors.append('#00E676') # Super Bull
+            elif c == -2: colors.append('#FF1744') # Super Bear
+            elif c == 0: colors.append('#546E7A') # Resistive
+            else: colors.append('#FFD600') # Heat
             
-            risk = abs(last['close'] - last['trend_stop'])
-            if is_bull:
-                target_price = last['close'] + (risk * 1.5)
-            else:
-                target_price = last['close'] - (risk * 1.5)
-
-            mom_lbl = "POSITIVE" if last['hyper_wave'] > 0 else "NEGATIVE"
-            inst_lbl = "MACRO BULL" if last['close'] > last['hma'] else "MACRO BEAR"
-            
-            if last['money_flow'] > 5: mf_lbl = "INFLOW"
-            elif last['money_flow'] < -5: mf_lbl = "OUTFLOW"
-            else: mf_lbl = "NEUTRAL"
-
-            # --- PRECISE FORMATTING ---
-            p_entry = fmt_price(last['close'])
-            p_stop = fmt_price(last['trend_stop'])
-            p_target = fmt_price(target_price)
-
-            msg = f"""🔥 *TITAN SIGNAL: {symbol} ({timeframe})*
-{icon} DIRECTION: *{direction}*
-🚪 ENTRY: `{p_entry}`
-🛑 STOP LOSS: `{p_stop}`
-🎯 TARGET: `{p_target}`
-🌊 Trend: {trend_lbl}
-📊 Momentum: {mom_lbl}
-💰 Money Flow: {mf_lbl}
-💀 Institutional Trend: {inst_lbl}
-⚠️ _Not financial advice. DYOR._
-#DarkPool #Titan #Crypto"""
-
-            if send_telegram_msg(bot_token, chat_id, msg):
-                st.success("Sent!")
-            else:
-                st.error("Check Keys")
-
-        if st.button("🤖 AI Analysis"):
-            with st.spinner("Analyzing..."):
-                summary = {'price': last['close'], 'trend': trend_lbl, 'stop': last['trend_stop'], 'mf': last['money_flow']}
-                rep = get_ai_analysis(summary, symbol, timeframe, ai_key)
-                st.markdown(f"""<div class="ai-box">{rep}</div>""", unsafe_allow_html=True)
-
-    else:
-        st.info("Please configure symbol in 'Config' tab.")
-
-# --- TAB 2: DEEP DIVE (CHARTS) ---
-with tab2:
-    if not df.empty:
-        with st.expander("📈 Live TradingView", expanded=False):
-             s_tv = f"KRAKEN:{symbol.replace('/','')}"
-             components.html(f"""
-                <div class="tradingview-widget-container">
-                <div id="tv"></div>
-                <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-                <script>new TradingView.widget({{
-                  "width": "100%", "height": 400, "symbol": "{s_tv}", "interval": "5",
-                  "theme": "dark", "style": "1", "toolbar_bg": "#f1f3f6", "hide_side_toolbar": false,
-                  "container_id": "tv"
-                }});</script></div>
-                """, height=410)
-
-        st.subheader("Titan Analysis")
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
+        fig.add_trace(go.Bar(
+            x=df['timestamp'], y=df['apex_flux'],
+            marker_color=colors, name="Flux Vector"
+        ), row=2, col=1)
         
-        # Row 1: Price + Stops
-        fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
-        b_stop = df['trend_stop'].where(df['is_bull'], np.nan)
-        s_stop = df['trend_stop'].where(~df['is_bull'], np.nan)
-        fig.add_trace(go.Scatter(x=df['timestamp'], y=b_stop, mode='lines', line=dict(color='#00ffbb', width=2)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['timestamp'], y=s_stop, mode='lines', line=dict(color='#ff1155', width=2)), row=1, col=1)
+        # Threshold Lines
+        fig.add_hline(y=0.6, line_dash="dot", line_color="#333", row=2, col=1)
+        fig.add_hline(y=-0.6, line_dash="dot", line_color="#333", row=2, col=1)
         
-        # Row 2: Money Flow
-        col_mf = np.where(df['money_flow'] >= 0, '#00ffbb', '#ff1155')
-        fig.add_trace(go.Bar(x=df['timestamp'], y=df['money_flow'], marker_color=col_mf, name="MF"), row=2, col=1)
+        # Layout
+        fig.update_layout(
+            height=600, 
+            margin=dict(l=0,r=0,t=0,b=0),
+            paper_bgcolor='#000',
+            plot_bgcolor='#050505',
+            xaxis_rangeslider_visible=False,
+            showlegend=False,
+            font=dict(family="Roboto Mono", color="#888")
+        )
+        fig.update_xaxes(showgrid=False, gridcolor='#222')
+        fig.update_yaxes(showgrid=True, gridcolor='#222')
         
-        fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='#000', plot_bgcolor='#000', showlegend=False)
-        fig.update_xaxes(visible=False) 
         st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("Awaiting Configuration... Please check symbols or API connection.")
