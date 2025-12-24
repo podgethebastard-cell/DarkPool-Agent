@@ -626,19 +626,21 @@ elif mode == "Mobile Desk":
     if st.button("Refresh"):
         df = fetch_market_data(m_sym, "1h") # Fixed mobile TF
         if df is not None:
-            df = mobile_run_engines(df, 10, 3.0, 50, 1.5, 3.0, 5.0, 14, 20, 3)
+            # Need Mobile Specific Math (Re-using functions from previous mobile logic adapted here)
+            # Simplified for consistency with Pro Theme:
+            # Using InstEngine supertrend + HMA
+            st_ser, t_dir = InstEngine.supertrend(df, 10, 3)
+            df['SuperTrend'] = st_ser
+            df['Trend'] = t_dir
+            
             last = df.iloc[-1]
-            fibs = mobile_calculate_fibonacci(df)
-            stop = min(last['entry_stop'], fibs['fib_618']) if last['is_bull'] else max(last['entry_stop'], fibs['fib_618'])
+            trend_txt = "BULL" if last['Trend'] == 1 else "BEAR"
             
-            # Report Card HTML
-            report = mobile_generate_report(last, m_sym, "1H", fibs, stop)
-            
-            # Wrap in Styled Container
             st.markdown(f"""
             <div class="report-container">
                 <div class="report-head">{m_sym} | {last['Close']:.2f}</div>
-                {report}
+                <div class="report-row"><span>Trend</span> <span class="hl">{trend_txt}</span></div>
+                <div class="report-row"><span>Stop Loss</span> <span class="hl">{last['SuperTrend']:.2f}</span></div>
             </div>
             """, unsafe_allow_html=True)
             
@@ -648,7 +650,7 @@ elif mode == "Mobile Desk":
             st.plotly_chart(fig, use_container_width=True)
             
             if st.button("Send Mobile Alert"):
-                msg = f"📱 {m_sym} Update | Price: {last['Close']:.2f} | Stop: {stop:.2f}"
+                msg = f"📱 {m_sym} Update | Price: {last['Close']:.2f} | Trend: {trend_txt}"
                 send_alert(msg)
                 st.success("Sent")
 
@@ -691,7 +693,7 @@ elif mode == "Quant Flow":
             """, unsafe_allow_html=True)
             
             # Advanced Chart
-            fig = DarkSingularityEngine.ds_render_terminal(df, q_sym, params)
+            fig = plot_pro_chart(df, q_sym, signals=True, title="Flow Vector")
             st.plotly_chart(fig, use_container_width=True)
             
             with st.expander("Raw Data Feed"):
