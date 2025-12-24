@@ -1,3 +1,5 @@
+
+
 import pandas as pd
 import numpy as np
 import datetime
@@ -471,7 +473,9 @@ class TradingAgent:
             self.portfolio.update_equity(tick['close'], tick['timestamp'])
             
             if progress_bar:
-                progress_bar.progress(self.cursor._current_index / self.cursor._max_index)
+                # FIX: Clamp progress value to maximum 1.0 to prevent StreamlitAPIException
+                progress_value = self.cursor._current_index / self.cursor._max_index
+                progress_bar.progress(min(progress_value, 1.0))
 
 
 # ==========================================
@@ -768,4 +772,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
