@@ -462,7 +462,7 @@ with st.sidebar:
             st.session_state.tv_symbol_override
         )
 
-    if st.button("🔱 RELOAD THE PENTAGRAM", type="primary", use_container_width=True):
+    if st.button("🔱 RELOAD", type="primary", use_container_width=True):
         fetch_ohlcv.clear()
         st.rerun()
 
