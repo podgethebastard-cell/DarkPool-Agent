@@ -35,7 +35,7 @@ except ImportError:
 # =========================
 # LOGGING (visible + useful)
 # =========================
-logger = logging.getLogger("pentagram")
+logger = logging.getLogger("Terminal")
 if not logger.handlers:
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler()
