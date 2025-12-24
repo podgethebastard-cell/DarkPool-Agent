@@ -12,6 +12,18 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
+import streamlit as st
+from google import genai
+
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+
+DEFAULT_MODEL = st.secrets.get("DEFAULT_GEMINI_MODEL", "gemini-3-pro-preview")
+
+resp = client.models.generate_content(
+    model=DEFAULT_MODEL,
+    contents="Give me a market regime read for BTC on 1H and 4H.",
+)
+st.write(resp.text)
 
 
 # ==========================================
