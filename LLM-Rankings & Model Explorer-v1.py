@@ -2,14 +2,14 @@
 # =============================================================================
 # LLM Rankings & Model Explorer (Streamlit)
 # -----------------------------------------------------------------------------
-# What you get (upgraded):
+# Upgraded features included:
 # ✅ “Top Picks” panel (best overall / best coding / best budget / best open-weights)
 # ✅ Multipage feel in a SINGLE .py (Rankings → click model → dedicated detail page with Back/Next)
 # ✅ More leaderboards (incl. SWE-bench + LiveCodeBench) via plug-in “source adapters”
-# ✅ Clickable outbound links (provider / model cards / leaderboards) open in new tab
+# ✅ Clickable outbound links (provider / model pages / leaderboards) open in new tab
 #
 # Run:
-#   pip install streamlit pandas numpy requests
+#   pip install streamlit pandas numpy requests lxml
 #   streamlit run llm_rankings_app.py
 # =============================================================================
 
@@ -52,7 +52,7 @@ hr { border: none; border-top: 1px solid rgba(255,255,255,0.10); margin: 0.75rem
   background: rgba(255,255,255,0.03);
 }
 .card h4 { margin: 0 0 6px 0; font-size: 15px; }
-.card .kpi { font-size: 24px; font-weight: 700; margin-top: 2px; }
+.card .kpi { font-size: 22px; font-weight: 750; margin-top: 2px; }
 .card .sub { font-size: 12px; opacity: 0.85; }
 
 .table-wrap {
@@ -119,7 +119,7 @@ def safe_float(x: Any) -> Optional[float]:
         if x is None:
             return None
         if isinstance(x, (int, float, np.integer, np.floating)):
-            if np.isnan(x):
+            if isinstance(x, float) and np.isnan(x):
                 return None
             return float(x)
         s = str(x).strip()
@@ -150,7 +150,6 @@ def http_get_text(url: str, headers: Optional[Dict[str, str]] = None) -> str:
 
 
 def github_contents(owner: str, repo: str, path: str = "", ref: str = "main") -> List[Dict[str, Any]]:
-    # Public GitHub API, no auth required (rate-limited).
     api = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
     h = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
     r = requests.get(api, headers=h, timeout=DEFAULT_TIMEOUT)
@@ -177,14 +176,9 @@ def money_per_million(x: Optional[float]) -> str:
     return f"${x:.2f} / 1M"
 
 
-def clamp01(x: float) -> float:
-    return max(0.0, min(1.0, x))
-
-
 # ======================
 # “Directory” baseline
 # ======================
-# This gives you a working app even if every leaderboard fetch fails.
 BASE_MODELS: List[Dict[str, Any]] = [
     # OpenAI
     {"display_name": "GPT-5", "provider": "OpenAI", "open_weights": False, "links": {"provider": "https://openai.com", "search": "https://openai.com/search?q=gpt-5"}},
@@ -212,7 +206,6 @@ BASE_MODELS: List[Dict[str, Any]] = [
     {"display_name": "Mistral Large", "provider": "Mistral", "open_weights": False, "links": {"provider": "https://mistral.ai", "search": "https://mistral.ai/search?q=large"}},
 ]
 
-# Some simple aliasing to improve cross-source merges (you can expand this later).
 ALIASES: Dict[str, str] = {
     normalize_key("gpt-5"): normalize_key("gpt 5"),
     normalize_key("o4 mini"): normalize_key("o4-mini"),
@@ -288,14 +281,13 @@ class OpenRouterModelsAdapter(SourceAdapter):
                 prov = (mid.split("/")[0] if isinstance(mid, str) and "/" in mid else None) or item.get("provider") or "OpenRouter"
                 ctx = safe_float(item.get("context_length"))
                 pricing = item.get("pricing") or {}
-                # OpenRouter typically quotes USD per token; convert to USD per 1M tokens for display.
+                # OpenRouter typically quotes USD per token; convert to USD per 1M tokens
                 p_in = safe_float(pricing.get("prompt"))
                 p_out = safe_float(pricing.get("completion"))
                 p_in_m = (p_in * 1_000_000) if p_in is not None else None
                 p_out_m = (p_out * 1_000_000) if p_out is not None else None
 
-                # Heuristic “open-weights”: OpenRouter provides some hints, but not a universal field.
-                # We keep it conservative (false unless we see obvious open families in ID).
+                # Conservative guess for open weights
                 open_guess = False
                 if isinstance(mid, str):
                     open_guess = any(
@@ -316,15 +308,15 @@ class OpenRouterModelsAdapter(SourceAdapter):
 
                 rows.append(
                     {
-                        "model_key": canonical_key(name),
-                        "display_name": name,
+                        "model_key": canonical_key(str(name)),
+                        "display_name": str(name),
                         "provider": prov,
                         "openrouter_id": mid,
                         "context_length": ctx,
                         "price_in_1m_usd": p_in_m,
                         "price_out_1m_usd": p_out_m,
                         "open_weights": open_guess,
-                        "link_openrouter": f"https://openrouter.ai/{mid}" if mid else None,
+                        "link_openrouter": f"https://openrouter.ai/models/{mid}" if mid else None,
                     }
                 )
             df = pd.DataFrame(rows)
@@ -343,7 +335,6 @@ class AiderLeaderboardAdapter(SourceAdapter):
         try:
             url = "https://aider.chat/docs/leaderboards/"
             html = http_get_text(url)
-            # Parse all HTML tables; pick the one with a "Model" column and any pass@ column.
             tables = pd.read_html(html)
             best = None
             for t in tables:
@@ -353,15 +344,10 @@ class AiderLeaderboardAdapter(SourceAdapter):
                     break
             if best is None:
                 return SourceResult(df=pd.DataFrame(), error="No suitable table found on Aider page.")
-            # Normalize columns
-            colmap = {c: str(c).strip() for c in best.columns}
-            df = best.rename(columns=colmap).copy()
-            # Common columns seen: Model, pass@2, pass@1 etc. We’ll accept any.
-            model_col = next((c for c in df.columns if str(c).lower().strip() == "model"), None)
-            if model_col is None:
-                model_col = df.columns[0]
+
+            df = best.copy()
+            model_col = next((c for c in df.columns if str(c).lower().strip() == "model"), None) or df.columns[0]
             pass_cols = [c for c in df.columns if "pass" in str(c).lower()]
-            # Prefer pass@2, else first pass col
             pass2_col = next((c for c in pass_cols if "@2" in str(c).lower()), None) or (pass_cols[0] if pass_cols else None)
 
             rows = []
@@ -399,6 +385,8 @@ class SweBenchLeaderboardsAdapter(SourceAdapter):
             url = github_raw_url(owner, repo, path, ref=ref)
             data = http_get_json(url)
 
+            homepage = self.homepage  # (fix: no walrus operator; avoids SyntaxError on older runtimes)
+
             rows = []
             for lb in data.get("leaderboards", []):
                 lb_name = str(lb.get("name", "")).strip()
@@ -407,7 +395,6 @@ class SweBenchLeaderboardsAdapter(SourceAdapter):
                         continue
                     model = item.get("model") or item.get("name") or item.get("system") or ""
                     resolved = safe_float(item.get("resolved"))
-                    # resolved in JSON is typically a percent value already (e.g., 55.2)
                     rows.append(
                         {
                             "model_key": canonical_key(str(model)),
@@ -415,7 +402,7 @@ class SweBenchLeaderboardsAdapter(SourceAdapter):
                             f"swebench_{normalize_key(lb_name)}_resolved_pct": resolved,
                             "swebench_oss": bool(item.get("oss")) if "oss" in item else None,
                             "swebench_verified_badge": bool(item.get("verified")) if "verified" in item else None,
-                            "link_swebench": homepage := self.homepage,
+                            "link_swebench": homepage,
                         }
                     )
 
@@ -423,17 +410,15 @@ class SweBenchLeaderboardsAdapter(SourceAdapter):
             if df.empty:
                 return SourceResult(df=df, error="No rows extracted from SWE-bench JSON (schema may have changed).")
 
-            # Collapse multiple rows per model by max resolved per leaderboard field
-            agg = {"display_name": "first"}
+            agg: Dict[str, Any] = {"display_name": "first", "link_swebench": "first"}
             for c in df.columns:
                 if c.startswith("swebench_") and c.endswith("_resolved_pct"):
                     agg[c] = "max"
-            # preserve OSS-ish signals if present
             for c in ["swebench_oss", "swebench_verified_badge"]:
                 if c in df.columns:
                     agg[c] = "max"
+
             out = df.groupby("model_key", as_index=False).agg(agg)
-            out["link_swebench"] = homepage
             return SourceResult(df=out, meta={"url": url, "ref": ref, "rows": len(out)})
         except Exception as e:
             return SourceResult(df=pd.DataFrame(), error=f"{type(e).__name__}: {e}")
@@ -451,7 +436,6 @@ class LiveCodeBenchAdapter(SourceAdapter):
             repo = "livecodebench.github.io"
             ref = cfg.get("ref", "main")
 
-            # Try a few likely places first; if not, list /public recursively (one level) and look for leaderboard assets.
             candidate_paths = [
                 "public/leaderboard.json",
                 "public/leaderboard_data.json",
@@ -468,7 +452,6 @@ class LiveCodeBenchAdapter(SourceAdapter):
                 nonlocal found_url, found_path
                 try:
                     u = github_raw_url(owner, repo, p, ref=ref)
-                    # Quick HEAD-ish check via GET with small timeout
                     r = requests.get(u, headers={"User-Agent": USER_AGENT}, timeout=10)
                     if r.status_code == 200 and len(r.content) > 10:
                         found_url, found_path = u, p
@@ -482,7 +465,6 @@ class LiveCodeBenchAdapter(SourceAdapter):
                     break
 
             if found_url is None:
-                # List public/ and public/data if they exist, then scan for leaderboard-like file names
                 scan_paths = ["public", "public/data"]
                 assets: List[Tuple[str, str]] = []
                 for sp in scan_paths:
@@ -511,10 +493,8 @@ class LiveCodeBenchAdapter(SourceAdapter):
                     error="Could not auto-discover a LiveCodeBench leaderboard asset in the repo (repo structure may have changed).",
                 )
 
-            # Parse
             if found_url.endswith(".json"):
                 data = http_get_json(found_url)
-                # The site may store arrays directly, or a dict containing rows.
                 rows_in = None
                 if isinstance(data, list):
                     rows_in = data
@@ -573,7 +553,6 @@ class LiveCodeBenchAdapter(SourceAdapter):
             # CSV
             text = http_get_text(found_url)
             dfc = pd.read_csv(pd.io.common.StringIO(text))
-            # Find best-guess columns
             cols_low = {c.lower(): c for c in dfc.columns}
             model_col = cols_low.get("model") or cols_low.get("name") or cols_low.get("system") or dfc.columns[0]
             pass1_col = None
@@ -581,6 +560,7 @@ class LiveCodeBenchAdapter(SourceAdapter):
                 if k in cols_low:
                     pass1_col = cols_low[k]
                     break
+
             rows = []
             for _, r in dfc.iterrows():
                 name = str(r.get(model_col, "")).strip()
@@ -595,6 +575,11 @@ class LiveCodeBenchAdapter(SourceAdapter):
                     }
                 )
             out = pd.DataFrame(rows)
+            if out.empty:
+                return SourceResult(df=out, error=f"No rows extracted from {found_path}")
+            out = out.groupby("model_key", as_index=False).agg(
+                {"display_name": "first", "livecodebench_pass1": "max", "link_livecodebench": "first"}
+            )
             return SourceResult(df=out, meta={"asset": found_path, "url": found_url, "rows": len(out)})
 
         except Exception as e:
@@ -629,7 +614,6 @@ class CustomURLAdapter(SourceAdapter):
                 df = pd.read_csv(pd.io.common.StringIO(text))
             else:
                 data = http_get_json(c.url)
-                # accept list or dict containing list
                 rows_in = None
                 if isinstance(data, list):
                     rows_in = data
@@ -656,28 +640,20 @@ class CustomURLAdapter(SourceAdapter):
                 out_rows.append(row)
 
             out = pd.DataFrame(out_rows)
+            if out.empty:
+                return SourceResult(df=out, error="Custom adapter parsed 0 rows (check column names).")
+            out = out.groupby("model_key", as_index=False).agg({**{c: "max" for c in out.columns if c not in {"model_key", "display_name", "link_custom"}}, "display_name": "first", "link_custom": "first"})
             return SourceResult(df=out, meta={"url": c.url, "rows": len(out)})
         except Exception as e:
             return SourceResult(df=pd.DataFrame(), error=f"{type(e).__name__}: {e}")
 
 
 # =========================
-# Caching layer (per source)
+# Lightweight cache (session)
 # =========================
-@st.cache_data(ttl=60 * 30, show_spinner=False)  # 30 minutes
-def cached_fetch(adapter_id: str, cfg_json: str) -> Dict[str, Any]:
-    # This function must be deterministic. We rehydrate config from json string.
-    cfg = json.loads(cfg_json) if cfg_json else {}
-    # Adapter instances are created outside cache; so this cached function only stores the result.
-    # We’ll call adapter.fetch() in a wrapper (non-cached) and return a serializable dict.
-    return {"cfg": cfg}
-
-
 def fetch_with_cache(adapter: SourceAdapter, cfg: Dict[str, Any]) -> SourceResult:
-    # Use cache to avoid hammering endpoints; we store *our* own cached content in session_state
-    # so we can cache DataFrames safely without complex serialization.
     key = f"adapter_cache::{adapter.id}::{json.dumps(cfg, sort_keys=True)}"
-    ttl_s = 60 * 30
+    ttl_s = 60 * 30  # 30 minutes
 
     cache = st.session_state.setdefault("_adapter_cache", {})
     item = cache.get(key)
@@ -693,11 +669,6 @@ def fetch_with_cache(adapter: SourceAdapter, cfg: Dict[str, Any]) -> SourceResul
 # Ranking + scoring engine
 # =========================
 def merge_sources(results: List[Tuple[SourceAdapter, SourceResult]]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Returns:
-      merged_df: one row per model_key with merged columns
-      source_status_df: table of adapter fetch status
-    """
     status_rows = []
     dfs = []
 
@@ -712,49 +683,38 @@ def merge_sources(results: List[Tuple[SourceAdapter, SourceResult]]) -> Tuple[pd
                 "Homepage": ad.homepage or "",
             }
         )
-        if res.df is not None and not res.df.empty:
-            df = res.df.copy()
-            if "model_key" not in df.columns:
-                continue
-            df["model_key"] = df["model_key"].astype(str).map(canonical_key)
-            dfs.append(df)
+        if res.df is not None and not res.df.empty and "model_key" in res.df.columns:
+            d = res.df.copy()
+            d["model_key"] = d["model_key"].astype(str).map(canonical_key)
+            dfs.append(d)
 
     if not dfs:
         merged = pd.DataFrame(columns=["model_key", "display_name"])
     else:
         merged = dfs[0]
         for d in dfs[1:]:
-            # Merge on model_key; prefer left display_name but fill from right if missing
             merged = merged.merge(d, on="model_key", how="outer", suffixes=("", "_r"))
             if "display_name" in merged.columns and "display_name_r" in merged.columns:
                 merged["display_name"] = merged["display_name"].fillna(merged["display_name_r"])
                 merged = merged.drop(columns=["display_name_r"])
 
-    # Best-effort provider fill
     if "provider" not in merged.columns:
         merged["provider"] = None
 
-    # Open-weights flag: OR across sources if present
     if "open_weights" not in merged.columns:
         merged["open_weights"] = False
     else:
         merged["open_weights"] = merged["open_weights"].fillna(False).astype(bool)
 
-    # Add some convenience: average price
-    if "price_in_1m_usd" in merged.columns or "price_out_1m_usd" in merged.columns:
-        merged["avg_price_1m_usd"] = (
-            merged.get("price_in_1m_usd", pd.Series([np.nan] * len(merged))).astype(float).fillna(np.nan)
-            + merged.get("price_out_1m_usd", pd.Series([np.nan] * len(merged))).astype(float).fillna(np.nan)
-        ) / 2.0
-    else:
-        merged["avg_price_1m_usd"] = np.nan
+    # Avg price
+    pin = pd.to_numeric(merged.get("price_in_1m_usd", pd.Series([np.nan] * len(merged))), errors="coerce")
+    pout = pd.to_numeric(merged.get("price_out_1m_usd", pd.Series([np.nan] * len(merged))), errors="coerce")
+    merged["avg_price_1m_usd"] = (pin + pout) / 2.0
 
-    # Pick the “best” name for display if missing
     merged["display_name"] = merged.get("display_name", pd.Series([""] * len(merged))).fillna("")
     merged.loc[merged["display_name"].astype(str).str.strip() == "", "display_name"] = merged["model_key"]
 
-    status_df = pd.DataFrame(status_rows)
-    return merged, status_df
+    return merged, pd.DataFrame(status_rows)
 
 
 def zscore(series: pd.Series) -> pd.Series:
@@ -768,17 +728,13 @@ def zscore(series: pd.Series) -> pd.Series:
 
 def compute_composite(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
     out = df.copy()
-
-    # For “lower is better” metrics, provide negative weights.
-    # Missing values: fill with median z-score (0-ish) so absence doesn’t auto-win.
     total = pd.Series([0.0] * len(out), index=out.index, dtype=float)
     used_any = False
 
     for col, w in weights.items():
         if col not in out.columns or w == 0:
             continue
-        zs = zscore(out[col])
-        zs = zs.fillna(0.0)
+        zs = zscore(out[col]).fillna(0.0)
         total = total + (zs * float(w))
         used_any = True
 
@@ -798,7 +754,6 @@ def qp_get(key: str, default: str = "") -> str:
             return v[0] if v else default
         return v if v is not None else default
     except Exception:
-        # Older Streamlit fallback
         try:
             v = st.experimental_get_query_params().get(key, [default])
             return v[0] if v else default
@@ -807,7 +762,6 @@ def qp_get(key: str, default: str = "") -> str:
 
 
 def qp_set(**kwargs: str) -> None:
-    # Only update keys you set; keep nothing else to avoid confusing URLs.
     try:
         st.query_params.clear()
         for k, v in kwargs.items():
@@ -824,7 +778,6 @@ def badge(text: str) -> str:
 
 
 def html_table(df: pd.DataFrame, max_rows: int = 50) -> str:
-    # Build a clean HTML table with internal links
     view = df.head(max_rows).copy()
     cols = list(view.columns)
 
@@ -849,11 +802,6 @@ def html_table(df: pd.DataFrame, max_rows: int = 50) -> str:
     return "\n".join(html)
 
 
-def model_link(name: str) -> str:
-    # Internal detail page
-    return f'?page=model&model={quote_plus(name)}'
-
-
 def external_search_link(q: str) -> str:
     return f"https://www.google.com/search?q={quote_plus(q)}"
 
@@ -863,7 +811,6 @@ def external_search_link(q: str) -> str:
 # =========================
 st.sidebar.title("🧠 LLM Explorer")
 
-# Basic nav
 page = qp_get("page", "rankings")
 if page not in {"rankings", "model", "sources"}:
     page = "rankings"
@@ -873,6 +820,7 @@ nav = st.sidebar.radio(
     options=["Rankings", "Model Detail", "Sources"],
     index={"rankings": 0, "model": 1, "sources": 2}[page],
 )
+
 if nav == "Rankings" and page != "rankings":
     qp_set(page="rankings")
     st.rerun()
@@ -886,7 +834,6 @@ if nav == "Sources" and page != "sources":
 st.sidebar.markdown("---")
 st.sidebar.subheader("Data Sources (Adapters)")
 
-# Built-in adapters
 ALL_ADAPTERS: List[SourceAdapter] = [
     BaselineDirectoryAdapter(),
     OpenRouterModelsAdapter(),
@@ -895,7 +842,6 @@ ALL_ADAPTERS: List[SourceAdapter] = [
     LiveCodeBenchAdapter(),
 ]
 
-# Enable toggles
 default_enabled = {
     "baseline": True,
     "openrouter_models": True,
@@ -903,12 +849,12 @@ default_enabled = {
     "swebench": True,
     "livecodebench": True,
 }
-enabled = {}
+
+enabled: Dict[str, bool] = {}
 adapter_cfg: Dict[str, Dict[str, Any]] = {}
 
 for ad in ALL_ADAPTERS:
     enabled[ad.id] = st.sidebar.checkbox(ad.label, value=default_enabled.get(ad.id, False), help=ad.description)
-    # Per-adapter config (small)
     cfg: Dict[str, Any] = {}
     if ad.id in {"swebench", "livecodebench"}:
         cfg["ref"] = st.sidebar.text_input(
@@ -923,12 +869,12 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("Add Custom Adapter")
 
 with st.sidebar.expander("➕ Custom CSV/JSON (plug-in)", expanded=False):
-    st.caption("Bring your own leaderboard. Provide a URL + column mapping. (Best for public CSV/JSON endpoints.)")
+    st.caption("Bring your own leaderboard. Provide a URL + column mapping.")
     cname = st.text_input("Name", value="", key="cust_name")
     curl = st.text_input("URL", value="", key="cust_url")
     cfmt = st.selectbox("Format", options=["csv", "json"], index=0, key="cust_fmt")
     cmodel = st.text_input("Model column", value="Model", key="cust_model_col")
-    st.caption("Map metric columns → output columns (example: pass@1 → livecodebench_pass1)")
+    st.caption("Map metric columns → output columns (example: livecodebench_pass1 = pass@1)")
     c_map_raw = st.text_area(
         "Column map (one per line: output_col = source_col)",
         value="",
@@ -972,12 +918,11 @@ if custom_adapters:
         enabled[ad.id] = st.sidebar.checkbox(ad.label, value=True, key=f"en::{ad.id}")
         adapter_cfg[ad.id] = {}
 
-# Scoring weights
 st.sidebar.markdown("---")
 st.sidebar.subheader("Ranking Weights")
 
 with st.sidebar.expander("⚖️ Composite score settings", expanded=True):
-    st.caption("Tune what “best overall” means. Higher weight = more important. Negative weight = lower is better.")
+    st.caption("Higher weight = more important. Negative weight = lower is better.")
     w_aider = st.slider("Coding (Aider pass metric)", 0.0, 5.0, 3.0, 0.5)
     w_lcb = st.slider("LiveCodeBench Pass@1", 0.0, 5.0, 3.0, 0.5)
     w_swe_v = st.slider("SWE-bench Verified resolved %", 0.0, 5.0, 3.0, 0.5)
@@ -992,14 +937,12 @@ with st.sidebar.expander("⚖️ Composite score settings", expanded=True):
         "avg_price_1m_usd": float(w_price),  # negative
     }
 
-# Filters
 st.sidebar.markdown("---")
 st.sidebar.subheader("Filters")
 only_open = st.sidebar.checkbox("Open-weights only", value=False)
 max_price = st.sidebar.number_input("Max avg price ($/1M, optional)", min_value=0.0, value=0.0, step=0.5, help="0 = no filter")
 min_ctx = st.sidebar.number_input("Min context length (optional)", min_value=0, value=0, step=1024, help="0 = no filter")
 search = st.sidebar.text_input("Search models", value="")
-
 top_n = st.sidebar.slider("Show top N", 10, 200, 50, 10)
 
 # =========================
@@ -1014,35 +957,26 @@ results: List[Tuple[SourceAdapter, SourceResult]] = []
 with st.spinner("Fetching sources…"):
     for ad in active_adapters:
         cfg = adapter_cfg.get(ad.id, {})
-        res = fetch_with_cache(ad, cfg)
-        results.append((ad, res))
+        results.append((ad, fetch_with_cache(ad, cfg)))
 
 merged, status_df = merge_sources(results)
 
-# Normalize SWE-bench columns (we want specifically Verified if present)
-# The SWE adapter makes columns like swebench_verified_resolved_pct depending on leaderboard name.
-# Many times it will be exactly "Verified" → swebench_verified_resolved_pct.
+# Normalize SWE-bench "Verified" field if named differently
 if "swebench_verified_resolved_pct" not in merged.columns:
-    # Try best-effort match any swebench_*verified*_resolved_pct
     cand = [c for c in merged.columns if c.startswith("swebench_") and "verified" in c and c.endswith("_resolved_pct")]
     if cand:
         merged["swebench_verified_resolved_pct"] = merged[cand].max(axis=1)
 
-# Rank
 ranked = compute_composite(merged, weights=weights)
 
 # Apply filters
 f = ranked.copy()
-
 if only_open:
     f = f[f.get("open_weights", False) == True].copy()
-
 if max_price and max_price > 0:
     f = f[pd.to_numeric(f.get("avg_price_1m_usd"), errors="coerce").fillna(np.inf) <= float(max_price)].copy()
-
 if min_ctx and min_ctx > 0:
     f = f[pd.to_numeric(f.get("context_length"), errors="coerce").fillna(0) >= float(min_ctx)].copy()
-
 if search.strip():
     s = search.strip().lower()
     f = f[
@@ -1094,7 +1028,7 @@ def render_top_picks(df: pd.DataFrame) -> None:
 
     c1, c2, c3, c4 = st.columns(4)
 
-    def card(col, title: str, item: Optional[pd.Series], kpi: str, sub: str):
+    def card(col, title: str, item: Optional[pd.Series], kpi: str, sub: str, btn_key: str):
         with col:
             st.markdown(
                 f"""
@@ -1107,38 +1041,45 @@ def render_top_picks(df: pd.DataFrame) -> None:
                 unsafe_allow_html=True,
             )
             if item is not None:
-                st.link_button("View model →", model_link(str(item["display_name"])), use_container_width=True)
+                if st.button("View model →", use_container_width=True, key=btn_key):
+                    qp_set(page="model", model=str(item["display_name"]))
+                    st.rerun()
 
     card(
         c1,
         "🏆 Best overall",
         best_overall,
         kpi=(str(best_overall["display_name"]) if best_overall is not None else "—"),
-        sub=(f"Composite rank #1" if best_overall is not None else "No models available"),
+        sub=("Composite rank #1" if best_overall is not None else "No models available"),
+        btn_key="tp_overall",
     )
-
     card(
         c2,
         "👨‍💻 Best for coding",
         best_coding,
         kpi=(str(best_coding["display_name"]) if best_coding is not None else "—"),
-        sub=(f"Aider ({best_coding.get('aider_metric_name','pass')}): {best_coding.get('aider_pass_metric','—')}" if best_coding is not None else "Aider data missing"),
+        sub=(
+            f"Aider: {best_coding.get('aider_metric_name','pass')} = {best_coding.get('aider_pass_metric','—')}"
+            if best_coding is not None
+            else "Aider data missing"
+        ),
+        btn_key="tp_coding",
     )
-
     card(
         c3,
         "💸 Best budget",
         best_budget,
         kpi=(str(best_budget["display_name"]) if best_budget is not None else "—"),
         sub=(f"Avg price: {money_per_million(best_budget.get('avg_price_1m_usd'))}" if best_budget is not None else "Pricing data missing"),
+        btn_key="tp_budget",
     )
-
     card(
         c4,
         "🔓 Best open-weights",
         best_open,
         kpi=(str(best_open["display_name"]) if best_open is not None else "—"),
-        sub=(f"Top open-weights by composite" if best_open is not None else "No open-weights models in view"),
+        sub=("Top open-weights by composite" if best_open is not None else "No open-weights models in view"),
+        btn_key="tp_open",
     )
 
 
@@ -1150,10 +1091,7 @@ def render_rankings(df: pd.DataFrame) -> None:
 
     st.markdown("---")
 
-    # Build a clean view table
     view = df.copy()
-
-    # Add display-friendly columns
     view["Open"] = view.get("open_weights", False).apply(lambda x: "✅" if bool(x) else "")
     view["Avg $/1M"] = view.get("avg_price_1m_usd").apply(money_per_million)
     view["Ctx"] = view.get("context_length").apply(lambda x: "—" if safe_float(x) is None else f"{int(float(x)):,}")
@@ -1161,20 +1099,21 @@ def render_rankings(df: pd.DataFrame) -> None:
     view["LCB Pass@1"] = view.get("livecodebench_pass1").apply(lambda x: "—" if safe_float(x) is None else f"{safe_float(x):.2f}")
     view["SWE-Verified"] = view.get("swebench_verified_resolved_pct").apply(lambda x: "—" if safe_float(x) is None else f"{safe_float(x):.2f}%")
 
-    # Internal link column (HTML)
     rows = []
     for _, r in view.head(top_n).iterrows():
         name = str(r["display_name"])
-        link = model_link(name)
+        link = f'?page=model&model={quote_plus(name)}'
         prov = str(r.get("provider") or "—")
         open_b = "✅" if bool(r.get("open_weights", False)) else ""
+        comp = safe_float(r.get("composite_score"))
+        comp_s = f"{comp:.2f}" if comp is not None else "—"
         rows.append(
             {
                 "Rank": int(r["rank_overall"]),
                 "Model": f'<a class="inline" href="{link}">{name}</a>',
                 "Provider": prov,
                 "Open": open_b,
-                "Composite": f"{safe_float(r.get('composite_score')):.2f}" if safe_float(r.get("composite_score")) is not None else "—",
+                "Composite": comp_s,
                 "Aider": str(r.get("Aider")),
                 "LCB Pass@1": str(r.get("LCB Pass@1")),
                 "SWE-Verified": str(r.get("SWE-Verified")),
@@ -1187,7 +1126,7 @@ def render_rankings(df: pd.DataFrame) -> None:
     st.markdown(
         """
 <div class="muted">
-Tip: For “interpretation of user intent” in real usage, prioritize higher SWE-bench + strong coding + good context.
+Tip: For “interpreting user intent” in real usage, prioritize strong SWE-bench + strong coding + enough context.
 </div>
 """,
         unsafe_allow_html=True,
@@ -1206,7 +1145,6 @@ def render_model_detail(df_all: pd.DataFrame) -> None:
 
     if not model_name:
         st.info("Pick a model from Rankings (or select one below).")
-        # quick picker
         options = st.session_state.get("last_rank_list") or df_all["display_name"].tolist()
         choice = st.selectbox("Select a model", options=options[: min(len(options), 500)])
         if st.button("Open detail →"):
@@ -1216,39 +1154,35 @@ def render_model_detail(df_all: pd.DataFrame) -> None:
 
     row = df_all[df_all["display_name"].astype(str) == model_name]
     if row.empty:
-        # try key match
         ck = canonical_key(model_name)
         row = df_all[df_all["model_key"].astype(str) == ck]
 
     if row.empty:
-        st.warning("Model not found in current view. Try clearing filters or search differently.")
-        st.link_button("Back to rankings", "?page=rankings", use_container_width=True)
+        st.warning("Model not found in current view. Try clearing filters or searching differently.")
+        if st.button("Back to rankings"):
+            qp_set(page="rankings")
+            st.rerun()
         return
 
     r = row.iloc[0]
 
-    # Back/Next (based on last filtered ranking list)
     rank_list = st.session_state.get("last_rank_list") or df_all.sort_values("rank_overall")["display_name"].tolist()
     idx = rank_list.index(model_name) if model_name in rank_list else None
+    prev_name = rank_list[idx - 1] if (idx is not None and idx > 0) else None
+    next_name = rank_list[idx + 1] if (idx is not None and idx < len(rank_list) - 1) else None
 
-    navc1, navc2, navc3 = st.columns([1, 1, 6])
+    navc1, navc2, navc3 = st.columns([1.2, 2.0, 6])
     with navc1:
         if st.button("⬅ Back", use_container_width=True):
             qp_set(page="rankings")
             st.rerun()
     with navc2:
-        if idx is not None:
-            prev_name = rank_list[idx - 1] if idx > 0 else None
-            next_name = rank_list[idx + 1] if idx < len(rank_list) - 1 else None
-        else:
-            prev_name = next_name = None
-
-        colp, coln = st.columns(2)
-        with colp:
+        pcol, ncol = st.columns(2)
+        with pcol:
             if prev_name and st.button("Prev", use_container_width=True):
                 qp_set(page="model", model=prev_name)
                 st.rerun()
-        with coln:
+        with ncol:
             if next_name and st.button("Next", use_container_width=True):
                 qp_set(page="model", model=next_name)
                 st.rerun()
@@ -1292,27 +1226,23 @@ def render_model_detail(df_all: pd.DataFrame) -> None:
 
     with right:
         st.markdown("#### Links")
-        # OpenRouter model page if we have it
         if r.get("link_openrouter"):
             st.link_button("OpenRouter page", str(r.get("link_openrouter")), use_container_width=True)
         if r.get("link_swebench"):
             st.link_button("SWE-bench leaderboards", str(r.get("link_swebench")), use_container_width=True)
         if r.get("link_livecodebench"):
             st.link_button("LiveCodeBench site", str(r.get("link_livecodebench")), use_container_width=True)
-
-        # Provider / search links if present
         if r.get("link_provider"):
             st.link_button("Provider site", str(r.get("link_provider")), use_container_width=True)
-        # Always offer a search link
+
         st.link_button("Web search (model)", external_search_link(str(r["display_name"])), use_container_width=True)
         st.link_button("Web search (pricing)", external_search_link(f"{r['display_name']} pricing"), use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### Interpretation helper")
         st.caption(
-            "If you’re picking a model for *Python coding + accurately interpreting user intent*, "
-            "look for: strong coding benchmarks (Aider/LCB), strong SWE-bench, enough context length, "
-            "and sane price for your usage."
+            "For Python coding + correctly interpreting user intent: "
+            "prioritize strong SWE-bench + strong coding (Aider/LCB), enough context, and reasonable cost."
         )
 
     st.markdown("---")
@@ -1322,17 +1252,16 @@ def render_model_detail(df_all: pd.DataFrame) -> None:
 
 def render_sources(status: pd.DataFrame) -> None:
     st.title("🔌 Sources & Adapter Health")
-    st.caption("Adapters are best-effort. If a site changes format, the adapter may show an error until updated.")
-
+    st.caption("Adapters are best-effort. If a site changes format, an adapter may error until updated.")
     st.dataframe(status, use_container_width=True, hide_index=True)
 
     st.markdown("---")
-    st.subheader("Plug-in adapter idea (how to extend)")
+    st.subheader("How to extend")
     st.markdown(
         """
 - Add **Custom adapters** for public CSV/JSON leaderboards using the sidebar.
-- For new “first-class” adapters, implement a new `SourceAdapter` and add it to `ALL_ADAPTERS`.
-- If you want **LiveCodeBench / SWE-bench / LiveBench / other** benchmarks: prefer stable raw JSON/CSV assets or official repos.
+- For a new “first-class” source, implement a `SourceAdapter` and add it to `ALL_ADAPTERS`.
+- Prefer stable raw JSON/CSV assets (official repos) over scraping HTML where possible.
         """
     )
 
